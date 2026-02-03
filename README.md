@@ -13,20 +13,21 @@ A comprehensive CLI tool for testing and debugging ODBC drivers. Built for ODBC 
 
 ## Current Status
 
-**Version**: 0.2.0  
-**Phase**: Phase 2 - COMPLETED ✅
+**Version**: 0.3.0  
+**Phase**: Phase 3 - COMPLETED ✅
 
 Currently implemented:
 - ✅ Basic connection testing with retry logic
 - ✅ Connection attribute retrieval
 - ✅ Handle management tests (environment, connection, statement)
 - ✅ Statement execution tests (queries, fetching, empty results)
+- ✅ Metadata catalog functions (tables, columns, keys, statistics, types)
 - ✅ Multiple connection and statement tests
 - ✅ Rich terminal output with color coding
 - ✅ JSON export capability
 - ✅ Utility functions for safe ODBC operations
 
-**Test Results**: 11/11 tests passing against Firebird 5.0 ODBC Driver
+**Test Results**: 17/17 tests passing against Firebird 5.0 ODBC Driver
 
 **🐛 Bug Discovered**: Firebird ODBC Driver reports false "file not found" errors - see [DRIVER_BUGS.md](DRIVER_BUGS.md)
 
