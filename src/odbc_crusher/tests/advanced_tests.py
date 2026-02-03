@@ -231,20 +231,24 @@ class AdvancedTests(ODBCTest):
             start_time = time.perf_counter()
             
             # Try to prepare a statement with parameter markers
+            # Note: Some databases (like Firebird) require type context for parameters
             queries_to_try = [
-                "SELECT ? FROM RDB$DATABASE",  # Firebird
-                "SELECT ? FROM DUAL",          # Oracle
-                "SELECT ?",                    # Generic
+                ("SELECT ?", (1,)),  # Generic (MySQL, SQL Server)
+                ("SELECT ? FROM DUAL", (1,)),  # Oracle
+                ("SELECT CAST(? AS INTEGER) FROM RDB$DATABASE", (42,)),  # Firebird with type
+                ("SELECT CAST(? AS VARCHAR(20))", ('test',)),  # Generic with type
             ]
             
             prepared = False
-            for query in queries_to_try:
+            successful_query = None
+            for query, params in queries_to_try:
                 try:
                     # In pyodbc, prepare happens when you call execute with parameters
-                    cursor.execute(query, (1,))
+                    cursor.execute(query, params)
                     result = cursor.fetchone()
                     if result:
                         prepared = True
+                        successful_query = query
                         break
                 except:
                     continue
@@ -257,7 +261,7 @@ class AdvancedTests(ODBCTest):
                     function="SQLPrepare/SQLExecute",
                     status=TestStatus.PASS,
                     expected="Prepare and execute parameterized statement",
-                    actual="Prepared statement executed successfully with parameter",
+                    actual=f"Prepared statement executed successfully: {successful_query}",
                     severity=Severity.INFO,
                     duration_ms=duration,
                 )
@@ -297,54 +301,50 @@ class AdvancedTests(ODBCTest):
             start_time = time.perf_counter()
             
             # Try binding different parameter types
-            test_params = [
-                (1, "integer"),
-                ("test", "string"),
-                (3.14, "float"),
+            # Some databases require explicit type casting for parameters
+            test_cases = [
+                ("SELECT CAST(? AS INTEGER) FROM RDB$DATABASE", (42,), "integer"),  # Firebird
+                ("SELECT CAST(? AS VARCHAR(20)) FROM RDB$DATABASE", ("test",), "string"),  # Firebird
+                ("SELECT CAST(? AS DOUBLE PRECISION) FROM RDB$DATABASE", (3.14,), "float"),  # Firebird
+                ("SELECT ?", (1,), "generic_int"),  # MySQL, SQL Server
+                ("SELECT ? FROM DUAL", (1,), "oracle_int"),  # Oracle
+                ("SELECT CAST(? AS VARCHAR(20))", ("test",), "generic_string"),  # MySQL with CAST
             ]
             
-            queries_to_try = [
-                "SELECT ? FROM RDB$DATABASE",
-                "SELECT ? FROM DUAL",
-                "SELECT ?",
-            ]
+            successful_bindings = []
             
-            successful_bindings = 0
-            
-            for query in queries_to_try:
-                for param, param_type in test_params:
-                    try:
-                        cursor.execute(query, (param,))
-                        result = cursor.fetchone()
-                        if result:
-                            successful_bindings += 1
-                    except:
-                        pass
-                
-                if successful_bindings > 0:
-                    break
+            for query, params, param_type in test_cases:
+                try:
+                    cursor.execute(query, params)
+                    result = cursor.fetchone()
+                    if result:
+                        successful_bindings.append(param_type)
+                except:
+                    pass
             
             duration = (time.perf_counter() - start_time) * 1000
             
-            if successful_bindings >= 2:
+            if len(successful_bindings) >= 2:
+                types_str = ", ".join(successful_bindings)
                 self._record_test(
                     test_name="test_parameter_binding",
                     function="SQLBindParameter",
                     status=TestStatus.PASS,
                     expected="Bind parameters of various types",
-                    actual=f"Successfully bound {successful_bindings} parameter types",
+                    actual=f"Successfully bound {len(successful_bindings)} parameter types: {types_str}",
                     severity=Severity.INFO,
                     duration_ms=duration,
                 )
-            elif successful_bindings > 0:
+            elif len(successful_bindings) > 0:
+                types_str = ", ".join(successful_bindings)
                 self._record_test(
                     test_name="test_parameter_binding",
                     function="SQLBindParameter",
                     status=TestStatus.PASS,
                     expected="Bind parameters of various types",
-                    actual=f"Limited success: {successful_bindings} parameter types worked",
-                    diagnostic="Driver may not support all data type bindings",
-                    severity=Severity.WARNING,
+                    actual=f"Limited success: {len(successful_bindings)} parameter types worked: {types_str}",
+                    diagnostic="Driver may require explicit type casting for parameters (e.g., CAST(? AS type))",
+                    severity=Severity.INFO,
                     duration_ms=duration,
                 )
             else:
