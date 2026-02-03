@@ -4,6 +4,48 @@
 
 You are working on **ODBC Crusher**, a CLI tool for testing and debugging ODBC drivers. This document contains critical instructions for maintaining consistency and quality.
 
+## 🎓 CRITICAL LEARNINGS - Database-Specific Parameter Syntax
+
+**LESSON LEARNED (Feb 3, 2026)**: Different databases require different SQL syntax for parameter markers, even though all use `?`.
+
+### Database-Specific Requirements
+
+| Database | Bare `?` | Requires FROM | Requires CAST | Working Example |
+|----------|----------|---------------|---------------|-----------------|
+| **Firebird** | ❌ No | ✅ Yes | ⚠️ Recommended | `SELECT CAST(? AS INTEGER) FROM RDB$DATABASE` |
+| **MySQL** | ✅ Yes | ❌ No | ❌ No | `SELECT ?` |
+| **Oracle** | ❌ No | ✅ Yes (DUAL) | ❌ No | `SELECT ? FROM DUAL` |
+| **SQL Server** | ✅ Yes | ❌ No | ❌ No | `SELECT ?` |
+
+### Testing Parameters - Best Practices
+
+**ALWAYS test with multiple query patterns**:
+
+```python
+test_cases = [
+    ("SELECT CAST(? AS INTEGER) FROM RDB$DATABASE", (42,)),  # Firebird
+    ("SELECT ?", (1,)),  # MySQL, SQL Server
+    ("SELECT ? FROM DUAL", (1,)),  # Oracle
+]
+
+for query, params in test_cases:
+    try:
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        if result:
+            # Success - this pattern works
+            break
+    except:
+        continue  # Try next pattern
+```
+
+### IMPORTANT: Don't Assume Bugs
+
+- ✅ **Database quirk**: Different SQL syntax requirements
+- ❌ **Driver bug**: Feature genuinely not working
+
+**Always validate across multiple databases before claiming a bug!**
+
 ## 📋 MANDATORY: Update PROJECT_PLAN.md
 
 **RULE #1**: Every time you make significant changes to this project, you MUST update [PROJECT_PLAN.md](PROJECT_PLAN.md).

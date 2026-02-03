@@ -77,13 +77,13 @@ uv run ruff check src/
 
 ## Usage
 
-### Basic Usage
+### Quick Start
 
 ```bash
 # Test a DSN-based connection
 uv run odbc-crusher "DSN=PostgreSQL"
 
-# Test with a full connection string
+# Test with a full connection string  
 uv run odbc-crusher "DRIVER={SQL Server};SERVER=localhost;DATABASE=test;UID=sa;PWD=password"
 
 # Get verbose output
@@ -91,26 +91,34 @@ uv run odbc-crusher "DSN=MyDatabase" --verbose
 
 # Output as JSON
 uv run odbc-crusher "DSN=MyDatabase" --output json
+
+# Save results to file
+uv run odbc-crusher "DSN=MyDB" --output json > report.json
 ```
 
-### Examples
+### Connection String Examples
 
-**Test PostgreSQL ODBC driver:**
+**Firebird:**
+```bash
+uv run odbc-crusher "Driver={Firebird ODBC Driver};Database=/path/to/database.fdb;UID=SYSDBA;PWD=masterkey"
+```
+
+**MySQL:**
+```bash
+uv run odbc-crusher "Driver={MySQL ODBC 9.6 Unicode Driver};Server=localhost;Database=mydb;UID=root;PWD=password"
+```
+
+**SQL Server (Windows Auth):**
+```bash
+uv run odbc-crusher "DRIVER={SQL Server};SERVER=localhost;Trusted_Connection=yes"
+```
+
+**PostgreSQL:**
 ```bash
 uv run odbc-crusher "DSN=PostgreSQL;UID=postgres;PWD=mypassword"
 ```
 
-**Test SQL Server with connection string:**
-```bash
-uv run odbc-crusher "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=testdb;UID=sa;PWD=YourPassword"
-```
-
-**Save results to JSON:**
-```bash
-uv run odbc-crusher "DSN=MyDB" --output json > report.json
-```
-
-## Command-Line Options
+### Command-Line Options
 
 ```
 Usage: odbc-crusher [OPTIONS] CONNECTION_STRING
@@ -120,9 +128,70 @@ Arguments:
 
 Options:
   -o, --output [text|json]  Output format for the test report (default: text)
-  -v, --verbose            Enable verbose output
-  --version                Show version and exit
-  --help                   Show this message and exit
+  -v, --verbose             Enable verbose output
+  --version                 Show version and exit
+  --help                    Show this message and exit
+```
+
+## Known Issues & Database Quirks
+
+### Firebird ODBC Driver
+
+**Issue #1: False "File Not Found" Errors** ⚠️
+- Driver sometimes reports file not found on first connection attempt
+- Workaround: Retry logic (automatically implemented in tests)
+- Status: Confirmed bug in v03.00.0021
+
+**Database Quirk: Parameter Syntax Requirements**
+- Firebird requires `FROM` clause: `SELECT ? FROM RDB$DATABASE`
+- Explicit CAST recommended: `SELECT CAST(? AS INTEGER) FROM RDB$DATABASE`
+- Bare `SELECT ?` will fail (not a bug, just Firebird syntax)
+
+### MySQL ODBC Driver
+
+- Flexible parameter syntax - `SELECT ?` works fine
+- Both ANSI and Unicode drivers tested and working
+
+### General ODBC Parameter Syntax
+
+Different databases have different requirements:
+
+| Database | Example Query |
+|----------|---------------|
+| Firebird | `SELECT CAST(? AS INTEGER) FROM RDB$DATABASE` |
+| MySQL | `SELECT ?` |
+| Oracle | `SELECT ? FROM DUAL` |
+| SQL Server | `SELECT ?` |
+
+## Development
+
+### Running Tests
+
+```bash
+# Run all unit tests
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=odbc_crusher --cov-report=html
+
+# Run specific test file
+uv run pytest tests/test_connection.py
+```
+
+### Code Quality
+
+```bash
+# Format code
+uv run black src/ tests/
+
+# Check linting
+uv run ruff check src/ tests/
+
+# Type checking
+uv run mypy src/
+
+# Run all checks
+uv run black src/ tests/ && uv run ruff check src/ tests/ && uv run pytest
 ```
 
 ## Output Example
