@@ -1,6 +1,13 @@
 # ODBC Crusher - Project Plan
 
-**Last Updated**: February 3, 2026 - Phase 1 Completed!
+**Last Updated**: February 3, 2026 - Phase 2 In Progress
+
+## ⚠️ CRITICAL FINDING - First Bug Discovered!
+
+**Firebird ODBC Driver - False Error Messages**  
+The Firebird ODBC driver reports "[08004] File Database is not found" even when the database file exists and is accessible. DuckDB connects successfully with the same connection string while pyodbc fails. This validates **Rule #1: DO NOT TRUST ANYTHING THE ODBC DRIVER TELLS YOU.**
+
+See [DRIVER_BUGS.md](DRIVER_BUGS.md) for details.
 
 ## Project Overview
 
@@ -71,20 +78,31 @@ Create an incremental, extensible tool that tests ODBC driver implementations ag
 - `QUICKSTART.md` - Quick reference
 - `CHANGELOG.md` - Version history
 
-### Phase 2: Core ODBC Functions (Next)
+### Phase 2: Core ODBC Functions (IN PROGRESS - Started Feb 3, 2026)
 **Goal**: Test fundamental ODBC API functions
 
 **Focus Areas**:
 - Environment handle functions (`SQLAllocHandle`, `SQLFreeHandle`)
 - Connection functions (`SQLConnect`, `SQLDriverConnect`, `SQLDisconnect`)
 - Statement functions (`SQLAllocStmt`, `SQLFreeStmt`)
-- Error handling (`SQLGetDiagRec`, `SQLGetDiagField`)
+- Simple query execution (`SQLExecDirect`)
 
-**Tests to Implement**:
-- Handle allocation/deallocation
-- Connection establishment and termination
-- Basic error retrieval
-- Attribute getting/setting
+**Tests Implemented**: ✅ IN PROGRESS
+- [x] Handle allocation/deallocation (HandleTests)
+- [x] Statement handle creation and reuse
+- [x] Simple query execution (StatementTests)
+- [x] Result set fetching
+- [x] Empty result set handling
+- [x] Multiple sequential statements
+- [ ] Error diagnostics (SQLGetDiagRec)
+- [ ] Transaction testing
+
+**Files Created**:
+- `src/odbc_crusher/tests/handle_tests.py` - Handle management (4 tests)
+- `src/odbc_crusher/tests/statement_tests.py` - Query execution (4 tests)
+
+**Bugs Discovered**:
+- Firebird ODBC: False "file not found" error when file exists
 
 ### Phase 3: Data Retrieval Functions
 **Goal**: Test query execution and result fetching

@@ -3,6 +3,8 @@
 from typing import Dict, Any, Optional
 import pyodbc
 
+from .utils import retry_connection, safe_getinfo
+
 
 def check_connection(connection_string: str, verbose: bool = False) -> Dict[str, Any]:
     """
@@ -27,8 +29,8 @@ def check_connection(connection_string: str, verbose: bool = False) -> Dict[str,
     }
     
     try:
-        # Attempt to connect
-        conn = pyodbc.connect(connection_string, timeout=10)
+        # Attempt to connect with retry logic (some drivers report false errors)
+        conn = retry_connection(connection_string, max_retries=3, delay_seconds=0.5, timeout=10)
         
         result["success"] = True
         
@@ -37,12 +39,12 @@ def check_connection(connection_string: str, verbose: bool = False) -> Dict[str,
             try:
                 cursor = conn.cursor()
                 
-                # Try to get database info
-                result["info"]["driver"] = conn.getinfo(pyodbc.SQL_DRIVER_NAME)
-                result["info"]["driver_version"] = conn.getinfo(pyodbc.SQL_DRIVER_VER)
-                result["info"]["dbms_name"] = conn.getinfo(pyodbc.SQL_DBMS_NAME)
-                result["info"]["dbms_version"] = conn.getinfo(pyodbc.SQL_DBMS_VER)
-                result["info"]["odbc_version"] = conn.getinfo(pyodbc.SQL_ODBC_VER)
+                # Try to get database info using safe getters
+                result["info"]["driver"] = safe_getinfo(conn, pyodbc.SQL_DRIVER_NAME, "Unknown")
+                result["info"]["driver_version"] = safe_getinfo(conn, pyodbc.SQL_DRIVER_VER, "Unknown")
+                result["info"]["dbms_name"] = safe_getinfo(conn, pyodbc.SQL_DBMS_NAME, "Unknown")
+                result["info"]["dbms_version"] = safe_getinfo(conn, pyodbc.SQL_DBMS_VER, "Unknown")
+                result["info"]["odbc_version"] = safe_getinfo(conn, pyodbc.SQL_ODBC_VER, "Unknown")
                 
                 cursor.close()
             except Exception as e:

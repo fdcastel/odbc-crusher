@@ -2,7 +2,7 @@
 
 from typing import List, Dict, Any
 
-from .tests import ConnectionTests, TestResult
+from .tests import ConnectionTests, HandleTests, StatementTests, TestResult
 
 
 class TestRunner:
@@ -12,7 +12,8 @@ class TestRunner:
         self.connection_string = connection_string
         self.test_classes = [
             ConnectionTests,
-            # Future test classes will be added here
+            HandleTests,
+            StatementTests,
         ]
     
     def run_all_tests(self) -> List[TestResult]:
