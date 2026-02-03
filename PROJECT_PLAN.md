@@ -145,7 +145,7 @@ Create an incremental, extensible tool that tests ODBC driver implementations ag
 - pyodbc exposes all necessary catalog functions
 - Graceful handling of empty results
 
-### Phase 5: Advanced Features (Next)
+### Phase 5: Advanced Features (COMPLETED ✅ - Feb 3, 2026)
 **Goal**: Test advanced ODBC capabilities
 
 **Focus Areas**:
@@ -156,7 +156,25 @@ Create an incremental, extensible tool that tests ODBC driver implementations ag
 - Cursor types and scrolling
 - Bulk operations
 
-### Phase 6: Data Type Testing
+**Tests Implemented**: ✅ ALL COMPLETED
+- [x] Autocommit mode detection
+- [x] Manual transaction commit
+- [x] Transaction rollback
+- [x] Prepared statement execution
+- [x] Parameter binding (multiple data types)
+- [x] Multiple result set detection
+
+**Files Created**:
+- `src/odbc_crusher/tests/advanced_tests.py` - Advanced features (6 tests)
+
+**Test Results**: 6/6 advanced tests passing
+
+**CRITICAL LEARNING**: Database-specific parameter syntax requirements
+- Firebird requires: `SELECT CAST(? AS type) FROM RDB$DATABASE`
+- MySQL accepts: `SELECT ?`
+- False bug reports corrected after validation across multiple drivers
+
+### Phase 6: Data Type Testing (NEXT)
 **Goal**: Comprehensive testing of SQL data types
 
 **Focus Areas**:
