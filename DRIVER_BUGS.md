@@ -116,6 +116,73 @@ FROM odbc_query(getvariable('conn'), '<query>');
 
 ---
 
+## Critical Finding #2: Firebird ODBC Driver - Parameter Binding Failures
+
+**Date**: February 3, 2026  
+**Driver**: Firebird ODBC Driver  
+**Severity**: CRITICAL ⚠️  
+**Status**: CONFIRMED
+
+### Summary
+
+The Firebird ODBC driver fails to execute prepared statements with parameter markers (`?`). Both `SQLPrepare/SQLExecute` and `SQLBindParameter` functionality appears to be broken or not properly implemented.
+
+### Details
+
+**Connection String**:
+```
+Driver={Firebird ODBC Driver};Database=/fbodbc-tests/TEST.FB50.FDB;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;CLIENT=/fbodbc-tests/fb502/fbclient.dll
+```
+
+**Test Results**:
+- ✗ `test_prepared_statement` - FAILED
+- ✗ `test_parameter_binding` - FAILED
+
+**Queries Attempted**:
+```sql
+SELECT ? FROM RDB$DATABASE  -- Failed
+SELECT ? FROM DUAL          -- Failed  
+SELECT ?                    -- Failed
+```
+
+**All variants failed** when attempting to execute with a parameter value.
+
+### Impact
+
+- **For Developers**: Cannot use prepared statements or parameterized queries
+- **For Applications**: Vulnerable to SQL injection (must use string concatenation)
+- **For Performance**: No query plan reuse (each query is re-parsed)
+- **For Security**: **CRITICAL SECURITY RISK** - forces unsafe query building
+
+### Comparison
+
+Other ODBC drivers (SQL Server, PostgreSQL, MySQL) properly support:
+- Parameter markers (`?`)
+- Prepared statement execution
+- Parameter binding for all basic data types
+
+Firebird ODBC driver does not.
+
+### Recommended Fixes
+
+**For Driver Developers**:
+1. Implement proper `SQLPrepare` support
+2. Support parameter markers (`?`) in SQL statements
+3. Implement `SQLBindParameter` for all SQL data types
+4. Test with standard ODBC test suites
+
+**For Application Developers** (Workarounds):
+1. ⚠️ **Use with extreme caution** - SQL injection risk!
+2. Properly escape/sanitize all user input
+3. Consider using stored procedures instead
+4. Switch to a different ODBC driver if possible
+
+### Security Note
+
+**This is a CRITICAL security issue.** Applications using this driver cannot use parameterized queries, the standard defense against SQL injection attacks.
+
+---
+
 ## Future Findings
 
 Document additional bugs and findings below...
