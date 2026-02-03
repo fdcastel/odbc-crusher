@@ -1,0 +1,247 @@
+{
+  "summary": {
+    "total": 23,
+    "passed": 22,
+    "failed": 0,
+    "skipped": 1,
+    "errors": 0
+  },
+  "results": [
+    {
+      "test_name": "test_basic_connection",
+      "function": "SQLConnect/SQLDisconnect",
+      "status": "PASS",
+      "expected": "Connection established and closed successfully",
+      "actual": "Connection established and closed successfully",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 16.9
+    },
+    {
+      "test_name": "test_connection_attributes",
+      "function": "SQLGetInfo",
+      "status": "PASS",
+      "expected": "Retrieve connection attributes",
+      "actual": "Retrieved 2 attributes: SQL_DRIVER_NAME: myodbc9w.dll, 
+SQL_DBMS_NAME: MySQL",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 0.03
+    },
+    {
+      "test_name": "test_multiple_connections",
+      "function": "SQLConnect (multiple)",
+      "status": "PASS",
+      "expected": "Create and close 3 simultaneous connections",
+      "actual": "Successfully created and closed 3 connections",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 37.04
+    },
+    {
+      "test_name": "test_environment_handle",
+      "function": "SQLAllocHandle(SQL_HANDLE_ENV)",
+      "status": "PASS",
+      "expected": "Environment handle allocated and freed successfully",
+      "actual": "Environment handle managed successfully by pyodbc",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 14.29
+    },
+    {
+      "test_name": "test_connection_handle",
+      "function": "SQLAllocHandle(SQL_HANDLE_DBC)",
+      "status": "PASS",
+      "expected": "Connection handle allocated and freed successfully",
+      "actual": "Connection handle created, verified, and freed successfully",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 15.45
+    },
+    {
+      "test_name": "test_statement_handle",
+      "function": "SQLAllocHandle(SQL_HANDLE_STMT)",
+      "status": "PASS",
+      "expected": "Statement handles allocated and freed successfully",
+      "actual": "Created and freed 4 statement handles successfully",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 0.46
+    },
+    {
+      "test_name": "test_handle_reuse",
+      "function": "SQLFreeHandle/SQLAllocHandle (repeated)",
+      "status": "PASS",
+      "expected": "Handles allocated and freed repeatedly without leaks",
+      "actual": "Created and freed 5 connection and statement handle pairs",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 73.92
+    },
+    {
+      "test_name": "test_simple_query",
+      "function": "SQLExecDirect",
+      "status": "PASS",
+      "expected": "Execute simple SELECT query successfully",
+      "actual": "Query executed successfully: SELECT 1 (Standard SQL)",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 0.84
+    },
+    {
+      "test_name": "test_query_with_results",
+      "function": "SQLFetch/SQLGetData",
+      "status": "PASS",
+      "expected": "Fetch query results successfully",
+      "actual": "Fetched 1 row(s) with 2 column(s)",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 1.01
+    },
+    {
+      "test_name": "test_empty_result_set",
+      "function": "SQLFetch (empty results)",
+      "status": "PASS",
+      "expected": "Handle empty result set correctly (return NULL/None)",
+      "actual": "Empty result set handled correctly",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 3.08
+    },
+    {
+      "test_name": "test_multiple_statements",
+      "function": "SQLExecDirect (multiple)",
+      "status": "PASS",
+      "expected": "Execute multiple statements sequentially",
+      "actual": "Executed 3 statements successfully",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 3.02
+    },
+    {
+      "test_name": "test_tables",
+      "function": "SQLTables",
+      "status": "PASS",
+      "expected": "Retrieve table catalog information",
+      "actual": "Found 210 tables (sample: abertura_caixa, 
+agrupamento_clientes, ajustei...)",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 4.09
+    },
+    {
+      "test_name": "test_columns",
+      "function": "SQLColumns",
+      "status": "PASS",
+      "expected": "Retrieve column information for a table",
+      "actual": "Found 6 columns in 'abertura_caixa' (sample: 
+numero_controle:int, caixa:int, desc_caixa:varchar...)",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 6.07
+    },
+    {
+      "test_name": "test_primary_keys",
+      "function": "SQLPrimaryKeys",
+      "status": "PASS",
+      "expected": "Retrieve primary key information",
+      "actual": "Found 1 PK column(s) in 'abertura_caixa': numero_controle",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 4.76
+    },
+    {
+      "test_name": "test_foreign_keys",
+      "function": "SQLForeignKeys",
+      "status": "PASS",
+      "expected": "Retrieve foreign key information",
+      "actual": "Found 0 foreign key(s) in 'abertura_caixa'",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 153.44
+    },
+    {
+      "test_name": "test_statistics",
+      "function": "SQLStatistics",
+      "status": "PASS",
+      "expected": "Retrieve statistics and index information",
+      "actual": "Found 2 index(es) in 'abertura_caixa' (2 stat rows)",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 5.14
+    },
+    {
+      "test_name": "test_type_info",
+      "function": "SQLGetTypeInfo",
+      "status": "PASS",
+      "expected": "Retrieve data type information",
+      "actual": "Found 62 data types (sample: bit, tinyint, tinyint unsigned, 
+tinyint auto_increment, tinyint unsigned auto_increment...)",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 0.36
+    },
+    {
+      "test_name": "test_autocommit_mode",
+      "function": "SQLGetConnectAttr(SQL_ATTR_AUTOCOMMIT)",
+      "status": "PASS",
+      "expected": "Autocommit mode should be available",
+      "actual": "Autocommit mode is OFF",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 0.0
+    },
+    {
+      "test_name": "test_manual_commit",
+      "function": "SQLEndTran(SQL_COMMIT)",
+      "status": "PASS",
+      "expected": "Commit transaction successfully",
+      "actual": "Transaction committed successfully",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 6.0
+    },
+    {
+      "test_name": "test_rollback",
+      "function": "SQLEndTran(SQL_ROLLBACK)",
+      "status": "PASS",
+      "expected": "Rollback transaction successfully",
+      "actual": "Transaction rolled back successfully",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 0.42
+    },
+    {
+      "test_name": "test_prepared_statement",
+      "function": "SQLPrepare/SQLExecute",
+      "status": "PASS",
+      "expected": "Prepare and execute parameterized statement",
+      "actual": "Prepared statement executed successfully with parameter",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 2.32
+    },
+    {
+      "test_name": "test_parameter_binding",
+      "function": "SQLBindParameter",
+      "status": "PASS",
+      "expected": "Bind parameters of various types",
+      "actual": "Successfully bound 3 parameter types",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 5.01
+    },
+    {
+      "test_name": "test_multiple_result_sets",
+      "function": "SQLMoreResults",
+      "status": "SKIP",
+      "expected": "Support for multiple result sets",
+      "actual": "Test skipped: ('42S02', \"[42S02] [MySQL][ODBC 9.6(w) 
+Driver]Table 'bpcom_test.RDB$DATABASE' doesn't exist (1146) 
+(SQLExecDirectW)\")",
+      "diagnostic": null,
+      "severity": "INFO",
+      "duration_ms": 1.42
+    }
+  ]
+}

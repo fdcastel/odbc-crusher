@@ -45,35 +45,40 @@ def main(connection_string: str, output: str, verbose: bool) -> None:
         
         odbc-crusher "DSN=mydb" --output json
     """
-    console.print(
-        Panel.fit(
-            "[bold cyan]ODBC Crusher[/bold cyan] - ODBC Driver Testing Tool",
-            subtitle=f"v0.4.0",
+    # Skip Rich output if JSON mode
+    if output != "json":
+        console.print(
+            Panel.fit(
+                "[bold cyan]ODBC Crusher[/bold cyan] - ODBC Driver Testing Tool",
+                subtitle=f"v0.4.0",
+            )
         )
-    )
     
-    if verbose:
+    if verbose and output != "json":
         console.print(f"[dim]Connection string: {connection_string}[/dim]\n")
     
     # Phase 1: Test connection
-    console.print("[bold]Phase 1:[/bold] Testing connection...\n")
+    if output != "json":
+        console.print("[bold]Phase 1:[/bold] Testing connection...\n")
     
     conn_result = check_connection(connection_string, verbose=verbose)
     
     if not conn_result["success"]:
-        console.print(f"[bold red]✗ Connection failed:[/bold red] {conn_result['error']}")
-        console.print(f"\n[yellow]Diagnostic:[/yellow] {conn_result['diagnostic']}")
+        if output != "json":
+            console.print(f"[bold red]✗ Connection failed:[/bold red] {conn_result['error']}")
+            console.print(f"\n[yellow]Diagnostic:[/yellow] {conn_result['diagnostic']}")
         sys.exit(1)
     
-    console.print(f"[bold green]✓ Connection successful[/bold green]")
-    if verbose and conn_result.get("info"):
-        for key, value in conn_result["info"].items():
-            console.print(f"  [dim]{key}:[/dim] {value}")
-    
-    console.print()
+    if output != "json":
+        console.print(f"[bold green]✓ Connection successful[/bold green]")
+        if verbose and conn_result.get("info"):
+            for key, value in conn_result["info"].items():
+                console.print(f"  [dim]{key}:[/dim] {value}")
+        console.print()
     
     # Phase 2: Run tests
-    console.print("[bold]Phase 2:[/bold] Running ODBC tests...\n")
+    if output != "json":
+        console.print("[bold]Phase 2:[/bold] Running ODBC tests...\n")
     
     runner = TestRunner(connection_string)
     results = runner.run_all_tests()
