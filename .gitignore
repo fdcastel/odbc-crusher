@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Temporary files and scripts using during development
+tmp/

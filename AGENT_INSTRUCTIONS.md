@@ -50,6 +50,39 @@ for query, params in test_cases:
 
 **RULE #1**: Every time you make significant changes to this project, you MUST update [PROJECT_PLAN.md](PROJECT_PLAN.md).
 
+## 🗂️ MANDATORY: Use ./tmp for Temporary Files
+
+**RULE #2**: All temporary files and scripts created during investigation or development MUST go in `./tmp/` folder.
+
+### What Goes in ./tmp/?
+
+- ✅ Test output files (JSON, CSV, logs)
+- ✅ Temporary test scripts
+- ✅ Investigation/debugging scripts
+- ✅ Sample data files for testing
+- ✅ Any file created during development that isn't part of the final product
+
+### What Does NOT Go in ./tmp/?
+
+- ❌ Source code files (go in `src/`)
+- ❌ Unit tests (go in `tests/`)
+- ❌ Documentation (README.md, PROJECT_PLAN.md, etc.)
+- ❌ Configuration files (pyproject.toml, .gitignore, etc.)
+
+### Why?
+
+The `./tmp/` folder is gitignored to prevent temporary files from polluting commits. **Always create temporary files here** to keep the repository clean.
+
+### Example
+
+```bash
+# ✅ CORRECT - Write test output to tmp
+uv run odbc-crusher "DSN=MyDB" --output json > ./tmp/test_output.json
+
+# ❌ WRONG - Creates file in root
+uv run odbc-crusher "DSN=MyDB" --output json > test_output.json
+```
+
 ### What Requires a Plan Update?
 
 - ✅ Adding new test modules or test categories
