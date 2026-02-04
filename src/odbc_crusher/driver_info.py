@@ -125,6 +125,12 @@ class DriverInfo:
             # Additional useful info
             'KEYWORDS': 'SQL_KEYWORDS',
             'SPECIAL_CHARACTERS': 'SQL_SPECIAL_CHARACTERS',
+            
+            # ODBC 3.8+ Features
+            'ASYNC_DBC_FUNCTIONS': 'SQL_ASYNC_DBC_FUNCTIONS',
+            'DRIVER_AWARE_POOLING_SUPPORTED': 'SQL_DRIVER_AWARE_POOLING_SUPPORTED',
+            'ASYNC_NOTIFICATION': 'SQL_ASYNC_NOTIFICATION',
+            'GETDATA_EXTENSIONS': 'SQL_GETDATA_EXTENSIONS',
         }
         
         # Build dict of only available constants
@@ -307,6 +313,9 @@ class DriverInfo:
                         67: 'SQLProcedures',
                         68: 'SQLSetPos',
                         69: 'SQLSetScrollOptions',
+                        
+                        # ODBC 3.8 functions
+                        71: 'SQLCancelHandle',  # New in ODBC 3.8
                         70: 'SQLTablePrivileges',
                     }
                     
@@ -478,6 +487,79 @@ def format_driver_info_report(driver_data: Dict[str, Any]) -> str:
     # Character Set
     lines.append("\n=== CHARACTER SET ===")
     lines.append(f"  Collation Sequence:   {info.get('COLLATION_SEQ', 'N/A')}")
+    
+    # ODBC 3.8+ Features
+    lines.append("\n=== ODBC 3.8+ ADVANCED FEATURES ===")
+    
+    # Check driver ODBC version
+    driver_odbc_ver = info.get('DRIVER_ODBC_VER', '')
+    is_38_plus = False
+    try:
+        if driver_odbc_ver:
+            ver_parts = driver_odbc_ver.split('.')
+            if len(ver_parts) >= 2:
+                major = int(ver_parts[0])
+                minor = int(ver_parts[1])
+                is_38_plus = (major > 3) or (major == 3 and minor >= 80)
+    except:
+        pass
+    
+    lines.append(f"  Driver ODBC Version:  {driver_odbc_ver}")
+    lines.append(f"  ODBC 3.8+ Compliant:  {'YES' if is_38_plus else 'NO'}")
+    
+    # Asynchronous Connection Operations (ODBC 3.8)
+    async_dbc = info.get('ASYNC_DBC_FUNCTIONS')
+    async_map = {
+        0: 'Not Supported',  # SQL_ASYNC_DBC_NOT_CAPABLE
+        1: 'Supported',      # SQL_ASYNC_DBC_CAPABLE
+    }
+    if async_dbc is not None:
+        lines.append(f"  Async Connection Ops: {async_map.get(async_dbc, f'Unknown ({async_dbc})')}")
+    else:
+        lines.append(f"  Async Connection Ops: N/A (Info not available)")
+    
+    # Driver-Aware Connection Pooling (Windows 8+/ODBC 3.8)
+    pooling = info.get('DRIVER_AWARE_POOLING_SUPPORTED')
+    pooling_map = {
+        0: 'Not Supported',  # SQL_DRIVER_AWARE_POOLING_NOT_CAPABLE
+        1: 'Supported',      # SQL_DRIVER_AWARE_POOLING_CAPABLE
+    }
+    if pooling is not None:
+        lines.append(f"  Driver-Aware Pooling: {pooling_map.get(pooling, f'Unknown ({pooling})')}")
+    else:
+        lines.append(f"  Driver-Aware Pooling: N/A (Info not available)")
+    
+    # Asynchronous Notification Method (ODBC 3.8)
+    async_notify = info.get('ASYNC_NOTIFICATION')
+    async_notify_map = {
+        0: 'Not Supported',  # SQL_ASYNC_NOTIFICATION_NOT_CAPABLE
+        1: 'Supported',      # SQL_ASYNC_NOTIFICATION_CAPABLE
+    }
+    if async_notify is not None:
+        lines.append(f"  Async Notification:   {async_notify_map.get(async_notify, f'Unknown ({async_notify})')}")
+    else:
+        lines.append(f"  Async Notification:   N/A (Info not available)")
+    
+    # Streamed Output Parameters - check via SQL_GETDATA_EXTENSIONS
+    getdata_ext = info.get('GETDATA_EXTENSIONS')
+    if getdata_ext is not None:
+        # SQL_GD_OUTPUT_PARAMS = 0x00000008
+        supports_streamed_output = (getdata_ext & 0x00000008) != 0 if isinstance(getdata_ext, int) else False
+        lines.append(f"  Streamed Output Params: {'Supported' if supports_streamed_output else 'Not Supported'}")
+    
+    # SQLCancelHandle support (ODBC 3.8)
+    # Check if SQLCancelHandle is in the functions list
+    functions_data = driver_data.get('functions', {})
+    if 'SQLCancelHandle' in functions_data:
+        cancel_handle = functions_data.get('SQLCancelHandle', False)
+        lines.append(f"  SQLCancelHandle:      {'Supported' if cancel_handle else 'Not Supported'}")
+    
+    lines.append(f"\n  Note: ODBC 3.8 features introduced in Windows 7/8")
+    lines.append(f"        - Async connection operations (polling method)")
+    lines.append(f"        - Driver-aware connection pooling")
+    lines.append(f"        - Streamed output parameters")
+    lines.append(f"        - SQLCancelHandle for connections")
+    lines.append(f"        - Async notification method")
     
     # Supported ODBC Functions (via SQLGetFunctions)
     functions = driver_data.get('functions', {})
