@@ -554,13 +554,6 @@ def format_driver_info_report(driver_data: Dict[str, Any]) -> str:
         cancel_handle = functions_data.get('SQLCancelHandle', False)
         lines.append(f"  SQLCancelHandle:      {'Supported' if cancel_handle else 'Not Supported'}")
     
-    lines.append(f"\n  Note: ODBC 3.8 features introduced in Windows 7/8")
-    lines.append(f"        - Async connection operations (polling method)")
-    lines.append(f"        - Driver-aware connection pooling")
-    lines.append(f"        - Streamed output parameters")
-    lines.append(f"        - SQLCancelHandle for connections")
-    lines.append(f"        - Async notification method")
-    
     # Supported ODBC Functions (via SQLGetFunctions)
     functions = driver_data.get('functions', {})
     if functions and '_error' not in functions:
