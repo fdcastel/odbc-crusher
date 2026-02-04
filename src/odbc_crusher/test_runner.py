@@ -8,6 +8,7 @@ from .tests import (
     StatementTests,
     MetadataTests,
     AdvancedTests,
+    DataTypeTests,
     TestResult,
 )
 
@@ -23,6 +24,7 @@ class TestRunner:
             StatementTests,
             MetadataTests,
             AdvancedTests,
+            DataTypeTests,
         ]
     
     def run_all_tests(self) -> List[TestResult]:

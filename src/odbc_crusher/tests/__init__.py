@@ -6,6 +6,7 @@ from .handle_tests import HandleTests
 from .statement_tests import StatementTests
 from .metadata_tests import MetadataTests
 from .advanced_tests import AdvancedTests
+from .datatype_tests import DataTypeTests
 
 __all__ = [
     "ODBCTest",
@@ -17,4 +18,5 @@ __all__ = [
     "StatementTests",
     "MetadataTests",
     "AdvancedTests",
+    "DataTypeTests",
 ]

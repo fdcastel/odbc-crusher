@@ -30,7 +30,7 @@ console = Console()
     is_flag=True,
     help="Enable verbose output",
 )
-@click.version_option(version="0.4.0", prog_name="odbc-crusher")
+@click.version_option(version="0.5.0", prog_name="odbc-crusher")
 def main(connection_string: str, output: str, verbose: bool) -> None:
     """
     ODBC Crusher - Test and debug ODBC drivers.
@@ -50,7 +50,7 @@ def main(connection_string: str, output: str, verbose: bool) -> None:
         console.print(
             Panel.fit(
                 "[bold cyan]ODBC Crusher[/bold cyan] - ODBC Driver Testing Tool",
-                subtitle=f"v0.4.0",
+                subtitle=f"v0.5.0",
             )
         )
     
