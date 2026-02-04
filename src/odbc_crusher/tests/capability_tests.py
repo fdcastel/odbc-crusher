@@ -4,119 +4,58 @@ import pyodbc
 from typing import List
 import time
 import sys
-import ctypes
-import os
 
 from .base import ODBCTest, TestResult, TestStatus, Severity
 
 
 class DriverCapabilityTests(ODBCTest):
-    """Tests for driver capabilities and API support."""
+    """Tests for driver capabilities and API support using SQLGetInfo."""
     
     def run(self) -> List[TestResult]:
         """Run all driver capability tests."""
         self.results = []
         
-        self.test_api_support()
+        self.test_driver_info()
         self.test_unicode_capability()
-        self.test_driver_conformance()
+        self.test_sql_conformance()
+        self.test_supported_features()
         
         return self.results
     
-    def test_api_support(self):
-        """Test which ODBC API the driver implements (ANSI vs Unicode)."""
+    def test_driver_info(self):
+        """Test driver and DBMS information using SQLGetInfo."""
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             
             start_time = time.perf_counter()
             
+            # Get driver information using SQLGetInfo (the RIGHT way!)
             driver_name = conn.getinfo(pyodbc.SQL_DRIVER_NAME)
             driver_ver = conn.getinfo(pyodbc.SQL_DRIVER_VER)
+            driver_odbc_ver = conn.getinfo(pyodbc.SQL_DRIVER_ODBC_VER)
             
-            # Method 1: Check DLL exports (Windows only)
-            api_info = "Unknown"
-            has_ansi = False
-            has_unicode = False
+            dbms_name = conn.getinfo(pyodbc.SQL_DBMS_NAME)
+            dbms_ver = conn.getinfo(pyodbc.SQL_DBMS_VER)
             
-            if sys.platform == 'win32':
-                try:
-                    dll = ctypes.CDLL(driver_name)
-                    
-                    # Try to find ANSI functions
-                    try:
-                        dll.SQLConnectA
-                        has_ansi = True
-                    except AttributeError:
-                        pass
-                    
-                    # Try to find Unicode functions  
-                    try:
-                        dll.SQLConnectW
-                        has_unicode = True
-                    except AttributeError:
-                        pass
-                    
-                    if has_ansi and has_unicode:
-                        api_info = "Both ANSI and Unicode APIs"
-                    elif has_unicode:
-                        api_info = "Unicode API only"
-                    elif has_ansi:
-                        api_info = "ANSI API only"
-                    else:
-                        # Functions might be mangled or not directly exported
-                        # Infer from DLL name
-                        if 'w.dll' in driver_name.lower() or 'unicode' in driver_name.lower():
-                            api_info = "Unicode API (inferred from DLL name)"
-                            has_unicode = True
-                        elif 'a.dll' in driver_name.lower() or 'ansi' in driver_name.lower():
-                            api_info = "ANSI API (inferred from DLL name)"
-                            has_ansi = True
-                        else:
-                            api_info = "API functions not directly exported (likely Unicode on Python 3)"
-                            has_unicode = True  # Assume Unicode on modern Python
-                            
-                except Exception as e:
-                    # Fallback: infer from driver name patterns
-                    if 'w.dll' in driver_name.lower() or 'unicode' in driver_name.lower():
-                        api_info = "Unicode API (inferred)"
-                        has_unicode = True
-                    elif 'a.dll' in driver_name.lower() or 'ansi' in driver_name.lower():
-                        api_info = "ANSI API (inferred)"
-                        has_ansi = True
-                    else:
-                        api_info = f"Could not detect (Python {sys.version_info.major}.{sys.version_info.minor} defaults to Unicode)"
-                        has_unicode = True
-            else:
-                # On non-Windows, assume Unicode on Python 3
-                api_info = f"Assumed Unicode (Python {sys.version_info.major}.{sys.version_info.minor})"
-                has_unicode = True
+            odbc_ver = conn.getinfo(pyodbc.SQL_ODBC_VER)
             
             duration = (time.perf_counter() - start_time) * 1000
             
-            # Record the result
-            severity = Severity.INFO
-            if has_unicode:
-                status = TestStatus.PASS
-                expected = "Driver implements Unicode ODBC API (recommended)"
-                actual = f"{api_info} - Driver: {driver_name}"
-            elif has_ansi:
-                status = TestStatus.PASS
-                expected = "Driver implements ODBC API"
-                actual = f"{api_info} (ANSI only - limited Unicode support) - Driver: {driver_name}"
-                severity = Severity.WARNING
-            else:
-                status = TestStatus.SKIP
-                expected = "Detect ODBC API implementation"
-                actual = f"Could not determine API - Driver: {driver_name}"
+            # Determine API support from DLL name (still useful but now supplementary)
+            api_hint = ""
+            if 'w.dll' in driver_name.lower() or 'unicode' in driver_name.lower():
+                api_hint = " [Unicode API]"
+            elif 'a.dll' in driver_name.lower() or 'ansi' in driver_name.lower():
+                api_hint = " [ANSI API]"
             
             self._record_test(
-                test_name="test_api_support",
-                function="SQLConnect (ANSI vs Unicode detection)",
-                status=status,
-                expected=expected,
-                actual=actual,
-                diagnostic=f"pyodbc {pyodbc.version} on Python {sys.version_info.major}.{sys.version_info.minor}",
-                severity=severity,
+                test_name="test_driver_info",
+                function="SQLGetInfo (Driver/DBMS information)",
+                status=TestStatus.PASS,
+                expected="Driver and DBMS information",
+                actual=f"{driver_name} v{driver_ver}{api_hint} / {dbms_name} v{dbms_ver}",
+                diagnostic=f"Driver ODBC: {driver_odbc_ver}, DM ODBC: {odbc_ver}",
+                severity=Severity.INFO,
                 duration_ms=duration,
             )
             
@@ -124,10 +63,10 @@ class DriverCapabilityTests(ODBCTest):
                 
         except pyodbc.Error as e:
             self._record_test(
-                test_name="test_api_support",
-                function="SQLConnect (ANSI vs Unicode detection)",
+                test_name="test_driver_info",
+                function="SQLGetInfo (Driver/DBMS information)",
                 status=TestStatus.ERROR,
-                expected="Detect ODBC API implementation",
+                expected="Driver and DBMS information",
                 actual=f"Error: {str(e)}",
                 diagnostic="Connection error",
                 severity=Severity.ERROR,
@@ -230,47 +169,135 @@ class DriverCapabilityTests(ODBCTest):
                 duration_ms=0,
             )
     
-    def test_driver_conformance(self):
-        """Test ODBC conformance level."""
+    def test_sql_conformance(self):
+        """Test SQL conformance level using SQLGetInfo."""
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             
             start_time = time.perf_counter()
             
-            # Get conformance levels
-            try:
-                api_conformance = conn.getinfo(pyodbc.SQL_ODBC_API_CONFORMANCE)
-                sql_conformance = conn.getinfo(pyodbc.SQL_ODBC_SQL_CONFORMANCE)
-                odbc_ver = conn.getinfo(pyodbc.SQL_DRIVER_ODBC_VER)
+            # Get SQL conformance level
+            if hasattr(pyodbc, 'SQL_SQL_CONFORMANCE'):
+                sql_conf = conn.getinfo(pyodbc.SQL_SQL_CONFORMANCE)
+                conf_map = {
+                    0: 'SQL-92 Entry',
+                    1: 'FIPS127-2 Transitional',
+                    2: 'SQL-92 Intermediate',
+                    3: 'SQL-92 Full'
+                }
+                conformance_str = conf_map.get(sql_conf, f'Unknown level ({sql_conf})')
+            else:
+                conformance_str = "SQL_SQL_CONFORMANCE not available"
+                sql_conf = None
+            
+            # Get ODBC interface conformance
+            if hasattr(pyodbc, 'SQL_ODBC_INTERFACE_CONFORMANCE'):
+                try:
+                    odbc_conf = conn.getinfo(pyodbc.SQL_ODBC_INTERFACE_CONFORMANCE)
+                    odbc_map = {0: 'Core', 1: 'Level 1', 2: 'Level 2'}
+                    odbc_str = odbc_map.get(odbc_conf, f'Unknown ({odbc_conf})')
+                except:
+                    odbc_str = "Not reported"
+            else:
+                odbc_str = "Not available"
+            
+            duration = (time.perf_counter() - start_time) * 1000
+            
+            self._record_test(
+                test_name="test_sql_conformance",
+                function="SQLGetInfo (SQL conformance levels)",
+                status=TestStatus.PASS,
+                expected="SQL/ODBC conformance information",
+                actual=f"SQL: {conformance_str}, ODBC Interface: {odbc_str}",
+                diagnostic="Higher conformance = more SQL-92 features supported",
+                severity=Severity.INFO,
+                duration_ms=duration,
+            )
+            
+            conn.close()
                 
-                # Map conformance levels to names
-                api_levels = {0: "Core", 1: "Level 1", 2: "Level 2"}
-                sql_levels = {0: "Minimum", 1: "Core", 2: "Extended"}
-                
-                api_level = api_levels.get(api_conformance, f"Unknown ({api_conformance})")
-                sql_level = sql_levels.get(sql_conformance, f"Unknown ({sql_conformance})")
-                
-                duration = (time.perf_counter() - start_time) * 1000
-                
+        except pyodbc.Error as e:
+            self._record_test(
+                test_name="test_sql_conformance",
+                function="SQLGetInfo (SQL conformance levels)",
+                status=TestStatus.ERROR,
+                expected="SQL/ODBC conformance information",
+                actual=f"Error: {str(e)}",
+                diagnostic="Connection error",
+                severity=Severity.ERROR,
+                duration_ms=0,
+            )
+    
+    def test_supported_features(self):
+        """Test supported features using SQLGetInfo."""
+        try:
+            conn = pyodbc.connect(self.connection_string, timeout=10)
+            
+            start_time = time.perf_counter()
+            
+            features = []
+            
+            # Check procedures support
+            if hasattr(pyodbc, 'SQL_PROCEDURES'):
+                procs = conn.getinfo(pyodbc.SQL_PROCEDURES)
+                if procs == 'Y':
+                    features.append("Procedures")
+            
+            # Check multiple result sets
+            if hasattr(pyodbc, 'SQL_MULT_RESULT_SETS'):
+                mrs = conn.getinfo(pyodbc.SQL_MULT_RESULT_SETS)
+                if mrs == 'Y':
+                    features.append("Multiple result sets")
+            
+            # Check outer joins
+            if hasattr(pyodbc, 'SQL_OJ_CAPABILITIES'):
+                oj_caps = conn.getinfo(pyodbc.SQL_OJ_CAPABILITIES)
+                if oj_caps > 0:
+                    oj_types = []
+                    if hasattr(pyodbc, 'SQL_OJ_LEFT') and oj_caps & pyodbc.SQL_OJ_LEFT:
+                        oj_types.append("LEFT")
+                    if hasattr(pyodbc, 'SQL_OJ_RIGHT') and oj_caps & pyodbc.SQL_OJ_RIGHT:
+                        oj_types.append("RIGHT")
+                    if hasattr(pyodbc, 'SQL_OJ_FULL') and oj_caps & pyodbc.SQL_OJ_FULL:
+                        oj_types.append("FULL")
+                    if oj_types:
+                        features.append(f"Outer joins ({', '.join(oj_types)})")
+            
+            # Check transaction support
+            if hasattr(pyodbc, 'SQL_TXN_CAPABLE'):
+                txn = conn.getinfo(pyodbc.SQL_TXN_CAPABLE)
+                txn_map = {0: 'No transactions', 1: 'DML only', 2: 'DDL commits', 3: 'DDL ignored', 4: 'Full DDL+DML'}
+                if txn > 0:
+                    features.append(f"Transactions ({txn_map.get(txn, 'Yes')})")
+            
+            # Check catalog/schema support
+            if hasattr(pyodbc, 'SQL_CATALOG_NAME'):
+                cat = conn.getinfo(pyodbc.SQL_CATALOG_NAME)
+                if cat == 'Y':
+                    cat_term = conn.getinfo(pyodbc.SQL_CATALOG_TERM) if hasattr(pyodbc, 'SQL_CATALOG_TERM') else 'catalog'
+                    features.append(f"Catalogs (term: '{cat_term}')")
+            
+            duration = (time.perf_counter() - start_time) * 1000
+            
+            if features:
                 self._record_test(
-                    test_name="test_driver_conformance",
-                    function="SQLGetInfo (conformance levels)",
+                    test_name="test_supported_features",
+                    function="SQLGetInfo (feature detection)",
                     status=TestStatus.PASS,
-                    expected="ODBC conformance information",
-                    actual=f"ODBC {odbc_ver} - API: {api_level}, SQL: {sql_level}",
-                    diagnostic=f"Higher conformance = more features supported",
+                    expected="Driver feature support",
+                    actual=f"{len(features)} features detected",
+                    diagnostic="; ".join(features),
                     severity=Severity.INFO,
                     duration_ms=duration,
                 )
-            except Exception as e:
-                duration = (time.perf_counter() - start_time) * 1000
+            else:
                 self._record_test(
-                    test_name="test_driver_conformance",
-                    function="SQLGetInfo (conformance levels)",
-                    status=TestStatus.SKIP,
-                    expected="ODBC conformance information",
-                    actual=f"Could not retrieve: {str(e)}",
-                    diagnostic="Driver may not report conformance levels",
+                    test_name="test_supported_features",
+                    function="SQLGetInfo (feature detection)",
+                    status=TestStatus.PASS,
+                    expected="Driver feature support",
+                    actual="Basic feature set only",
+                    diagnostic="No advanced features detected via SQLGetInfo",
                     severity=Severity.INFO,
                     duration_ms=duration,
                 )
@@ -279,10 +306,10 @@ class DriverCapabilityTests(ODBCTest):
                 
         except pyodbc.Error as e:
             self._record_test(
-                test_name="test_driver_conformance",
-                function="SQLGetInfo (conformance levels)",
+                test_name="test_supported_features",
+                function="SQLGetInfo (feature detection)",
                 status=TestStatus.ERROR,
-                expected="ODBC conformance information",
+                expected="Driver feature support",
                 actual=f"Error: {str(e)}",
                 diagnostic="Connection error",
                 severity=Severity.ERROR,
