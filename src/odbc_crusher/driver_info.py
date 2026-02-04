@@ -3,6 +3,9 @@
 import pyodbc
 from typing import Dict, List, Any, Optional
 from enum import Enum
+import ctypes
+import sys
+import struct
 
 
 class DriverInfo:
@@ -136,32 +139,199 @@ class DriverInfo:
                 self.info[name] = None
     
     def _collect_sqlgetfunctions(self, conn: pyodbc.Connection):
-        """Collect supported functions using SQLGetFunctions (via pyodbc introspection)."""
+        """Collect supported functions using the ACTUAL SQLGetFunctions ODBC API."""
         
-        # PyODBC doesn't expose SQLGetFunctions directly, but we can test
-        # if methods exist and work. We'll test key ODBC functions.
-        
-        # Core functions - these should always exist if driver is ODBC compliant
-        core_functions = [
-            'tables', 'columns', 'statistics', 'primaryKeys', 'foreignKeys',
-            'procedures', 'procedureColumns', 'getTypeInfo',
-        ]
-        
-        cursor = conn.cursor()
-        
-        for func_name in core_functions:
+        # Call the real SQLGetFunctions from ODBC Driver Manager
+        if sys.platform == 'win32':
             try:
-                if hasattr(cursor, func_name):
-                    # Try to call it with minimal parameters to see if it's implemented
-                    func = getattr(cursor, func_name)
-                    # Don't actually execute, just check if callable
-                    self.functions[func_name] = callable(func)
+                # Load ODBC32.DLL (the ODBC Driver Manager on Windows)
+                odbc32 = ctypes.windll.odbc32
+                
+                # PyODBC doesn't expose the connection handle directly
+                # We need to use SQLAllocHandle to get our own connection
+                # OR use the ctypes.pythonapi to extract the handle from the pyodbc object
+                
+                # Alternative: Get handle via internal structure
+                # This is hacky but works: pyodbc Connection objects have a hdbc member
+                # We can access it via ctypes
+                
+                # Get the id/address of the connection object
+                conn_id = id(conn)
+                
+                # Try to get handle from connection string reconstruction
+                # Actually, let's use SQLDriverConnect to get a new handle for querying
+                
+                SQL_HANDLE_ENV = 1
+                SQL_HANDLE_DBC = 2
+                SQL_SUCCESS = 0
+                SQL_NULL_HANDLE = 0
+                SQL_OV_ODBC3 = 3
+                SQL_ATTR_ODBC_VERSION = 200
+                
+                # Allocate environment handle
+                henv = ctypes.c_void_p()
+                ret = odbc32.SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, ctypes.byref(henv))
+                if ret != SQL_SUCCESS:
+                    self.functions['_error'] = f'Failed to allocate environment handle: {ret}'
+                    return
+                
+                # Set ODBC version
+                ret = odbc32.SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION, SQL_OV_ODBC3, 0)
+                if ret != SQL_SUCCESS:
+                    odbc32.SQLFreeHandle(SQL_HANDLE_ENV, henv)
+                    self.functions['_error'] = f'Failed to set ODBC version: {ret}'
+                    return
+                
+                # Allocate connection handle
+                hdbc = ctypes.c_void_p()
+                ret = odbc32.SQLAllocHandle(SQL_HANDLE_DBC, henv, ctypes.byref(hdbc))
+                if ret != SQL_SUCCESS:
+                    odbc32.SQLFreeHandle(SQL_HANDLE_ENV, henv)
+                    self.functions['_error'] = f'Failed to allocate connection handle: {ret}'
+                    return
+                
+                # Connect using the connection string
+                conn_str = self.connection_string
+                out_conn_str = ctypes.create_string_buffer(1024)
+                out_conn_str_len = ctypes.c_short()
+                
+                ret = odbc32.SQLDriverConnectA(
+                    hdbc,
+                    0,  # No window handle
+                    conn_str.encode('utf-8'),
+                    len(conn_str),
+                    out_conn_str,
+                    1024,
+                    ctypes.byref(out_conn_str_len),
+                    0  # SQL_DRIVER_NOPROMPT
+                )
+                
+                if ret not in [SQL_SUCCESS, 1]:  # SQL_SUCCESS or SQL_SUCCESS_WITH_INFO
+                    odbc32.SQLFreeHandle(SQL_HANDLE_DBC, hdbc)
+                    odbc32.SQLFreeHandle(SQL_HANDLE_ENV, henv)
+                    self.functions['_error'] = f'Failed to connect for SQLGetFunctions: {ret}'
+                    return
+                
+                # Now we have a valid connection handle!
+                # SQL_API_ODBC3_ALL_FUNCTIONS = 999
+                # SQL_API_ODBC3_ALL_FUNCTIONS_SIZE = 250 (creates 4000-bit bitmap)
+                SQL_API_ODBC3_ALL_FUNCTIONS = 999
+                SQL_API_ODBC3_ALL_FUNCTIONS_SIZE = 250
+                
+                # Create a buffer for the function support bitmap
+                # SQLUSMALLINT array[250]
+                supported = (ctypes.c_ushort * SQL_API_ODBC3_ALL_FUNCTIONS_SIZE)()
+                
+                # Call SQLGetFunctions
+                # SQLRETURN SQLGetFunctions(SQLHDBC hdbc, SQLUSMALLINT fFunction, SQLUSMALLINT *pfExists)
+                result = odbc32.SQLGetFunctions(
+                    hdbc,
+                    SQL_API_ODBC3_ALL_FUNCTIONS,
+                    ctypes.byref(supported)
+                )
+                
+                if result == 0:  # SQL_SUCCESS
+                    # Parse the bitmap to find supported functions
+                    # Use SQL_FUNC_EXISTS macro: ((pfExists[(f) >> 4] & (1 << ((f) & 0x000F))) != 0)
+                    
+                    # Map of important ODBC function IDs to names
+                    odbc_functions = {
+                        # Core functions
+                        1: 'SQLAllocHandle',
+                        2: 'SQLBindCol',
+                        3: 'SQLCancel',
+                        4: 'SQLCloseCursor',
+                        5: 'SQLColAttribute',
+                        6: 'SQLConnect',
+                        7: 'SQLCopyDesc',
+                        8: 'SQLDataSources',
+                        9: 'SQLDescribeCol',
+                        10: 'SQLDisconnect',
+                        11: 'SQLEndTran',
+                        12: 'SQLExecDirect',
+                        13: 'SQLExecute',
+                        14: 'SQLFetch',
+                        15: 'SQLFetchScroll',
+                        16: 'SQLFreeHandle',
+                        17: 'SQLFreeStmt',
+                        18: 'SQLGetConnectAttr',
+                        19: 'SQLGetCursorName',
+                        20: 'SQLGetData',
+                        21: 'SQLGetDescField',
+                        22: 'SQLGetDescRec',
+                        23: 'SQLGetDiagField',
+                        24: 'SQLGetDiagRec',
+                        25: 'SQLGetEnvAttr',
+                        26: 'SQLGetFunctions',
+                        27: 'SQLGetInfo',
+                        28: 'SQLGetStmtAttr',
+                        29: 'SQLGetTypeInfo',
+                        30: 'SQLNumResultCols',
+                        31: 'SQLParamData',
+                        32: 'SQLPrepare',
+                        33: 'SQLPutData',
+                        34: 'SQLRowCount',
+                        35: 'SQLSetConnectAttr',
+                        36: 'SQLSetCursorName',
+                        37: 'SQLSetDescField',
+                        38: 'SQLSetDescRec',
+                        39: 'SQLSetEnvAttr',
+                        40: 'SQLSetStmtAttr',
+                        
+                        # Catalog functions
+                        41: 'SQLColumns',
+                        42: 'SQLSpecialColumns',
+                        43: 'SQLStatistics',
+                        44: 'SQLTables',
+                        
+                        # Extended functions
+                        51: 'SQLBindParameter',
+                        52: 'SQLBrowseConnect',
+                        53: 'SQLBulkOperations',
+                        54: 'SQLColAttributes',
+                        55: 'SQLColumnPrivileges',
+                        56: 'SQLDescribeParam',
+                        57: 'SQLDriverConnect',
+                        58: 'SQLDrivers',
+                        59: 'SQLExtendedFetch',
+                        60: 'SQLForeignKeys',
+                        61: 'SQLMoreResults',
+                        62: 'SQLNativeSql',
+                        63: 'SQLNumParams',
+                        64: 'SQLParamOptions',
+                        65: 'SQLPrimaryKeys',
+                        66: 'SQLProcedureColumns',
+                        67: 'SQLProcedures',
+                        68: 'SQLSetPos',
+                        69: 'SQLSetScrollOptions',
+                        70: 'SQLTablePrivileges',
+                    }
+                    
+                    # Check each function using SQL_FUNC_EXISTS macro
+                    for func_id, func_name in odbc_functions.items():
+                        # SQL_FUNC_EXISTS: ((supported[func_id >> 4] & (1 << (func_id & 0x000F))) != 0)
+                        word_index = func_id >> 4  # Divide by 16
+                        bit_position = func_id & 0x000F  # Modulo 16
+                        
+                        if word_index < len(supported):
+                            is_supported = (supported[word_index] & (1 << bit_position)) != 0
+                            self.functions[func_name] = is_supported
+                    
+                    # Store summary
+                    supported_count = sum(1 for v in self.functions.values() if v)
+                    self.functions['_summary'] = f'{supported_count}/{len(odbc_functions)} ODBC functions supported'
                 else:
-                    self.functions[func_name] = False
-            except:
-                self.functions[func_name] = False
-        
-        cursor.close()
+                    self.functions['_error'] = f'SQLGetFunctions returned {result}'
+                
+                # Clean up
+                odbc32.SQLDisconnect(hdbc)
+                odbc32.SQLFreeHandle(SQL_HANDLE_DBC, hdbc)
+                odbc32.SQLFreeHandle(SQL_HANDLE_ENV, henv)
+                    
+            except Exception as e:
+                self.functions['_error'] = f'Failed to call SQLGetFunctions: {str(e)}'
+        else:
+            self.functions['_error'] = 'SQLGetFunctions only implemented for Windows'
         
     def _collect_sqlgettypeinfo(self, conn: pyodbc.Connection):
         """Collect supported data types using SQLGetTypeInfo."""
@@ -305,6 +475,29 @@ def format_driver_info_report(driver_data: Dict[str, Any]) -> str:
     # Character Set
     lines.append("\n=== CHARACTER SET ===")
     lines.append(f"  Collation Sequence:   {info.get('COLLATION_SEQ', 'N/A')}")
+    
+    # Supported ODBC Functions (via SQLGetFunctions)
+    functions = driver_data.get('functions', {})
+    if functions and '_error' not in functions:
+        lines.append(f"\n=== ODBC FUNCTIONS (via SQLGetFunctions) ===")
+        
+        summary = functions.get('_summary', 'Unknown')
+        lines.append(f"  {summary}")
+        
+        # Group by category
+        catalog_funcs = [k for k in functions.keys() if k.startswith('SQL') and ('Columns' in k or 'Tables' in k or 'Procedures' in k or 'Primary' in k or 'Foreign' in k or 'Special' in k or 'Statistics' in k or 'Privileges' in k)]
+        core_funcs = [k for k in functions.keys() if k.startswith('SQL') and k not in catalog_funcs and k not in ['_summary', '_error']]
+        
+        if catalog_funcs:
+            supported_catalog = [f for f in catalog_funcs if functions.get(f)]
+            lines.append(f"  Catalog functions:    {len(supported_catalog)}/{len(catalog_funcs)} ({', '.join([f.replace('SQL', '') for f in supported_catalog[:5]])}...)")
+        
+        if core_funcs:
+            supported_core = [f for f in core_funcs if functions.get(f)]
+            lines.append(f"  Core functions:       {len(supported_core)}/{len(core_funcs)}")
+    elif '_error' in functions:
+        lines.append(f"\n=== ODBC FUNCTIONS ===")
+        lines.append(f"  Error: {functions['_error']}")
     
     # Supported Data Types
     datatypes = driver_data.get('datatypes', [])
