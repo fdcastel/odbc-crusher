@@ -6,6 +6,7 @@ import time
 import sys
 
 from .base import ODBCTest, TestResult, TestStatus, Severity
+from ..sql_dialect import SQLDialect
 
 
 class DriverCapabilityTests(ODBCTest):
@@ -78,6 +79,7 @@ class DriverCapabilityTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
@@ -96,27 +98,49 @@ class DriverCapabilityTests(ODBCTest):
             
             for test_str, description in test_cases:
                 try:
-                    # Use database-appropriate query
-                    driver_name = conn.getinfo(pyodbc.SQL_DRIVER_NAME).lower()
-                    if 'firebird' in driver_name:
-                        query = "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE"
-                    elif 'oracle' in driver_name:
-                        query = "SELECT CAST(? AS VARCHAR(50)) FROM DUAL"
-                    else:
-                        query = "SELECT CAST(? AS VARCHAR(50))"
+                    # Build appropriate query based on database
+                    # MySQL: CAST(? AS CHAR) works (VARCHAR(50) doesn't work with parameters)
+                    # Firebird/Oracle: Need explicit size CAST(? AS VARCHAR(50))
+                    # Try VARCHAR(50) first, fallback to CHAR if that fails
                     
-                    cursor.execute(query, (test_str,))
-                    result = cursor.fetchone()[0]
+                    success = False
+                    result = None
+                    last_error = None
                     
-                    if result == test_str:
-                        passed += 1
-                        details.append(f"{description}: PASS")
+                    # Try VARCHAR(50) first (works for Firebird, Oracle, SQL Server)
+                    try:
+                        query = dialect.build_select_query("CAST(? AS VARCHAR(50))")
+                        cursor.execute(query, (test_str,))
+                        result = cursor.fetchone()[0]
+                        success = True
+                    except Exception as e1:
+                        last_error = e1
+                        # Try CHAR without size (works for MySQL)
+                        try:
+                            query = dialect.build_select_query("CAST(? AS CHAR)")
+                            cursor.execute(query, (test_str,))
+                            result = cursor.fetchone()[0]
+                            success = True
+                        except Exception as e2:
+                            last_error = e2
+                    
+                    if success:
+                        # Handle bytes result (some drivers return bytes for CHAR)
+                        if isinstance(result, bytes):
+                            result = result.decode('utf-8')
+                        
+                        if result == test_str:
+                            passed += 1
+                            details.append(f"{description}: PASS")
+                        else:
+                            failed += 1
+                            details.append(f"{description}: FAIL (got '{result}')")
                     else:
                         failed += 1
-                        details.append(f"{description}: FAIL (got '{result}')")
+                        details.append(f"{description}: ERROR ({str(last_error)[:50]})")
                 except Exception as e:
                     failed += 1
-                    details.append(f"{description}: ERROR ({str(e)[:30]})")
+                    details.append(f"{description}: ERROR ({str(e)[:50]})")
             
             duration = (time.perf_counter() - start_time) * 1000
             
