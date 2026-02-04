@@ -331,7 +331,13 @@ Create an incremental, extensible tool that tests ODBC driver implementations ag
 - [x] Data types table: 60-char Type Name column, Rich Table format
 - [x] Test results table: 45-char Function column (no wrapping)
 - [x] ODBC 3.8+ advanced features detection and reporting section
+- [x] Fixed Unicode capability test - now uses fallback queries (VARCHAR(50) → CHAR)
 - [x] Test count: 36 (was 35, +1 for discovered types test)
+
+**Bug Fixes**:
+- Unicode test was incorrectly failing on MySQL due to `CAST(? AS VARCHAR(50))` not supported
+- Now tries VARCHAR(50) first, falls back to CHAR for MySQL compatibility
+- Both Firebird and MySQL now pass all 5/5 Unicode tests ✅
 
 **ODBC 3.8+ Features Detected**:
 - Driver version compliance check (03.80+)
