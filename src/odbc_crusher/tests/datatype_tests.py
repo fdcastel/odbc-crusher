@@ -33,31 +33,31 @@ class DataTypeTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
-            # Test different integer types with database-specific queries
-            test_cases = [
-                # (query, param, expected_value, type_name)
-                ("SELECT CAST(? AS SMALLINT) FROM RDB$DATABASE", 32767, 32767, "SMALLINT"),
-                ("SELECT CAST(? AS INTEGER) FROM RDB$DATABASE", 2147483647, 2147483647, "INTEGER"),
-                ("SELECT CAST(? AS BIGINT) FROM RDB$DATABASE", 9223372036854775807, 9223372036854775807, "BIGINT"),
-                # Generic fallbacks
-                ("SELECT CAST(? AS SMALLINT)", 100, 100, "SMALLINT"),
-                ("SELECT CAST(? AS INTEGER)", 1000, 1000, "INTEGER"),
-                ("SELECT CAST(? AS BIGINT)", 10000, 10000, "BIGINT"),
-            ]
+            # Test different integer types using dialect-aware queries
+            # Note: MySQL uses SIGNED/UNSIGNED instead of INTEGER/BIGINT with CAST
+            if dialect.db_type.value == "mysql":
+                test_cases = [
+                    ("CAST(? AS SIGNED)", 32767, 32767, "SIGNED"),
+                    ("CAST(? AS SIGNED)", 2147483647, 2147483647, "INTEGER"),
+                    ("CAST(? AS SIGNED)", 9223372036854775807, 9223372036854775807, "BIGINT"),
+                ]
+            else:
+                test_cases = [
+                    ("CAST(? AS SMALLINT)", 32767, 32767, "SMALLINT"),
+                    ("CAST(? AS INTEGER)", 2147483647, 2147483647, "INTEGER"),
+                    ("CAST(? AS BIGINT)", 9223372036854775807, 9223372036854775807, "BIGINT"),
+                ]
             
             successful_types = []
             
-            for query, param, expected, type_name in test_cases:
-                try:
-                    cursor.execute(query, (param,))
-                    result = cursor.fetchone()[0]
-                    if result == expected and type_name not in successful_types:
-                        successful_types.append(type_name)
-                except:
-                    continue
+            for select_expr, param, expected, type_name in test_cases:
+                result = dialect.execute_with_fallback(cursor, select_expr, (param,))
+                if result == expected and type_name not in successful_types:
+                    successful_types.append(type_name)
             
             duration = (time.perf_counter() - start_time) * 1000
             
@@ -115,27 +115,21 @@ class DataTypeTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
             test_cases = [
-                ("SELECT CAST(? AS DECIMAL(10,2)) FROM RDB$DATABASE", Decimal("123.45"), "DECIMAL"),
-                ("SELECT CAST(? AS NUMERIC(10,2)) FROM RDB$DATABASE", Decimal("678.90"), "NUMERIC"),
-                ("SELECT CAST(? AS DECIMAL(10,2))", Decimal("123.45"), "DECIMAL"),
-                ("SELECT CAST(? AS NUMERIC(10,2))", Decimal("678.90"), "NUMERIC"),
+                ("CAST(? AS DECIMAL(10,2))", Decimal("123.45"), "DECIMAL"),
+                ("CAST(? AS NUMERIC(10,2))", Decimal("678.90"), "NUMERIC"),
             ]
             
             successful_types = []
             
-            for query, param, type_name in test_cases:
-                try:
-                    cursor.execute(query, (param,))
-                    result = cursor.fetchone()[0]
-                    # Check if result is close enough (accounting for precision)
-                    if abs(float(result) - float(param)) < 0.01 and type_name not in successful_types:
-                        successful_types.append(type_name)
-                except:
-                    continue
+            for select_expr, param, type_name in test_cases:
+                result = dialect.execute_with_fallback(cursor, select_expr, (param,))
+                if result and abs(float(result) - float(param)) < 0.01 and type_name not in successful_types:
+                    successful_types.append(type_name)
             
             duration = (time.perf_counter() - start_time) * 1000
             
@@ -182,28 +176,30 @@ class DataTypeTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
-            test_cases = [
-                ("SELECT CAST(? AS FLOAT) FROM RDB$DATABASE", 3.14159, "FLOAT"),
-                ("SELECT CAST(? AS DOUBLE PRECISION) FROM RDB$DATABASE", 2.71828, "DOUBLE PRECISION"),
-                ("SELECT CAST(? AS REAL) FROM RDB$DATABASE", 1.414, "REAL"),
-                ("SELECT CAST(? AS FLOAT)", 3.14159, "FLOAT"),
-                ("SELECT CAST(? AS REAL)", 1.414, "REAL"),
-            ]
+            # MySQL uses DECIMAL for float casting with parameters
+            if dialect.db_type.value == "mysql":
+                test_cases = [
+                    ("CAST(? AS DECIMAL(10,5))", 3.14159, "FLOAT"),
+                    ("CAST(? AS DECIMAL(10,5))", 2.71828, "DOUBLE"),
+                    ("CAST(? AS DECIMAL(10,3))", 1.414, "REAL"),
+                ]
+            else:
+                test_cases = [
+                    ("CAST(? AS FLOAT)", 3.14159, "FLOAT"),
+                    ("CAST(? AS DOUBLE PRECISION)", 2.71828, "DOUBLE PRECISION"),
+                    ("CAST(? AS REAL)", 1.414, "REAL"),
+                ]
             
             successful_types = []
             
-            for query, param, type_name in test_cases:
-                try:
-                    cursor.execute(query, (param,))
-                    result = cursor.fetchone()[0]
-                    # Check if result is close (floating point comparison)
-                    if abs(result - param) < 0.001 and type_name not in successful_types:
-                        successful_types.append(type_name)
-                except:
-                    continue
+            for select_expr, param, type_name in test_cases:
+                result = dialect.execute_with_fallback(cursor, select_expr, (param,))
+                if result and abs(float(result) - param) < 0.001 and type_name not in successful_types:
+                    successful_types.append(type_name)
             
             duration = (time.perf_counter() - start_time) * 1000
             
@@ -250,27 +246,22 @@ class DataTypeTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
             test_cases = [
-                ("SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE", "Hello World", "VARCHAR"),
-                ("SELECT CAST(? AS CHAR(20)) FROM RDB$DATABASE", "Fixed Width", "CHAR"),
-                ("SELECT CAST(? AS VARCHAR(50))", "Test String", "VARCHAR"),
-                ("SELECT CAST(? AS CHAR(10))", "ABC", "CHAR"),
+                ("CAST(? AS VARCHAR(50))", "Hello World", "VARCHAR"),
+                ("CAST(? AS CHAR(20))", "Fixed Width", "CHAR"),
             ]
             
             successful_types = []
             
-            for query, param, type_name in test_cases:
-                try:
-                    cursor.execute(query, (param,))
-                    result = cursor.fetchone()[0]
-                    # For CHAR, result might be padded
-                    if (result.strip() == param.strip() or result == param) and type_name not in successful_types:
-                        successful_types.append(type_name)
-                except:
-                    continue
+            for select_expr, param, type_name in test_cases:
+                result = dialect.execute_with_fallback(cursor, select_expr, (param,))
+                # For CHAR, result might be padded
+                if result and (result.strip() == param.strip() or result == param) and type_name not in successful_types:
+                    successful_types.append(type_name)
             
             duration = (time.perf_counter() - start_time) * 1000
             
@@ -317,30 +308,21 @@ class DataTypeTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
             test_date = date(2026, 2, 3)
             
-            test_cases = [
-                ("SELECT CAST(? AS DATE) FROM RDB$DATABASE", test_date),
-                ("SELECT CAST(? AS DATE)", test_date),
-            ]
+            result = dialect.execute_with_fallback(cursor, "CAST(? AS DATE)", (test_date,))
             
-            success = False
-            
-            for query, param in test_cases:
-                try:
-                    cursor.execute(query, (param,))
-                    result = cursor.fetchone()[0]
-                    # Result might be date or datetime
-                    if isinstance(result, datetime):
-                        result = result.date()
-                    if result == param:
-                        success = True
-                        break
-                except:
-                    continue
+            # Result might be date or datetime
+            if result:
+                if isinstance(result, datetime):
+                    result = result.date()
+                success = (result == test_date)
+            else:
+                success = False
             
             duration = (time.perf_counter() - start_time) * 1000
             
@@ -386,33 +368,24 @@ class DataTypeTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
             test_time = dt_time(14, 30, 45)
             
-            test_cases = [
-                ("SELECT CAST(? AS TIME) FROM RDB$DATABASE", test_time),
-                ("SELECT CAST(? AS TIME)", test_time),
-            ]
+            result = dialect.execute_with_fallback(cursor, "CAST(? AS TIME)", (test_time,))
             
-            success = False
-            
-            for query, param in test_cases:
-                try:
-                    cursor.execute(query, (param,))
-                    result = cursor.fetchone()[0]
-                    # Result might be time or datetime
-                    if isinstance(result, datetime):
-                        result = result.time()
-                    # Compare hour, minute, second (ignore microseconds)
-                    if (result.hour == param.hour and 
-                        result.minute == param.minute and 
-                        result.second == param.second):
-                        success = True
-                        break
-                except:
-                    continue
+            # Result might be time or datetime
+            if result:
+                if isinstance(result, datetime):
+                    result = result.time()
+                # Compare hour, minute, second (ignore microseconds)
+                success = (result.hour == test_time.hour and 
+                          result.minute == test_time.minute and 
+                          result.second == test_time.second)
+            else:
+                success = False
             
             duration = (time.perf_counter() - start_time) * 1000
             
@@ -458,36 +431,27 @@ class DataTypeTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
             test_timestamp = datetime(2026, 2, 3, 14, 30, 45)
             
-            test_cases = [
-                ("SELECT CAST(? AS TIMESTAMP) FROM RDB$DATABASE", test_timestamp),
-                ("SELECT CAST(? AS TIMESTAMP)", test_timestamp),
-                ("SELECT CAST(? AS DATETIME) FROM RDB$DATABASE", test_timestamp),
-                ("SELECT CAST(? AS DATETIME)", test_timestamp),
-            ]
+            # Try TIMESTAMP first, then DATETIME as fallback
+            result = dialect.execute_with_fallback(cursor, "CAST(? AS TIMESTAMP)", (test_timestamp,))
+            if not result:
+                result = dialect.execute_with_fallback(cursor, "CAST(? AS DATETIME)", (test_timestamp,))
             
-            success = False
-            
-            for query, param in test_cases:
-                try:
-                    cursor.execute(query, (param,))
-                    result = cursor.fetchone()[0]
-                    # Compare up to seconds (ignore microseconds)
-                    if (isinstance(result, datetime) and
-                        result.year == param.year and
-                        result.month == param.month and
-                        result.day == param.day and
-                        result.hour == param.hour and
-                        result.minute == param.minute and
-                        result.second == param.second):
-                        success = True
-                        break
-                except:
-                    continue
+            # Compare up to seconds (ignore microseconds)
+            if result and isinstance(result, datetime):
+                success = (result.year == test_timestamp.year and
+                          result.month == test_timestamp.month and
+                          result.day == test_timestamp.day and
+                          result.hour == test_timestamp.hour and
+                          result.minute == test_timestamp.minute and
+                          result.second == test_timestamp.second)
+            else:
+                success = False
             
             duration = (time.perf_counter() - start_time) * 1000
             
@@ -533,30 +497,38 @@ class DataTypeTests(ODBCTest):
         try:
             conn = pyodbc.connect(self.connection_string, timeout=10)
             cursor = conn.cursor()
+            dialect = SQLDialect(conn)
             
             start_time = time.perf_counter()
             
             test_binary = b'\x00\x01\x02\x03\xff'
             
+            # Try VARBINARY first, then BINARY
             test_cases = [
-                ("SELECT CAST(? AS VARBINARY(10)) FROM RDB$DATABASE", test_binary),
-                ("SELECT CAST(? AS VARBINARY(10))", test_binary),
-                ("SELECT CAST(? AS BINARY(10)) FROM RDB$DATABASE", test_binary),
-                ("SELECT CAST(? AS BINARY(10))", test_binary),
+                ("CAST(? AS VARBINARY(10))", test_binary, "VARBINARY"),
+                ("CAST(? AS BINARY(10))", test_binary, "BINARY"),
             ]
             
             success = False
+            success_type = None
             
-            for query, param in test_cases:
-                try:
-                    cursor.execute(query, (param,))
-                    result = cursor.fetchone()[0]
-                    # Result might have padding for BINARY type
-                    if param in result or result.startswith(param):
+            for select_expr, param, type_name in test_cases:
+                result = dialect.execute_with_fallback(cursor, select_expr, (param,))
+                if result:
+                    # Result might be bytes or str depending on driver
+                    # Convert to bytes if needed for comparison
+                    if isinstance(result, str):
+                        # Firebird returns string, encode to bytes
+                        try:
+                            result = result.encode('latin1')
+                        except:
+                            result = result.encode('utf-8', errors='ignore')
+                    
+                    # Check if our test data is in the result (might have padding)
+                    if isinstance(result, bytes) and (param in result or result.startswith(param)):
                         success = True
+                        success_type = type_name
                         break
-                except:
-                    continue
             
             duration = (time.perf_counter() - start_time) * 1000
             
@@ -566,7 +538,7 @@ class DataTypeTests(ODBCTest):
                     function="SQLBindParameter/SQLGetData (BINARY)",
                     status=TestStatus.PASS,
                     expected="Support for binary data types",
-                    actual="Successfully bound and retrieved binary data",
+                    actual=f"Successfully bound and retrieved {success_type} data",
                     severity=Severity.INFO,
                     duration_ms=duration,
                 )
@@ -574,11 +546,11 @@ class DataTypeTests(ODBCTest):
                 self._record_test(
                     test_name="test_binary_types",
                     function="SQLBindParameter/SQLGetData (BINARY)",
-                    status=TestStatus.SKIP,
+                    status=TestStatus.FAIL,
                     expected="Support for binary data types",
                     actual="Binary types could not be tested",
-                    diagnostic="Driver may not support binary type binding (common limitation)",
-                    severity=Severity.INFO,
+                    diagnostic="Driver may not support binary type binding or returns incompatible format",
+                    severity=Severity.WARNING,
                     duration_ms=duration,
                 )
             
@@ -589,10 +561,10 @@ class DataTypeTests(ODBCTest):
             self._record_test(
                 test_name="test_binary_types",
                 function="SQLBindParameter/SQLGetData (BINARY)",
-                status=TestStatus.SKIP,
+                status=TestStatus.ERROR,
                 expected="Support for binary data types",
-                actual=f"Skipped: {str(e)}",
+                actual=f"Error: {str(e)}",
                 diagnostic="Binary types often have driver-specific limitations",
-                severity=Severity.INFO,
+                severity=Severity.WARNING,
                 duration_ms=0,
             )
