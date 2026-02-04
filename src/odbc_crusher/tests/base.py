@@ -65,6 +65,11 @@ class ODBCTest(ABC):
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
         self.results: List[TestResult] = []
+        self.driver_info: Optional[Dict[str, Any]] = None
+    
+    def set_driver_info(self, driver_info: Dict[str, Any]):
+        """Set driver information for conditional test logic."""
+        self.driver_info = driver_info
     
     @abstractmethod
     def run(self) -> List[TestResult]:

@@ -17,6 +17,11 @@ class DataTypeTests(ODBCTest):
         """Run all data type tests."""
         self.results = []
         
+        # If driver info is available, test discovered types
+        if self.driver_info and self.driver_info.get('datatypes'):
+            self.test_discovered_types()
+        
+        # Run standard type tests
         self.test_integer_types()
         self.test_decimal_types()
         self.test_float_types()
@@ -27,6 +32,82 @@ class DataTypeTests(ODBCTest):
         self.test_binary_types()
         
         return self.results
+    
+    def test_discovered_types(self):
+        """Test data types discovered via SQLGetTypeInfo."""
+        try:
+            datatypes = self.driver_info.get('datatypes', [])
+            if not datatypes or 'error' in datatypes[0]:
+                self._record_test(
+                    test_name="test_discovered_types",
+                    function="SQLGetTypeInfo (data type discovery)",
+                    status=TestStatus.SKIP,
+                    expected="Data types from driver",
+                    actual="No type information available",
+                    diagnostic="Driver did not provide type information",
+                    severity=Severity.INFO,
+                    duration_ms=0,
+                )
+                return
+            
+            conn = pyodbc.connect(self.connection_string, timeout=10)
+            
+            start_time = time.perf_counter()
+            
+            # Group types by category for summary
+            integer_types = [dt for dt in datatypes if dt.get('DATA_TYPE') in [-6, -5, 4, 5]]  # TINYINT, BIGINT, INTEGER, SMALLINT
+            decimal_types = [dt for dt in datatypes if dt.get('DATA_TYPE') in [2, 3]]  # NUMERIC, DECIMAL
+            float_types = [dt for dt in datatypes if dt.get('DATA_TYPE') in [6, 7, 8]]  # FLOAT, REAL, DOUBLE
+            char_types = [dt for dt in datatypes if dt.get('DATA_TYPE') in [1, 12, -1, -8, -9, -10]]  # CHAR, VARCHAR, LONGVARCHAR, etc.
+            date_types = [dt for dt in datatypes if dt.get('DATA_TYPE') == 91]  # DATE
+            time_types = [dt for dt in datatypes if dt.get('DATA_TYPE') == 92]  # TIME
+            timestamp_types = [dt for dt in datatypes if dt.get('DATA_TYPE') == 93]  # TIMESTAMP
+            binary_types = [dt for dt in datatypes if dt.get('DATA_TYPE') in [-2, -3, -4]]  # BINARY, VARBINARY, LONGVARBINARY
+            
+            duration = (time.perf_counter() - start_time) * 1000
+            
+            type_summary = []
+            if integer_types:
+                type_summary.append(f"{len(integer_types)} integer")
+            if decimal_types:
+                type_summary.append(f"{len(decimal_types)} decimal")
+            if float_types:
+                type_summary.append(f"{len(float_types)} float")
+            if char_types:
+                type_summary.append(f"{len(char_types)} character")
+            if date_types:
+                type_summary.append(f"{len(date_types)} date")
+            if time_types:
+                type_summary.append(f"{len(time_types)} time")
+            if timestamp_types:
+                type_summary.append(f"{len(timestamp_types)} timestamp")
+            if binary_types:
+                type_summary.append(f"{len(binary_types)} binary")
+            
+            self._record_test(
+                test_name="test_discovered_types",
+                function="SQLGetTypeInfo (data type discovery)",
+                status=TestStatus.PASS,
+                expected="Data types reported by driver",
+                actual=f"{len(datatypes)} types total",
+                diagnostic="; ".join(type_summary),
+                severity=Severity.INFO,
+                duration_ms=duration,
+            )
+            
+            conn.close()
+                
+        except pyodbc.Error as e:
+            self._record_test(
+                test_name="test_discovered_types",
+                function="SQLGetTypeInfo (data type discovery)",
+                status=TestStatus.ERROR,
+                expected="Data types from driver",
+                actual=f"Error: {str(e)}",
+                diagnostic="Failed to process type information",
+                severity=Severity.ERROR,
+                duration_ms=0,
+            )
     
     def test_integer_types(self):
         """Test integer data types (SMALLINT, INTEGER, BIGINT)."""

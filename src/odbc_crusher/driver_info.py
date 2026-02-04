@@ -490,11 +490,17 @@ def format_driver_info_report(driver_data: Dict[str, Any]) -> str:
         
         if catalog_funcs:
             supported_catalog = [f for f in catalog_funcs if functions.get(f)]
-            lines.append(f"  Catalog functions:    {len(supported_catalog)}/{len(catalog_funcs)} ({', '.join([f.replace('SQL', '') for f in supported_catalog[:5]])}...)")
+            missing_catalog = [f for f in catalog_funcs if not functions.get(f)]
+            lines.append(f"  Catalog functions:    {len(supported_catalog)}/{len(catalog_funcs)}")
+            if missing_catalog:
+                lines.append(f"    MISSING: {', '.join([f.replace('SQL', '') for f in missing_catalog])}")
         
         if core_funcs:
             supported_core = [f for f in core_funcs if functions.get(f)]
-            lines.append(f"  Core functions:       {len(supported_core)}/{len(core_funcs)}")
+            missing_core = [f for f in core_funcs if not functions.get(f)]
+            lines.append(f"  Core/Extended funcs:  {len(supported_core)}/{len(core_funcs)}")
+            if missing_core:
+                lines.append(f"    MISSING: {', '.join([f.replace('SQL', '') for f in missing_core])}")
     elif '_error' in functions:
         lines.append(f"\n=== ODBC FUNCTIONS ===")
         lines.append(f"  Error: {functions['_error']}")
@@ -504,7 +510,8 @@ def format_driver_info_report(driver_data: Dict[str, Any]) -> str:
     if datatypes and 'error' not in datatypes[0]:
         lines.append(f"\n=== SUPPORTED DATA TYPES ({len(datatypes)} types) ===")
         
-        for dt in datatypes[:20]:  # Show first 20 to avoid overwhelming output
+        # Show ALL data types, not just first 20
+        for dt in datatypes:
             type_name = dt.get('TYPE_NAME', 'UNKNOWN')
             data_type = dt.get('DATA_TYPE', '?')
             size = dt.get('COLUMN_SIZE', '?')
@@ -512,9 +519,6 @@ def format_driver_info_report(driver_data: Dict[str, Any]) -> str:
             auto = 'AUTO' if dt.get('AUTO_UNIQUE_VALUE') else ''
             
             lines.append(f"  {type_name:20s} (SQL type {data_type:3}) - Size: {str(size):8s} {nullable:8s} {auto}")
-        
-        if len(datatypes) > 20:
-            lines.append(f"  ... and {len(datatypes) - 20} more types")
     
     lines.append("\n" + "=" * 80)
     
