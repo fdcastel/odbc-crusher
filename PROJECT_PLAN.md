@@ -327,6 +327,7 @@ Create an incremental, extensible tool that tests ODBC driver implementations ag
 - [x] SQLDialect verified to use `SQL_DBMS_NAME` (already correct)
 - [x] Data type tests now use `SQLGetTypeInfo` results (`test_discovered_types`)
 - [x] Driver info available to all tests via `set_driver_info()` method
+- [x] Improved data type table formatting with clear headers and columns
 - [x] Test count: 36 (was 35, +1 for discovered types test)
 
 ### Phase 7: Performance & Compliance (NEXT)
