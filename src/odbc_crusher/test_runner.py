@@ -3,6 +3,7 @@
 from typing import List, Dict, Any
 
 from .tests import (
+    DriverCapabilityTests,
     ConnectionTests,
     HandleTests,
     StatementTests,
@@ -19,6 +20,7 @@ class TestRunner:
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
         self.test_classes = [
+            DriverCapabilityTests,  # Run FIRST - detects driver capabilities
             ConnectionTests,
             HandleTests,
             StatementTests,

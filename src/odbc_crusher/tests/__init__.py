@@ -1,6 +1,7 @@
 """Initialize ODBC tests package."""
 
 from .base import ODBCTest, TestResult, TestStatus, Severity
+from .capability_tests import DriverCapabilityTests
 from .connection_tests import ConnectionTests
 from .handle_tests import HandleTests
 from .statement_tests import StatementTests
@@ -13,6 +14,7 @@ __all__ = [
     "TestResult",
     "TestStatus",
     "Severity",
+    "DriverCapabilityTests",
     "ConnectionTests",
     "HandleTests",
     "StatementTests",
