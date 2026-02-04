@@ -11,6 +11,7 @@ from rich.table import Table
 from .connection import check_connection
 from .test_runner import TestRunner
 from .reporter import Reporter
+from .driver_info import DriverInfo, format_driver_info_report
 
 console = Console()
 
@@ -75,7 +76,20 @@ def main(connection_string: str, output: str, verbose: bool) -> None:
             for key, value in conn_result["info"].items():
                 console.print(f"  [dim]{key}:[/dim] {value}")
         console.print()
+    # Phase 2: Collect driver information using ODBC functions
+    if output != "json":
+        console.print("[bold]Collecting driver capabilities...[/bold]\n")
     
+    driver_info_collector = DriverInfo(connection_string)
+    driver_data = driver_info_collector.collect_all()
+    
+    if output != "json":
+        # Display driver information report
+        report = format_driver_info_report(driver_data)
+        console.print(report)
+        console.print()
+    
+    # Phase 
     # Phase 2: Run tests
     if output != "json":
         console.print("[bold]Phase 2:[/bold] Running ODBC tests...\n")
