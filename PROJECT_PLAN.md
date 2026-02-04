@@ -208,6 +208,119 @@ Create an incremental, extensible tool that tests ODBC driver implementations ag
 - MySQL more flexible with standalone CAST
 - Date/time types well-supported across drivers
 
+### Phase 6.5: Driver Capability Detection (COMPLETED ✅ - Feb 4, 2026)
+**Goal**: Use ODBC specification functions to discover driver capabilities - STOP GUESSING!
+
+**Critical Realization**: Instead of guessing driver features from DLL names or catching exceptions, use the ODBC-specified discovery functions: `SQLGetInfo`, `SQLGetTypeInfo`, and `SQLGetFunctions`.
+
+**Implementation**: ✅ ALL THREE ODBC DISCOVERY FUNCTIONS
+
+**1. SQLGetInfo** - Driver/DBMS Information
+- [x] Driver name, version, ODBC version
+- [x] DBMS name and version
+- [x] SQL-92 conformance level
+- [x] ODBC interface conformance
+- [x] Catalog/schema terminology
+- [x] SQL limits (max column name, max tables in SELECT, etc.)
+- [x] Feature flags (procedures, outer joins, transactions)
+- [x] 40+ driver properties collected
+- Method: `conn.getinfo(pyodbc.SQL_*)` - PyODBC exposes this
+- Challenge: Not all SQL_* constants available in pyodbc - use `hasattr()` checks
+
+**2. SQLGetTypeInfo** - Supported Data Types
+- [x] Query all data types supported by driver
+- [x] Get type name, SQL type code, precision, scale
+- [x] Nullable, case-sensitive, searchable flags
+- [x] Auto-increment capability
+- Method: `cursor.getTypeInfo(0)` - PyODBC exposes this
+- Challenge: Access result by index (not by attribute name)
+- Firebird Result: 22 data types detected
+
+**3. SQLGetFunctions** - Implemented ODBC Functions
+- [x] Direct ODBC API call using ctypes and odbc32.dll
+- [x] Allocate ODBC environment and connection handles
+- [x] Connect via SQLDriverConnectA
+- [x] Call SQLGetFunctions with SQL_API_ODBC3_ALL_FUNCTIONS (999)
+- [x] Parse 250-element bitmap (4000 bits) using SQL_FUNC_EXISTS macro
+- [x] Test 64 important ODBC functions
+- Method: **NO PyODBC wrapper - direct ctypes call to Windows ODBC Driver Manager**
+- Challenge: PyODBC doesn't expose SQLGetFunctions - implemented using ctypes
+- Firebird Result: **49/64 ODBC functions supported** (all 10 catalog functions ✅)
+
+**Refactored Tests**:
+- [x] `DriverCapabilityTests` - Replaced DLL inspection with SQLGetInfo
+- [x] `test_driver_info` - Reports driver/DBMS using SQLGetInfo
+- [x] `test_sql_conformance` - SQL-92 and ODBC interface conformance levels
+- [x] `test_supported_features` - Feature detection via info flags (not guessing!)
+- [x] `test_unicode_capability` - Still does actual Unicode round-trip testing
+
+**Files Created**:
+- `src/odbc_crusher/driver_info.py` - Driver information collection module
+- `tmp/test_driver_info.py` - Standalone test script
+
+**Files Modified**:
+- `src/odbc_crusher/tests/capability_tests.py` - Major refactoring
+- `src/odbc_crusher/cli.py` - Integrated driver info display
+
+**Test Results**: 35 tests total (was 34)
+- Firebird: All tests passing ✅
+- Driver info displayed before test execution
+
+**Key Learnings**:
+
+1. **PyODBC Limitations**:
+   - Not all SQL_* constants exposed (e.g., no SQL_OUTER_JOINS)
+   - SQL_DRIVER_HDBC not available (used numeric value 3)
+   - No SQLGetFunctions wrapper - had to use ctypes
+   - Must use `hasattr(pyodbc, 'SQL_*')` before accessing constants
+
+2. **ODBC API via ctypes** (Windows):
+   - Load odbc32.dll: `ctypes.windll.odbc32`
+   - Allocate handles: `SQLAllocHandle(type, parent, &handle)`
+   - Connect: `SQLDriverConnectA(hdbc, hwnd, connStr, len, ...)`
+   - Query: `SQLGetFunctions(hdbc, functionId, &bitmap)`
+   - Clean up: `SQLDisconnect()`, `SQLFreeHandle()`
+   - This works PERFECTLY when PyODBC doesn't expose functionality!
+
+3. **Before vs After**:
+   ```python
+   # BEFORE (Guessing):
+   if 'w.dll' in driver_name.lower():
+       has_unicode = True
+   try:
+       cursor.execute(query)
+   except:
+       fallback_query()
+   
+   # AFTER (Asking the driver):
+   outer_joins = conn.getinfo(pyodbc.SQL_OJ_CAPABILITIES)
+   if outer_joins & pyodbc.SQL_OJ_LEFT:
+       supports_left_join = True
+   
+   datatypes = cursor.getTypeInfo(0)  # All types
+   for dt in datatypes:
+       type_name = dt[0]  # TYPE_NAME column
+   ```
+
+4. **Firebird Driver Capabilities** (discovered via ODBC functions):
+   - Driver: FirebirdODBC v03.00.0021, ODBC 3.51
+   - DBMS: Firebird v06.03.1613 (Firebird 5.0)
+   - SQL Conformance: Custom level 8
+   - ODBC Interface: Level 2 ✅
+   - Outer Joins: LEFT, RIGHT, FULL ✅
+   - Transactions: DDL causes commit
+   - 49/64 ODBC functions implemented
+   - All catalog functions present ✅
+   - 22 data types supported
+
+**Documentation**:
+- Microsoft ODBC API references used:
+  - [SQLGetInfo Function](https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlgetinfo-function)
+  - [SQLGetTypeInfo Function](https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlgettypeinfo-function)
+  - [SQLGetFunctions Function](https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlgetfunctions-function)
+
+**Impact**: This is a FUNDAMENTAL improvement - we now ask the driver what it supports instead of guessing. No more false bug reports from incorrect assumptions!
+
 ### Phase 7: Performance & Compliance (NEXT)
 **Goal**: Test performance characteristics and SQL compliance
 
@@ -333,10 +446,14 @@ uv run odbc-crusher "DSN=YourDSN" --verbose
 
 ## Current Status
 
-**Phase**: Phase 1 - Foundation  
-**Version**: 0.1.0-dev  
-**Last Milestone**: Project initialization  
-**Next Milestone**: First working CLI with connection test
+**Phase**: Phase 6.5 - Driver Capability Detection ✅ COMPLETED  
+**Version**: 0.5.0  
+**Last Milestone**: Implementation of SQLGetInfo, SQLGetTypeInfo, and SQLGetFunctions via ODBC API  
+**Next Milestone**: Phase 7 - Performance & Compliance Testing  
+
+**Total Tests**: 35 (connection, handles, statements, metadata, advanced, datatypes, capabilities)  
+**Test Coverage**: Core ODBC functionality comprehensively tested  
+**Driver Info**: Automatically collected and displayed before test execution
 
 ## Known Limitations & Future Ideas
 
