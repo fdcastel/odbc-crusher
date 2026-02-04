@@ -321,6 +321,14 @@ Create an incremental, extensible tool that tests ODBC driver implementations ag
 
 **Impact**: This is a FUNDAMENTAL improvement - we now ask the driver what it supports instead of guessing. No more false bug reports from incorrect assumptions!
 
+**Additional Improvements** (Feb 4, 2026):
+- [x] Show ALL data types in reports (removed "... and X more types" truncation)
+- [x] List MISSING ODBC functions by name in reports
+- [x] SQLDialect verified to use `SQL_DBMS_NAME` (already correct)
+- [x] Data type tests now use `SQLGetTypeInfo` results (`test_discovered_types`)
+- [x] Driver info available to all tests via `set_driver_info()` method
+- [x] Test count: 36 (was 35, +1 for discovered types test)
+
 ### Phase 7: Performance & Compliance (NEXT)
 **Goal**: Test performance characteristics and SQL compliance
 
@@ -451,9 +459,10 @@ uv run odbc-crusher "DSN=YourDSN" --verbose
 **Last Milestone**: Implementation of SQLGetInfo, SQLGetTypeInfo, and SQLGetFunctions via ODBC API  
 **Next Milestone**: Phase 7 - Performance & Compliance Testing  
 
-**Total Tests**: 35 (connection, handles, statements, metadata, advanced, datatypes, capabilities)  
+**Total Tests**: 36 (connection, handles, statements, metadata, advanced, datatypes + discovered types, capabilities)  
 **Test Coverage**: Core ODBC functionality comprehensively tested  
 **Driver Info**: Automatically collected and displayed before test execution
+**Test Enhancements**: Tests use driver info for conditional logic and type discovery
 
 ## Known Limitations & Future Ideas
 
