@@ -509,16 +509,25 @@ def format_driver_info_report(driver_data: Dict[str, Any]) -> str:
     datatypes = driver_data.get('datatypes', [])
     if datatypes and 'error' not in datatypes[0]:
         lines.append(f"\n=== SUPPORTED DATA TYPES ({len(datatypes)} types) ===")
+        lines.append("")
+        lines.append("  Type Name                    SQL Type   Max Size      Nullable  Auto-Inc")
+        lines.append("  " + "-" * 76)
         
-        # Show ALL data types, not just first 20
+        # Show ALL data types
         for dt in datatypes:
             type_name = dt.get('TYPE_NAME', 'UNKNOWN')
             data_type = dt.get('DATA_TYPE', '?')
             size = dt.get('COLUMN_SIZE', '?')
-            nullable = 'NULL' if dt.get('NULLABLE') == 1 else 'NOT NULL'
-            auto = 'AUTO' if dt.get('AUTO_UNIQUE_VALUE') else ''
+            nullable = dt.get('NULLABLE')
+            auto_inc = dt.get('AUTO_UNIQUE_VALUE')
             
-            lines.append(f"  {type_name:20s} (SQL type {data_type:3}) - Size: {str(size):8s} {nullable:8s} {auto}")
+            # Format values for display
+            nullable_str = 'Yes' if nullable == 1 else 'No' if nullable == 0 else '?'
+            auto_inc_str = 'Yes' if auto_inc else ''
+            size_str = str(size) if size != '?' else 'N/A'
+            
+            # Format the line with proper spacing
+            lines.append(f"  {type_name:28s} {str(data_type):9s}  {size_str:12s}  {nullable_str:8s}  {auto_inc_str}")
     
     lines.append("\n" + "=" * 80)
     
