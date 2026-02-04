@@ -7,6 +7,7 @@ from decimal import Decimal
 from datetime import date, time as dt_time, datetime
 
 from .base import ODBCTest, TestResult, TestStatus, Severity
+from ..sql_dialect import SQLDialect
 
 
 class DataTypeTests(ODBCTest):
