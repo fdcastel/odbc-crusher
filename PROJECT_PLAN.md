@@ -330,7 +330,17 @@ Create an incremental, extensible tool that tests ODBC driver implementations ag
 - [x] Unified table formatting using Rich Tables throughout
 - [x] Data types table: 60-char Type Name column, Rich Table format
 - [x] Test results table: 45-char Function column (no wrapping)
+- [x] ODBC 3.8+ advanced features detection and reporting section
 - [x] Test count: 36 (was 35, +1 for discovered types test)
+
+**ODBC 3.8+ Features Detected**:
+- Driver version compliance check (03.80+)
+- Asynchronous connection operations (`SQL_ASYNC_DBC_FUNCTIONS`)
+- Driver-aware connection pooling (`SQL_DRIVER_AWARE_POOLING_SUPPORTED`)
+- Async notification method (`SQL_ASYNC_NOTIFICATION`)
+- Streamed output parameters (via `SQL_GETDATA_EXTENSIONS`)
+- SQLCancelHandle function support
+- Reference: [Microsoft ODBC 3.8 Upgrade Guide](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-driver/upgrading-a-3-5-driver-to-a-3-8-driver)
 
 ### Phase 7: Performance & Compliance (NEXT)
 **Goal**: Test performance characteristics and SQL compliance
