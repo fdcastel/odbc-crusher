@@ -73,7 +73,7 @@ class Reporter:
         
         table.add_column("Status", style="bold", width=8)
         table.add_column("Test Name", style="cyan", width=30)
-        table.add_column("Function", style="magenta", width=20)
+        table.add_column("Function", style="magenta", width=45)  # Increased from 20 to 45 to avoid wrapping
         table.add_column("Severity", width=10)
         table.add_column("Duration (ms)", justify="right", width=12)
         

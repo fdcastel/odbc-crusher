@@ -7,6 +7,9 @@ import ctypes
 import sys
 import struct
 
+from rich.table import Table
+from rich.console import Console
+
 
 class DriverInfo:
     """Collects comprehensive driver information using SQLGetInfo, SQLGetFunctions, and SQLGetTypeInfo."""
@@ -510,25 +513,48 @@ def format_driver_info_report(driver_data: Dict[str, Any]) -> str:
     if datatypes and 'error' not in datatypes[0]:
         lines.append(f"\n=== SUPPORTED DATA TYPES ({len(datatypes)} types) ===")
         lines.append("")
-        lines.append("  Type Name                    SQL Type   Max Size      Nullable  Auto-Inc")
-        lines.append("  " + "-" * 76)
         
-        # Show ALL data types
-        for dt in datatypes:
-            type_name = dt.get('TYPE_NAME', 'UNKNOWN')
-            data_type = dt.get('DATA_TYPE', '?')
-            size = dt.get('COLUMN_SIZE', '?')
-            nullable = dt.get('NULLABLE')
-            auto_inc = dt.get('AUTO_UNIQUE_VALUE')
-            
-            # Format values for display
-            nullable_str = 'Yes' if nullable == 1 else 'No' if nullable == 0 else '?'
-            auto_inc_str = 'Yes' if auto_inc else ''
-            size_str = str(size) if size != '?' else 'N/A'
-            
-            # Format the line with proper spacing
-            lines.append(f"  {type_name:28s} {str(data_type):9s}  {size_str:12s}  {nullable_str:8s}  {auto_inc_str}")
+        # Return marker for Rich table insertion
+        lines.append("__DATATYPES_TABLE__")
     
     lines.append("\n" + "=" * 80)
     
     return "\n".join(lines)
+
+
+def format_datatypes_table(driver_data: Dict[str, Any]) -> Optional[Table]:
+    """Format data types as a Rich table."""
+    
+    datatypes = driver_data.get('datatypes', [])
+    if not datatypes or 'error' in datatypes[0]:
+        return None
+    
+    table = Table(show_header=True, header_style="bold cyan", border_style="blue")
+    
+    table.add_column("Type Name", style="cyan", width=60)  # 60 chars as requested
+    table.add_column("SQL Type", justify="right", width=10)
+    table.add_column("Max Size", justify="right", width=12)
+    table.add_column("Nullable", width=10)
+    table.add_column("Auto-Inc", width=10)
+    
+    for dt in datatypes:
+        type_name = dt.get('TYPE_NAME', 'UNKNOWN')
+        data_type = str(dt.get('DATA_TYPE', '?'))
+        size = dt.get('COLUMN_SIZE', '?')
+        nullable = dt.get('NULLABLE')
+        auto_inc = dt.get('AUTO_UNIQUE_VALUE')
+        
+        # Format values
+        nullable_str = 'Yes' if nullable == 1 else 'No' if nullable == 0 else '?'
+        auto_inc_str = 'Yes' if auto_inc else ''
+        size_str = str(size) if size != '?' else 'N/A'
+        
+        table.add_row(
+            type_name,
+            data_type,
+            size_str,
+            nullable_str,
+            auto_inc_str
+        )
+    
+    return table

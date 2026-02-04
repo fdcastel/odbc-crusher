@@ -11,7 +11,7 @@ from rich.table import Table
 from .connection import check_connection
 from .test_runner import TestRunner
 from .reporter import Reporter
-from .driver_info import DriverInfo, format_driver_info_report
+from .driver_info import DriverInfo, format_driver_info_report, format_datatypes_table
 
 console = Console()
 
@@ -86,7 +86,21 @@ def main(connection_string: str, output: str, verbose: bool) -> None:
     if output != "json":
         # Display driver information report
         report = format_driver_info_report(driver_data)
-        console.print(report)
+        
+        # Split report at the datatypes table marker
+        if "__DATATYPES_TABLE__" in report:
+            parts = report.split("__DATATYPES_TABLE__")
+            console.print(parts[0])
+            
+            # Display datatypes table using Rich
+            datatypes_table = format_datatypes_table(driver_data)
+            if datatypes_table:
+                console.print(datatypes_table)
+            
+            console.print(parts[1])
+        else:
+            console.print(report)
+        
         console.print()
     
     # Phase 
