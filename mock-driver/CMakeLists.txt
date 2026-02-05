@@ -101,6 +101,7 @@ add_executable(mock-odbc-tests
     tests/test_config.cpp
     tests/test_gettypeinfo.cpp
     tests/test_error_injection.cpp
+    tests/test_performance.cpp
 )
 
 target_link_libraries(mock-odbc-tests PRIVATE
