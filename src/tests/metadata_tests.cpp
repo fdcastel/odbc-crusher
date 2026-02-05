@@ -11,8 +11,10 @@ std::vector<TestResult> MetadataTests::run() {
     results.push_back(test_tables_catalog());
     results.push_back(test_columns_catalog());
     results.push_back(test_primary_keys());
+    results.push_back(test_foreign_keys());
     results.push_back(test_statistics());
     results.push_back(test_special_columns());
+    results.push_back(test_table_privileges());
     
     return results;
 }
@@ -363,6 +365,111 @@ TestResult MetadataTests::test_special_columns() {
         result.status = TestStatus::ERR;
         result.actual = e.what();
         result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult MetadataTests::test_foreign_keys() {
+    TestResult result = make_result(
+        "test_foreign_keys",
+        "SQLForeignKeys",
+        TestStatus::PASS,
+        "Retrieve foreign key relationships",
+        "",
+        Severity::INFO
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Try to get foreign keys (pass NULLs to get all foreign keys)
+        SQLRETURN ret = SQLForeignKeys(
+            stmt.get_handle(),
+            nullptr, 0,     // PK Catalog
+            nullptr, 0,     // PK Schema
+            nullptr, 0,     // PK Table
+            nullptr, 0,     // FK Catalog
+            nullptr, 0,     // FK Schema
+            nullptr, 0      // FK Table
+        );
+        
+        if (SQL_SUCCEEDED(ret)) {
+            int fk_count = 0;
+            while (stmt.fetch() && fk_count < 100) {
+                fk_count++;
+            }
+            
+            std::ostringstream oss;
+            oss << "Found " << fk_count << " foreign key(s)";
+            result.actual = oss.str();
+            result.status = TestStatus::PASS;
+        } else {
+            result.actual = "SQLForeignKeys not supported";
+            result.status = TestStatus::SKIP;
+            result.suggestion = "Some drivers don't implement foreign key metadata";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError&) {
+        result.status = TestStatus::SKIP;
+        result.actual = "Foreign keys not supported by driver";
+        result.suggestion = "This is normal for simple drivers";
+    }
+    
+    return result;
+}
+
+TestResult MetadataTests::test_table_privileges() {
+    TestResult result = make_result(
+        "test_table_privileges",
+        "SQLTablePrivileges",
+        TestStatus::PASS,
+        "Query table access privileges",
+        "",
+        Severity::INFO
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Try to get table privileges
+        SQLRETURN ret = SQLTablePrivileges(
+            stmt.get_handle(),
+            nullptr, 0,     // Catalog
+            nullptr, 0,     // Schema
+            nullptr, 0      // Table
+        );
+        
+        if (SQL_SUCCEEDED(ret)) {
+            int priv_count = 0;
+            while (stmt.fetch() && priv_count < 100) {
+                priv_count++;
+            }
+            
+            std::ostringstream oss;
+            oss << "Found " << priv_count << " table privilege(s)";
+            result.actual = oss.str();
+            result.status = TestStatus::PASS;
+        } else {
+            result.actual = "SQLTablePrivileges not supported";
+            result.status = TestStatus::SKIP;
+            result.suggestion = "Many drivers don't implement privilege metadata";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError&) {
+        result.status = TestStatus::SKIP;
+        result.actual = "Table privileges not supported by driver";
+        result.suggestion = "This is normal for basic ODBC drivers";
     }
     
     return result;

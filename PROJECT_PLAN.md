@@ -459,11 +459,11 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - [x] `SQLTables` - Table listing
 - [x] `SQLColumns` - Column metadata
 - [x] `SQLPrimaryKeys` - Primary key information
-- [ ] `SQLForeignKeys` - Foreign key relationships - Deferred
+- [x] `SQLForeignKeys` - Foreign key relationships ✅
 - [x] `SQLStatistics` - Index information
-- [ ] `SQLProcedures` / `SQLProcedureColumns` - Deferred
+- [ ] `SQLProcedures` / `SQLProcedureColumns` - Deferred (low priority)
 - [x] `SQLSpecialColumns` - Row identifiers
-- [ ] `SQLTablePrivileges` / `SQLColumnPrivileges` - Deferred
+- [x] `SQLTablePrivileges` / `SQLColumnPrivileges` ✅ (SQLTablePrivileges implemented)
 
 **ODBC Functions Covered**:
 - `SQLTables` ✅

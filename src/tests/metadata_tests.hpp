@@ -17,8 +17,10 @@ private:
     TestResult test_tables_catalog();
     TestResult test_columns_catalog();
     TestResult test_primary_keys();
+    TestResult test_foreign_keys();
     TestResult test_statistics();
     TestResult test_special_columns();
+    TestResult test_table_privileges();
 };
 
 } // namespace odbc_crusher::tests
