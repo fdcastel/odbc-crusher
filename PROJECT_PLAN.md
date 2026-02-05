@@ -695,12 +695,14 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - MySQL: 5/6 advanced tests pass (1 async skipped)
 - Total application tests: 34 tests (30 passed, 4 skipped)
 
-### Phase 10: Polish & Documentation ⬜
+### Final Phase: Polish & Documentation (DO NOT IMPLEMENT YET) ⬜
 **Goal**: Production-ready tool
 
 - [ ] Comprehensive --help
 - [ ] Complete documentation
 - [ ] Example output files
+
+This phase is intentionally unnumbered and will be left for the end. As development continues, new phases are being added to the plan.
 
 ---
 
