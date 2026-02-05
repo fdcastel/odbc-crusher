@@ -11,6 +11,7 @@ add_executable(odbc_crusher_tests
     test_statement_tests.cpp
     test_metadata_tests.cpp
     test_datatype_tests.cpp
+    test_transaction_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE

@@ -10,6 +10,7 @@
 #include "tests/statement_tests.hpp"
 #include "tests/metadata_tests.hpp"
 #include "tests/datatype_tests.hpp"
+#include "tests/transaction_tests.hpp"
 #include "discovery/driver_info.hpp"
 #include "reporting/console_reporter.hpp"
 #include "reporting/json_reporter.hpp"
@@ -140,6 +141,22 @@ int main(int argc, char** argv) {
             tests::DataTypeTests type_tests(conn);
             auto results = type_tests.run();
             reporter->report_category(type_tests.category_name(), results);
+            
+            for (const auto& r : results) {
+                total_tests++;
+                switch (r.status) {
+                    case tests::TestStatus::PASS: total_passed++; break;
+                    case tests::TestStatus::FAIL: total_failed++; break;
+                    case tests::TestStatus::SKIP: total_skipped++; break;
+                    case tests::TestStatus::ERR: total_errors++; break;
+                }
+            }
+        }
+        
+        {
+            tests::TransactionTests txn_tests(conn);
+            auto results = txn_tests.run();
+            reporter->report_category(txn_tests.category_name(), results);
             
             for (const auto& r : results) {
                 total_tests++;
