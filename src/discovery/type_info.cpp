@@ -3,6 +3,7 @@
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <iomanip>
+#include <cstring>
 
 namespace odbc_crusher::discovery {
 
