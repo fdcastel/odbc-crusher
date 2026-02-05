@@ -3,6 +3,7 @@ add_library(odbc_crusher_tests_lib
     test_base.cpp
     connection_tests.cpp
     statement_tests.cpp
+    metadata_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests_lib

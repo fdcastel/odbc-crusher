@@ -9,6 +9,7 @@ add_executable(odbc_crusher_tests
     test_function_info.cpp
     test_connection_tests.cpp
     test_statement_tests.cpp
+    test_metadata_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE

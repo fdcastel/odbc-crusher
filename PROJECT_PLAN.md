@@ -2,7 +2,7 @@
 
 **Version**: 2.0.0  
 **Last Updated**: February 5, 2026  
-**Status**: Phase 4 - Complete, Phase 5 - In Progress
+**Status**: Phase 5 - Complete, Phase 6 - In Progress
 
 ---
 
@@ -449,21 +449,40 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - MySQL statement tests: 7 tests run
 - All tests demonstrate database portability
 
-### Phase 5: Metadata Tests ⬜
+### Phase 5: Metadata Tests ✅ (Completed - February 5, 2026)
 **Goal**: Test catalog functions (from Python Phase 4)
 
-- [ ] `SQLTables` - Table listing
-- [ ] `SQLColumns` - Column metadata
-- [ ] `SQLPrimaryKeys` - Primary key information
-- [ ] `SQLForeignKeys` - Foreign key relationships
-- [ ] `SQLStatistics` - Index information
-- [ ] `SQLProcedures` / `SQLProcedureColumns`
-- [ ] `SQLSpecialColumns` - Row identifiers
-- [ ] `SQLTablePrivileges` / `SQLColumnPrivileges`
+- [x] `SQLTables` - Table listing
+- [x] `SQLColumns` - Column metadata
+- [x] `SQLPrimaryKeys` - Primary key information
+- [ ] `SQLForeignKeys` - Foreign key relationships - Deferred
+- [x] `SQLStatistics` - Index information
+- [ ] `SQLProcedures` / `SQLProcedureColumns` - Deferred
+- [x] `SQLSpecialColumns` - Row identifiers
+- [ ] `SQLTablePrivileges` / `SQLColumnPrivileges` - Deferred
 
 **ODBC Functions Covered**:
-- All catalog functions
-- Proper handling of NULL catalog/schema/table parameters
+- `SQLTables` ✅
+- `SQLColumns` ✅
+- `SQLPrimaryKeys` ✅
+- `SQLStatistics` ✅
+- `SQLSpecialColumns` ✅
+- Proper handling of NULL catalog/schema/table parameters ✅
+
+**Deliverables**: ✅ CORE COMPLETED
+- ✅ MetadataTests class with 5 catalog function tests
+- ✅ Cross-database system table testing (Firebird, MySQL, SQL Server patterns)
+- ✅ Graceful handling of unsupported catalog functions
+- ✅ Result counting and validation
+
+**Files Created**:
+- `src/tests/metadata_tests.hpp/cpp` - Catalog function tests (5 tests)
+- `tests/test_metadata_tests.cpp` - Unit tests for metadata tests (2 integration tests)
+
+**Test Results**: 25/25 tests passing ✅ (100%)
+- Firebird metadata tests: 5 tests run (tables, columns, primary keys, statistics, special columns)
+- MySQL metadata tests: 5 tests run
+- Catalog functions verified across both databases
 
 ### Phase 6: Data Type Tests ⬜
 **Goal**: Comprehensive data type handling (from Python Phase 6)
