@@ -699,14 +699,8 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 **Goal**: Production-ready tool
 
 - [ ] Comprehensive --help
-- [ ] Configuration file support
-- [ ] Test filtering/selection
-- [ ] Parallel test execution
-- [ ] Progress indicator
-- [ ] Timeout handling
 - [ ] Complete documentation
 - [ ] Example output files
-- [ ] Integration with CI/CD systems
 
 ---
 
