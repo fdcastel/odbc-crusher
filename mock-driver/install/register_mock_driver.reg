@@ -1,0 +1,16 @@
+Windows Registry Editor Version 5.00
+
+; Register Mock ODBC Driver
+[HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\Mock ODBC Driver]
+"Driver"="C:\\temp\\new\\odbc-crusher\\mock-driver\\build\\Release\\mockodbc.dll"
+"Setup"="C:\\temp\\new\\odbc-crusher\\mock-driver\\build\\Release\\mockodbc.dll"
+"APILevel"="2"
+"ConnectFunctions"="YYY"
+"DriverODBCVer"="03.80"
+"FileUsage"="0"
+"SQLLevel"="1"
+"UsageCount"=dword:00000001
+
+; Add to installed drivers list
+[HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers]
+"Mock ODBC Driver"="Installed"

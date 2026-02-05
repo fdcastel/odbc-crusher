@@ -345,7 +345,14 @@ SQLRETURN SQL_API SQLGetData(
         return SQL_ERROR;
     }
     
-    if (icol < 1 || icol > static_cast<SQLUSMALLINT>(stmt->result_data_[0].size())) {
+    if (stmt->result_data_.empty() || 
+        static_cast<size_t>(stmt->current_row_) >= stmt->result_data_.size()) {
+        stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,
+                            "Invalid row position");
+        return SQL_ERROR;
+    }
+    
+    if (icol < 1 || icol > static_cast<SQLUSMALLINT>(stmt->result_data_[stmt->current_row_].size())) {
         stmt->add_diagnostic(sqlstate::INVALID_PARAMETER_NUMBER, 0,
                             "Invalid column number");
         return SQL_ERROR;

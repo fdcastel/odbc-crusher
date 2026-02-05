@@ -113,3 +113,7 @@ target_include_directories(mock-odbc-tests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(mock-odbc-tests)
+
+# Simple manual test executable
+add_executable(test_simple test_simple.cpp)
+target_link_libraries(test_simple PRIVATE ${ODBC_LIBRARIES})
