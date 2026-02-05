@@ -631,41 +631,15 @@ SQLRETURN SQL_API SQLGetStmtAttr(
     SQLINTEGER cbValueMax,
     SQLINTEGER* pcbValue) {
     
-    FILE* f = fopen("C:\\temp\\debug_getstmtattr.txt", "a");
-    if (f) {
-        fprintf(f, "SQLGetStmtAttr called: hstmt=%p, attr=%d, rgbValue=%p\n", hstmt, fAttribute, rgbValue);
-        fflush(f);
-        fclose(f);
-    }
-    
     (void)cbValueMax;
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) {
-        FILE* f2 = fopen("C:\\temp\\debug_getstmtattr.txt", "a");
-        if (f2) {
-            fprintf(f2, "  validate returned NULL\n");
-            fflush(f2);
-            fclose(f2);
-        }
         return SQL_INVALID_HANDLE;
-    }
-    
-    FILE* f3 = fopen("C:\\temp\\debug_getstmtattr.txt", "a");
-    if (f3) {
-        fprintf(f3, "  validate succeeded, stmt=%p, switching on attribute...\n", stmt);
-        fflush(f3);
-        fclose(f3);
     }
     
     switch (fAttribute) {
         case SQL_ATTR_CURSOR_TYPE: {
-            FILE* f4 = fopen("C:\\temp\\debug_getstmtattr.txt", "a");
-            if (f4) {
-                fprintf(f4, "  case SQL_ATTR_CURSOR_TYPE\n");
-                fflush(f4);
-                fclose(f4);
-            }
             if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->cursor_type_;
             if (pcbValue) *pcbValue = sizeof(SQLULEN);
             break;
@@ -702,20 +676,7 @@ SQLRETURN SQL_API SQLGetStmtAttr(
             break;
             
         default:
-            FILE* f5 = fopen("C:\\temp\\debug_getstmtattr.txt", "a");
-            if (f5) {
-                fprintf(f5, "  default case for unknown attribute\n");
-                fflush(f5);
-                fclose(f5);
-            }
             return SQL_SUCCESS;  // Ignore unknown attributes
-    }
-    
-    FILE* f6 = fopen("C:\\temp\\debug_getstmtattr.txt", "a");
-    if (f6) {
-        fprintf(f6, "  about to return SQL_SUCCESS\n");
-        fflush(f6);
-        fclose(f6);
     }
     
     return SQL_SUCCESS;

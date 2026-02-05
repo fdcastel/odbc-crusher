@@ -106,23 +106,7 @@ ConnectionHandle* validate_dbc_handle(SQLHDBC handle) {
 }
 
 StatementHandle* validate_stmt_handle(SQLHSTMT handle) {
-    FILE* f = fopen("C:\\temp\\debug_validate.txt", "a");
-    if (f) {
-        fprintf(f, "validate_stmt_handle called with handle=%p\n", handle);
-        fflush(f);
-        fclose(f);
-    }
-    
-    auto* result = validate_handle<StatementHandle>(handle);
-    
-    FILE* f2 = fopen("C:\\temp\\debug_validate.txt", "a");
-    if (f2) {
-        fprintf(f2, "  returned %p\n", result);
-        fflush(f2);
-        fclose(f2);
-    }
-    
-    return result;
+    return validate_handle<StatementHandle>(handle);
 }
 
 DescriptorHandle* validate_desc_handle(SQLHDESC handle) {
