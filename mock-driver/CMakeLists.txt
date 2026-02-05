@@ -99,12 +99,14 @@ add_executable(mock-odbc-tests
     tests/test_main.cpp
     tests/test_handles.cpp
     tests/test_config.cpp
+    tests/test_gettypeinfo.cpp
 )
 
 target_link_libraries(mock-odbc-tests PRIVATE
     mock-odbc-driver
     GTest::gtest
     GTest::gtest_main
+    ${ODBC_LIBRARIES}
 )
 
 target_include_directories(mock-odbc-tests PRIVATE
