@@ -8,6 +8,7 @@ add_executable(odbc_crusher_tests
     test_type_info.cpp
     test_function_info.cpp
     test_connection_tests.cpp
+    test_statement_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE

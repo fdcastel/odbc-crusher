@@ -2,7 +2,7 @@
 
 **Version**: 2.0.0  
 **Last Updated**: February 5, 2026  
-**Status**: Phase 3 - Complete
+**Status**: Phase 4 - Complete, Phase 5 - In Progress
 
 ---
 
@@ -410,28 +410,44 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - All tests complete within microseconds
 - Comprehensive diagnostic capture
 
-### Phase 4: Statement Tests ⬜
+### Phase 4: Statement Tests ✅ (Completed - February 5, 2026)
 **Goal**: Test statement execution and result handling
 
-- [ ] Handle allocation and reuse
-- [ ] Simple query execution (`SQLExecDirect`)
-- [ ] Prepared statements (`SQLPrepare` / `SQLExecute`)
-- [ ] Parameter binding (`SQLBindParameter`)
-- [ ] Result set fetching (`SQLFetch`, `SQLFetchScroll`)
-- [ ] Column binding (`SQLBindCol`, `SQLGetData`)
-- [ ] Multiple result sets
-- [ ] Statement attributes
+- [x] Handle allocation and reuse
+- [x] Simple query execution (`SQLExecDirect`)
+- [x] Prepared statements (`SQLPrepare` / `SQLExecute`)
+- [x] Parameter binding (`SQLBindParameter`)
+- [x] Result set fetching (`SQLFetch`, `SQLFetchScroll`)
+- [x] Column binding (`SQLBindCol`, `SQLGetData`)
+- [x] Multiple result sets (SQLMoreResults tested)
+- [x] Statement attributes
 
 **ODBC Functions Covered**:
-- `SQLPrepare` / `SQLExecute` / `SQLExecDirect`
-- `SQLBindParameter`
-- `SQLNumParams` / `SQLDescribeParam`
-- `SQLFetch` / `SQLFetchScroll`
-- `SQLBindCol` / `SQLGetData`
-- `SQLNumResultCols` / `SQLDescribeCol`
-- `SQLRowCount`
-- `SQLMoreResults`
-- `SQLCloseCursor`
+- `SQLPrepare` / `SQLExecute` / `SQLExecDirect` ✅
+- `SQLBindParameter` ✅
+- `SQLNumParams` / `SQLDescribeParam` - Deferred
+- `SQLFetch` / `SQLFetchScroll` ✅
+- `SQLBindCol` / `SQLGetData` ✅
+- `SQLNumResultCols` / `SQLDescribeCol` ✅
+- `SQLRowCount` - Deferred
+- `SQLMoreResults` ✅
+- `SQLCloseCursor` ✅
+
+**Deliverables**: ✅ CORE COMPLETED
+- ✅ StatementTests class with 7 different statement tests
+- ✅ Cross-database query pattern testing (Firebird, MySQL, Oracle syntax)
+- ✅ Parameter binding with integer parameters
+- ✅ Result fetching and column metadata extraction
+- ✅ Statement handle reuse patterns
+
+**Files Created**:
+- `src/tests/statement_tests.hpp/cpp` - Statement-specific tests (7 tests)
+- `tests/test_statement_tests.cpp` - Unit tests for statement tests (2 integration tests)
+
+**Test Results**: 23/23 tests passing ✅ (100%)
+- Firebird statement tests: 7 tests run (simple query, prepared, parameters, fetch, metadata, reuse, multiple results)
+- MySQL statement tests: 7 tests run
+- All tests demonstrate database portability
 
 ### Phase 5: Metadata Tests ⬜
 **Goal**: Test catalog functions (from Python Phase 4)
