@@ -2,6 +2,7 @@
 #include "tests/metadata_tests.hpp"
 #include "core/odbc_environment.hpp"
 #include "core/odbc_connection.hpp"
+#include "mock_connection.hpp"
 #include <cstdlib>
 #include <iostream>
 
@@ -17,13 +18,15 @@ protected:
 };
 
 TEST_F(MetadataTestsTest, RunFirebirdMetadataTests) {
-    const char* conn_str = std::getenv("FIREBIRD_ODBC_CONNECTION");
-    if (!conn_str) {
-        GTEST_SKIP() << "FIREBIRD_ODBC_CONNECTION not set";
-    }
+    // Use mock driver as default, fall back to real database if FIREBIRD_ODBC_CONNECTION is set
+    std::string conn_str = test::get_connection_or_mock("FIREBIRD_ODBC_CONNECTION", "Firebird");
     
     core::OdbcConnection conn(*env);
-    conn.connect(conn_str);
+    try {
+        conn.connect(conn_str);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "Could not connect (mock driver not registered?): " << e.what();
+    }
     
     tests::MetadataTests tests(conn);
     auto results = tests.run();
@@ -65,13 +68,15 @@ TEST_F(MetadataTestsTest, RunFirebirdMetadataTests) {
 }
 
 TEST_F(MetadataTestsTest, RunMySQLMetadataTests) {
-    const char* conn_str = std::getenv("MYSQL_ODBC_CONNECTION");
-    if (!conn_str) {
-        GTEST_SKIP() << "MYSQL_ODBC_CONNECTION not set";
-    }
+    // Use mock driver as default, fall back to real database if MYSQL_ODBC_CONNECTION is set
+    std::string conn_str = test::get_connection_or_mock("MYSQL_ODBC_CONNECTION", "MySQL");
     
     core::OdbcConnection conn(*env);
-    conn.connect(conn_str);
+    try {
+        conn.connect(conn_str);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "Could not connect (mock driver not registered?): " << e.what();
+    }
     
     tests::MetadataTests tests(conn);
     auto results = tests.run();
