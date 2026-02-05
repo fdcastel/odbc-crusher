@@ -213,6 +213,14 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     if (config.error_count < 1) config.error_count = 1;
     if (config.error_count > 10) config.error_count = 10;  // Max 10 errors
     
+    // Phase 10.3: State checking mode
+    std::string state_check_str = to_lower(get_string_value(pairs, "statechecking", "strict"));
+    if (state_check_str == "lenient") {
+        config.state_checking = DriverConfig::StateCheckingMode::Lenient;
+    } else {
+        config.state_checking = DriverConfig::StateCheckingMode::Strict;
+    }
+    
     return config;
 }
 

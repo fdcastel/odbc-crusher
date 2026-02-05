@@ -67,6 +67,13 @@ struct DriverConfig {
     // Phase 10.2: Error queue management
     int error_count = 1;  // Number of diagnostic records to generate per error
     
+    // Phase 10.3: State machine validation
+    enum class StateCheckingMode {
+        Strict,   // Strict state machine validation
+        Lenient   // Lenient - allow some state violations
+    };
+    StateCheckingMode state_checking = StateCheckingMode::Strict;
+    
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
     
