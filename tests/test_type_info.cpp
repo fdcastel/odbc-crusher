@@ -48,13 +48,10 @@ TEST_F(TypeInfoTest, CollectMySQLTypes) {
     discovery::TypeInfo info(conn);
     EXPECT_NO_THROW(info.collect());
     
-    // MySQL may or may not return types via SQLGetTypeInfo
-    // Don't enforce count requirement
-    std::cout << "\n" << info.format_summary() << "\n";
+    // MySQL MUST support SQLGetTypeInfo - it's a core ODBC function
+    EXPECT_GT(info.count(), 0) << "MySQL driver should return data types via SQLGetTypeInfo";
+    std::cout << "Found " << info.count() << " MySQL data types\n";
     
-    if (info.count() > 0) {
-        std::cout << "MySQL driver supports SQLGetTypeInfo ✓\n";
-    } else {
-        std::cout << "MySQL driver does not support SQLGetTypeInfo (expected for some drivers)\n";
-    }
+    // Print summary
+    std::cout << info.format_summary() << "\n";
 }
