@@ -25,7 +25,9 @@ TestResult ConnectionTests::test_connection_info() {
         TestStatus::PASS,
         "Can retrieve connection information",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetInfo"
     );
     
     try {
@@ -44,7 +46,8 @@ TestResult ConnectionTests::test_connection_info() {
             result.status = TestStatus::PASS;
         } else {
             result.actual = "Could not retrieve database name";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "SQLGetInfo succeeded but database name unavailable";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -66,7 +69,9 @@ TestResult ConnectionTests::test_connection_string_format() {
         TestStatus::PASS,
         "Connection is active and driver name is retrievable",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetInfo"
     );
     
     try {
@@ -104,7 +109,9 @@ TestResult ConnectionTests::test_multiple_statements() {
         TestStatus::PASS,
         "Can allocate multiple statement handles on one connection",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLAllocHandle"
     );
     
     try {
@@ -138,7 +145,9 @@ TestResult ConnectionTests::test_connection_attributes() {
         TestStatus::PASS,
         "Can get/set connection attributes",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetConnectAttr"
     );
     
     try {
@@ -156,7 +165,8 @@ TestResult ConnectionTests::test_connection_attributes() {
             result.status = TestStatus::PASS;
         } else {
             result.actual = "Could not retrieve autocommit status";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "SQLGetConnectAttr call did not succeed for SQL_ATTR_AUTOCOMMIT";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -178,7 +188,9 @@ TestResult ConnectionTests::test_connection_timeout() {
         TestStatus::PASS,
         "Can query connection timeout setting",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetConnectAttr"
     );
     
     try {
@@ -195,7 +207,8 @@ TestResult ConnectionTests::test_connection_timeout() {
             result.status = TestStatus::PASS;
         } else {
             result.actual = "Connection timeout attribute not supported";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "SQL_ATTR_CONNECTION_TIMEOUT is an optional connection attribute";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -217,7 +230,9 @@ TestResult ConnectionTests::test_connection_pooling() {
         TestStatus::PASS,
         "Can query/set connection pooling mode",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetEnvAttr"
     );
     
     try {
@@ -255,8 +270,8 @@ TestResult ConnectionTests::test_connection_pooling() {
         } else {
             // Many drivers don't support connection pooling query
             result.actual = "Connection pooling not supported by driver";
-            result.status = TestStatus::SKIP;
-            result.suggestion = "This is normal - connection pooling is optional ODBC feature";
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "Connection pooling is an optional ODBC feature";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();

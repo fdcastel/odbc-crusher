@@ -27,7 +27,9 @@ TestResult StatementTests::test_simple_query() {
         TestStatus::PASS,
         "Execute a simple SELECT query",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLExecDirect"
     );
     
     try {
@@ -85,7 +87,9 @@ TestResult StatementTests::test_prepared_statement() {
         TestStatus::PASS,
         "Prepare and execute a statement",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLPrepare, §SQLExecute"
     );
     
     try {
@@ -115,7 +119,8 @@ TestResult StatementTests::test_prepared_statement() {
         
         if (!success) {
             result.actual = "Could not prepare/execute any query pattern";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible query pattern found for this driver";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -137,7 +142,9 @@ TestResult StatementTests::test_parameter_binding() {
         TestStatus::PASS,
         "Bind parameters to a prepared statement",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLBindParameter"
     );
     
     try {
@@ -197,7 +204,8 @@ TestResult StatementTests::test_parameter_binding() {
         
         if (!success) {
             result.actual = "Parameter binding not tested (driver may not support)";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible parameterized query pattern found for this driver";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -219,7 +227,9 @@ TestResult StatementTests::test_result_fetching() {
         TestStatus::PASS,
         "Fetch results from a query",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLFetch"
     );
     
     try {
@@ -272,7 +282,9 @@ TestResult StatementTests::test_column_metadata() {
         TestStatus::PASS,
         "Get column metadata from result set",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLNumResultCols, §SQLDescribeCol"
     );
     
     try {
@@ -321,7 +333,8 @@ TestResult StatementTests::test_column_metadata() {
         
         if (!success) {
             result.actual = "Could not retrieve column metadata";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible query pattern produced result column metadata";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -343,7 +356,9 @@ TestResult StatementTests::test_statement_reuse() {
         TestStatus::PASS,
         "Reuse a statement handle multiple times",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLCloseCursor"
     );
     
     try {
@@ -380,7 +395,8 @@ TestResult StatementTests::test_statement_reuse() {
         
         if (!success) {
             result.actual = "Could not reuse statement";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "Statement reuse test could not complete with available query patterns";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -402,7 +418,9 @@ TestResult StatementTests::test_multiple_result_sets() {
         TestStatus::PASS,
         "Check if driver supports multiple result sets",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLMoreResults"
     );
     
     try {
@@ -441,7 +459,8 @@ TestResult StatementTests::test_multiple_result_sets() {
         
         if (!success) {
             result.actual = "SQLMoreResults not tested";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "Could not execute a query to test SQLMoreResults";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();

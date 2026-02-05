@@ -65,7 +65,9 @@ TestResult TransactionTests::test_autocommit_on() {
         TestStatus::PASS,
         "Autocommit mode should be ON by default",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetConnectAttr"
     );
     
     try {
@@ -90,7 +92,8 @@ TestResult TransactionTests::test_autocommit_on() {
             }
         } else {
             result.actual = "Could not query autocommit mode";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "SQLGetConnectAttr for SQL_ATTR_AUTOCOMMIT did not succeed";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -112,7 +115,9 @@ TestResult TransactionTests::test_autocommit_off() {
         TestStatus::PASS,
         "Can disable autocommit mode",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLSetConnectAttr"
     );
     
     try {
@@ -154,7 +159,8 @@ TestResult TransactionTests::test_autocommit_off() {
             }
         } else {
             result.actual = "SQLSetConnectAttr for autocommit not supported";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "Driver did not accept SQL_ATTR_AUTOCOMMIT change";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -186,7 +192,9 @@ TestResult TransactionTests::test_manual_commit() {
         TestStatus::PASS,
         "Can manually commit a transaction",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLEndTran"
     );
     
     try {
@@ -202,12 +210,14 @@ TestResult TransactionTests::test_manual_commit() {
         
         if (!SQL_SUCCEEDED(ret)) {
             result.actual = "Cannot disable autocommit for manual transaction test";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "Could not disable autocommit to test manual commit";
         } else {
             // Create test table
             if (!create_test_table()) {
                 result.actual = "Could not create test table";
-                result.status = TestStatus::SKIP;
+                result.status = TestStatus::SKIP_INCONCLUSIVE;
+                result.suggestion = "Test table creation failed; manual commit test could not run";
                 
                 // Restore autocommit
                 SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
@@ -277,7 +287,9 @@ TestResult TransactionTests::test_manual_rollback() {
         TestStatus::PASS,
         "Can manually rollback a transaction",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLEndTran"
     );
     
     try {
@@ -293,12 +305,14 @@ TestResult TransactionTests::test_manual_rollback() {
         
         if (!SQL_SUCCEEDED(ret)) {
             result.actual = "Cannot disable autocommit for rollback test";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "Could not disable autocommit to test manual rollback";
         } else {
             // Create test table
             if (!create_test_table()) {
                 result.actual = "Could not create test table";
-                result.status = TestStatus::SKIP;
+                result.status = TestStatus::SKIP_INCONCLUSIVE;
+                result.suggestion = "Test table creation failed; rollback test could not run";
                 
                 SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                                 (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
@@ -370,7 +384,9 @@ TestResult TransactionTests::test_transaction_isolation_levels() {
         TestStatus::PASS,
         "Can query and set transaction isolation levels",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLSetConnectAttr, §SQL_ATTR_TXN_ISOLATION"
     );
     
     try {
@@ -388,7 +404,8 @@ TestResult TransactionTests::test_transaction_isolation_levels() {
         
         if (!SQL_SUCCEEDED(ret)) {
             result.actual = "Transaction isolation level query not supported";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "Driver does not support querying SQL_ATTR_TXN_ISOLATION";
         } else {
             std::ostringstream oss;
             oss << "Current isolation: ";

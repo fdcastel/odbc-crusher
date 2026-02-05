@@ -26,7 +26,9 @@ TestResult MetadataTests::test_tables_catalog() {
         TestStatus::PASS,
         "List tables in the database",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLTables"
     );
     
     try {
@@ -56,7 +58,8 @@ TestResult MetadataTests::test_tables_catalog() {
             result.status = TestStatus::PASS;
         } else {
             result.actual = "SQLTables not supported or failed";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "SQLTables call did not succeed; check driver catalog support";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -78,7 +81,9 @@ TestResult MetadataTests::test_columns_catalog() {
         TestStatus::PASS,
         "List columns from system tables",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLColumns"
     );
     
     try {
@@ -130,7 +135,8 @@ TestResult MetadataTests::test_columns_catalog() {
             result.status = TestStatus::PASS;
         } else {
             result.actual = "SQLColumns callable but no system tables accessible";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "SQLColumns executed but no columns found in tested system tables";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -152,7 +158,9 @@ TestResult MetadataTests::test_primary_keys() {
         TestStatus::PASS,
         "Query primary key information",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_1,
+        "ODBC 3.8 §SQLPrimaryKeys"
     );
     
     try {
@@ -202,8 +210,9 @@ TestResult MetadataTests::test_primary_keys() {
         }
         
         if (!callable) {
-            result.actual = "SQLPrimaryKeys callable (no PKs found in test tables)";
-            result.status = TestStatus::SKIP;
+            result.actual = "SQLPrimaryKeys not supported by driver";
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "SQLPrimaryKeys is a Level 1 function and may not be implemented";
         } else if (result.actual.empty()) {
             result.actual = "SQLPrimaryKeys callable (no PKs in queried tables)";
             result.status = TestStatus::PASS;
@@ -228,7 +237,9 @@ TestResult MetadataTests::test_statistics() {
         TestStatus::PASS,
         "Query index/statistics information",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_1,
+        "ODBC 3.8 §SQLStatistics"
     );
     
     try {
@@ -279,8 +290,9 @@ TestResult MetadataTests::test_statistics() {
         }
         
         if (!callable) {
-            result.actual = "SQLStatistics not tested";
-            result.status = TestStatus::SKIP;
+            result.actual = "SQLStatistics not supported by driver";
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "SQLStatistics is a Level 1 function and may not be implemented";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -302,7 +314,9 @@ TestResult MetadataTests::test_special_columns() {
         TestStatus::PASS,
         "Query special columns (row identifiers)",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_1,
+        "ODBC 3.8 §SQLSpecialColumns"
     );
     
     try {
@@ -354,8 +368,9 @@ TestResult MetadataTests::test_special_columns() {
         }
         
         if (!callable) {
-            result.actual = "SQLSpecialColumns not tested";
-            result.status = TestStatus::SKIP;
+            result.actual = "SQLSpecialColumns not supported by driver";
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "SQLSpecialColumns is a Level 1 function and may not be implemented";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -377,7 +392,9 @@ TestResult MetadataTests::test_foreign_keys() {
         TestStatus::PASS,
         "Retrieve foreign key relationships",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_1,
+        "ODBC 3.8 §SQLForeignKeys"
     );
     
     try {
@@ -408,17 +425,17 @@ TestResult MetadataTests::test_foreign_keys() {
             result.status = TestStatus::PASS;
         } else {
             result.actual = "SQLForeignKeys not supported";
-            result.status = TestStatus::SKIP;
-            result.suggestion = "Some drivers don't implement foreign key metadata";
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "SQLForeignKeys is a Level 1 function; some drivers don't implement foreign key metadata";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
         result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
         
     } catch (const core::OdbcError&) {
-        result.status = TestStatus::SKIP;
+        result.status = TestStatus::SKIP_UNSUPPORTED;
         result.actual = "Foreign keys not supported by driver";
-        result.suggestion = "This is normal for simple drivers";
+        result.suggestion = "SQLForeignKeys is a Level 1 function; this is normal for simple drivers";
     }
     
     return result;
@@ -431,7 +448,9 @@ TestResult MetadataTests::test_table_privileges() {
         TestStatus::PASS,
         "Query table access privileges",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_2,
+        "ODBC 3.8 §SQLTablePrivileges"
     );
     
     try {
@@ -459,17 +478,17 @@ TestResult MetadataTests::test_table_privileges() {
             result.status = TestStatus::PASS;
         } else {
             result.actual = "SQLTablePrivileges not supported";
-            result.status = TestStatus::SKIP;
-            result.suggestion = "Many drivers don't implement privilege metadata";
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "SQLTablePrivileges is a Level 2 function; many drivers don't implement privilege metadata";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
         result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
         
     } catch (const core::OdbcError&) {
-        result.status = TestStatus::SKIP;
+        result.status = TestStatus::SKIP_UNSUPPORTED;
         result.actual = "Table privileges not supported by driver";
-        result.suggestion = "This is normal for basic ODBC drivers";
+        result.suggestion = "SQLTablePrivileges is a Level 2 function; this is normal for basic ODBC drivers";
     }
     
     return result;

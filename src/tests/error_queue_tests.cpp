@@ -23,10 +23,12 @@ TestResult ErrorQueueTests::test_single_error() {
     TestResult result = make_result(
         "Single Error Test",
         "SQLGetDiagRec",
-        TestStatus::SKIP,
+        TestStatus::SKIP_INCONCLUSIVE,
         "One diagnostic record retrieved",
         "Test requires error generation capability",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetDiagRec"
     );
     
     try {
@@ -79,10 +81,12 @@ TestResult ErrorQueueTests::test_multiple_errors() {
     TestResult result = make_result(
         "Multiple Errors Test",
         "SQLGetDiagRec",
-        TestStatus::SKIP,
+        TestStatus::SKIP_INCONCLUSIVE,
         "Multiple diagnostic records retrieved",
         "Requires driver with multi-error support",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetDiagRec"
     );
     
     // This test is primarily for drivers that support ErrorCount parameter
@@ -94,10 +98,12 @@ TestResult ErrorQueueTests::test_error_clearing() {
     TestResult result = make_result(
         "Error Clearing Test",
         "SQLGetDiagRec",
-        TestStatus::SKIP,
+        TestStatus::SKIP_INCONCLUSIVE,
         "Successful operation clears error queue",
         "Requires error generation capability",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetDiagRec"
     );
     
     result.actual = "Test skipped - requires error generation";
@@ -111,7 +117,9 @@ TestResult ErrorQueueTests::test_hierarchy() {
         TestStatus::PASS,
         "Diagnostics accessible from handles",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetDiagRec"
     );
     
     try {
@@ -159,10 +167,12 @@ TestResult ErrorQueueTests::test_field_extraction() {
     TestResult result = make_result(
         "Field Extraction Test",
         "SQLGetDiagField",
-        TestStatus::SKIP,
+        TestStatus::SKIP_INCONCLUSIVE,
         "Individual diagnostic fields retrieved",
         "Requires error generation capability",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetDiagField"
     );
     
     result.actual = "Test skipped - requires error generation";
@@ -176,7 +186,9 @@ TestResult ErrorQueueTests::test_iteration() {
         TestStatus::PASS,
         "Loop through records until SQL_NO_DATA",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetDiagRec"
     );
     
     try {

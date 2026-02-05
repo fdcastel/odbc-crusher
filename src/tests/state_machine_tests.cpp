@@ -25,7 +25,9 @@ TestResult StateMachineTests::test_valid_transitions() {
         TestStatus::PASS,
         "Normal operation sequence works",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLAllocHandle, §Statement Transitions"
     );
     
     try {
@@ -54,10 +56,12 @@ TestResult StateMachineTests::test_invalid_operation() {
     TestResult result = make_result(
         "Invalid Operation Test",
         "State Machine",
-        TestStatus::SKIP,
+        TestStatus::SKIP_INCONCLUSIVE,
         "Operations in wrong state fail properly",
         "Test skipped - requires advanced driver support",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §Statement Transitions"
     );
     
     result.actual = "Test skipped - mock driver may not support prepare/execute";
@@ -68,10 +72,12 @@ TestResult StateMachineTests::test_state_reset() {
     TestResult result = make_result(
         "State Reset Test",
         "SQLCloseCursor",
-        TestStatus::SKIP,
+        TestStatus::SKIP_INCONCLUSIVE,
         "Close cursor resets state",
         "Test skipped - requires query execution support",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLCloseCursor, §Statement Transitions"
     );
     
     result.actual = "Test skipped - requires query execution";
@@ -82,10 +88,12 @@ TestResult StateMachineTests::test_prepare_execute_cycle() {
     TestResult result = make_result(
         "Prepare-Execute Cycle Test",
         "SQLPrepare/SQLExecute",
-        TestStatus::SKIP,
+        TestStatus::SKIP_INCONCLUSIVE,
         "Repeated prepare/execute works",
         "Test skipped - requires prepare/execute support",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLPrepare, §SQLExecute, §Statement Transitions"
     );
     
     result.actual = "Test skipped - requires prepare/execute";
@@ -99,7 +107,9 @@ TestResult StateMachineTests::test_connection_state() {
         TestStatus::PASS,
         "Connection is active",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetConnectAttr, §Connection Transitions"
     );
     
     try {
@@ -142,7 +152,9 @@ TestResult StateMachineTests::test_multiple_statements() {
         TestStatus::PASS,
         "Independent state tracking per statement",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLAllocHandle, §Statement Transitions"
     );
     
     try {

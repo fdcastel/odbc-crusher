@@ -25,7 +25,9 @@ TestResult BufferValidationTests::test_null_termination() {
         TestStatus::PASS,
         "Null-terminated with correct length",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
     );
     
     try {
@@ -93,7 +95,9 @@ TestResult BufferValidationTests::test_buffer_overflow_protection() {
         TestStatus::PASS,
         "No overflow",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
     );
     
     try {
@@ -161,7 +165,9 @@ TestResult BufferValidationTests::test_truncation_indicators() {
         TestStatus::PASS,
         "SQL_SUCCESS_WITH_INFO with length > buffer",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetInfo, §String Truncation"
     );
     
     try {
@@ -222,7 +228,9 @@ TestResult BufferValidationTests::test_undersized_buffer() {
         TestStatus::PASS,
         "No crash with small buffers",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
     );
     
     try {
@@ -277,7 +285,9 @@ TestResult BufferValidationTests::test_sentinel_values() {
         TestStatus::PASS,
         "Unused buffer preserved",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
     );
     
     try {

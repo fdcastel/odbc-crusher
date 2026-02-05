@@ -30,6 +30,7 @@ public:
 private:
     std::ostream& out_;
     bool verbose_;
+    std::vector<tests::TestResult> all_results_;  // Collected for severity-ranked summary
     
     std::string status_icon(tests::TestStatus status) const;
     std::string format_duration(std::chrono::microseconds duration) const;

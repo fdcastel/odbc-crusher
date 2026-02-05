@@ -29,7 +29,9 @@ TestResult DataTypeTests::test_integer_types() {
         TestStatus::PASS,
         "Test SMALLINT, INTEGER, BIGINT types",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
     );
     
     try {
@@ -69,7 +71,8 @@ TestResult DataTypeTests::test_integer_types() {
         
         if (!success) {
             result.actual = "Could not test integer types";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible integer query pattern found for this driver";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -91,7 +94,9 @@ TestResult DataTypeTests::test_decimal_types() {
         TestStatus::PASS,
         "Test DECIMAL, NUMERIC types",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
     );
     
     try {
@@ -132,7 +137,8 @@ TestResult DataTypeTests::test_decimal_types() {
         
         if (!success) {
             result.actual = "Could not test decimal types";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible decimal query pattern found for this driver";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -154,7 +160,9 @@ TestResult DataTypeTests::test_float_types() {
         TestStatus::PASS,
         "Test FLOAT, DOUBLE, REAL types",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
     );
     
     try {
@@ -195,7 +203,8 @@ TestResult DataTypeTests::test_float_types() {
         
         if (!success) {
             result.actual = "Could not test float types";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible float query pattern found for this driver";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -217,7 +226,9 @@ TestResult DataTypeTests::test_string_types() {
         TestStatus::PASS,
         "Test CHAR, VARCHAR types",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
     );
     
     try {
@@ -265,7 +276,8 @@ TestResult DataTypeTests::test_string_types() {
         
         if (!success) {
             result.actual = "Could not test string types";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible string query pattern found for this driver";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -287,7 +299,9 @@ TestResult DataTypeTests::test_date_time_types() {
         TestStatus::PASS,
         "Test DATE, TIME, TIMESTAMP types",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
     );
     
     try {
@@ -333,7 +347,8 @@ TestResult DataTypeTests::test_date_time_types() {
         
         if (!success) {
             result.actual = "Could not test date/time types";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible date/time query pattern found for this driver";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -355,7 +370,9 @@ TestResult DataTypeTests::test_null_values() {
         TestStatus::PASS,
         "Test NULL value retrieval and indicator",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §Retrieving Data"
     );
     
     try {
@@ -396,7 +413,8 @@ TestResult DataTypeTests::test_null_values() {
         
         if (!success) {
             result.actual = "Could not test NULL values";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.suggestion = "No compatible NULL query pattern found for this driver";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -418,7 +436,9 @@ TestResult DataTypeTests::test_unicode_types() {
         TestStatus::PASS,
         "Retrieve and validate Unicode string data",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §Unicode Data"
     );
     
     try {
@@ -472,7 +492,7 @@ TestResult DataTypeTests::test_unicode_types() {
         
         if (!success) {
             result.actual = "Unicode types not supported or query failed";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
             result.suggestion = "Driver may not support SQL_C_WCHAR or Unicode types";
         }
         
@@ -495,7 +515,9 @@ TestResult DataTypeTests::test_binary_types() {
         TestStatus::PASS,
         "Retrieve and validate binary data",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
     );
     
     try {
@@ -540,7 +562,7 @@ TestResult DataTypeTests::test_binary_types() {
         
         if (!success) {
             result.actual = "Binary types not supported or query failed";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
             result.suggestion = "Driver may not support SQL_C_BINARY or binary types";
         }
         
@@ -563,7 +585,9 @@ TestResult DataTypeTests::test_guid_type() {
         TestStatus::PASS,
         "Retrieve and validate GUID/UUID data",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetData, §SQL_C_GUID"
     );
     
     try {
@@ -617,7 +641,7 @@ TestResult DataTypeTests::test_guid_type() {
         
         if (!success) {
             result.actual = "GUID/UUID type not supported or query failed";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
             result.suggestion = "Driver may not support SQL_C_GUID or UUID generation functions";
         }
         

@@ -26,7 +26,9 @@ TestResult AdvancedTests::test_cursor_types() {
         TestStatus::PASS,
         "Query supported cursor types",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_2,
+        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_CURSOR_TYPE"
     );
     
     try {
@@ -69,7 +71,8 @@ TestResult AdvancedTests::test_cursor_types() {
             result.status = TestStatus::PASS;
         } else {
             result.actual = "Cursor type query not supported";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "Non-forward-only cursor types are a Level 2 feature";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -91,7 +94,9 @@ TestResult AdvancedTests::test_array_binding() {
         TestStatus::PASS,
         "Test array/bulk parameter binding capability",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_PARAMSET_SIZE"
     );
     
     try {
@@ -128,7 +133,8 @@ TestResult AdvancedTests::test_array_binding() {
             }
         } else {
             result.actual = "Array binding not supported";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "Driver does not support SQL_ATTR_PARAMSET_SIZE for bulk operations";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -150,7 +156,9 @@ TestResult AdvancedTests::test_async_capability() {
         TestStatus::PASS,
         "Test asynchronous execution capability",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_2,
+        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_ASYNC_ENABLE"
     );
     
     try {
@@ -184,7 +192,8 @@ TestResult AdvancedTests::test_async_capability() {
                 } else {
                     // Driver doesn't actually support it even though it accepted the setting
                     result.actual = "Async mode not persistently supported";
-                    result.status = TestStatus::SKIP;
+                    result.status = TestStatus::SKIP_UNSUPPORTED;
+                    result.suggestion = "Driver accepted SQL_ATTR_ASYNC_ENABLE but did not persist the setting";
                 }
                 
                 // Turn it back off
@@ -196,11 +205,13 @@ TestResult AdvancedTests::test_async_capability() {
                 );
             } else {
                 result.actual = "Could not query async status";
-                result.status = TestStatus::SKIP;
+                result.status = TestStatus::SKIP_INCONCLUSIVE;
+                result.suggestion = "SQLGetStmtAttr for SQL_ATTR_ASYNC_ENABLE failed after setting";
             }
         } else {
             result.actual = "Asynchronous execution not supported";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "SQL_ATTR_ASYNC_ENABLE is a Level 2 feature; driver does not support async execution";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -222,7 +233,9 @@ TestResult AdvancedTests::test_rowset_size() {
         TestStatus::PASS,
         "Test rowset size for block cursors",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_2,
+        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_ROW_ARRAY_SIZE"
     );
     
     try {
@@ -259,7 +272,8 @@ TestResult AdvancedTests::test_rowset_size() {
             }
         } else {
             result.actual = "Rowset size attribute not supported";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "SQL_ATTR_ROW_ARRAY_SIZE > 1 is a Level 2 feature for block cursors";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -281,7 +295,9 @@ TestResult AdvancedTests::test_positioned_operations() {
         TestStatus::PASS,
         "Test positioned update/delete capability",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::LEVEL_2,
+        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_CONCURRENCY"
     );
     
     try {
@@ -332,11 +348,13 @@ TestResult AdvancedTests::test_positioned_operations() {
                 result.status = TestStatus::PASS;
             } else {
                 result.actual = "Could not query concurrency";
-                result.status = TestStatus::SKIP;
+                result.status = TestStatus::SKIP_INCONCLUSIVE;
+                result.suggestion = "SQLGetStmtAttr for SQL_ATTR_CONCURRENCY failed after setting";
             }
         } else {
             result.actual = "Positioned operations not supported";
-            result.status = TestStatus::SKIP;
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.suggestion = "Non-read-only SQL_ATTR_CONCURRENCY is a Level 2 feature";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -358,7 +376,9 @@ TestResult AdvancedTests::test_statement_attributes() {
         TestStatus::PASS,
         "Query various statement attributes",
         "",
-        Severity::INFO
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLGetStmtAttr"
     );
     
     try {

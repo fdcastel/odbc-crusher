@@ -1,6 +1,7 @@
 #include "console_reporter.hpp"
 #include <iomanip>
 #include <sstream>
+#include <algorithm>
 
 namespace odbc_crusher::reporting {
 
@@ -26,30 +27,42 @@ void ConsoleReporter::report_category(const std::string& category_name,
         switch (result.status) {
             case tests::TestStatus::PASS: passed++; break;
             case tests::TestStatus::FAIL: failed++; break;
-            case tests::TestStatus::SKIP: skipped++; break;
+            case tests::TestStatus::SKIP:
+            case tests::TestStatus::SKIP_UNSUPPORTED:
+            case tests::TestStatus::SKIP_INCONCLUSIVE: skipped++; break;
             case tests::TestStatus::ERR: errors++; break;
         }
         
         std::string icon = status_icon(result.status);
         out_ << "  " << icon << " " << result.test_name;
         
+        // Show conformance level tag
+        out_ << " [" << tests::conformance_to_string(result.conformance) << "]";
+        
         if (verbose_ || result.status == tests::TestStatus::FAIL || 
             result.status == tests::TestStatus::ERR) {
             out_ << "\n";
-            out_ << "      Function: " << result.function << "\n";
-            out_ << "      Expected: " << result.expected << "\n";
-            out_ << "      Actual:   " << result.actual << "\n";
-            out_ << "      Duration: " << format_duration(result.duration) << "\n";
+            out_ << "      Function:    " << result.function << "\n";
+            if (!result.spec_reference.empty()) {
+                out_ << "      Spec:        " << result.spec_reference << "\n";
+            }
+            out_ << "      Conformance: " << tests::conformance_to_string(result.conformance) << "\n";
+            out_ << "      Expected:    " << result.expected << "\n";
+            out_ << "      Actual:      " << result.actual << "\n";
+            out_ << "      Duration:    " << format_duration(result.duration) << "\n";
             
             if (result.diagnostic && !result.diagnostic->empty()) {
-                out_ << "      Diagnostic: " << *result.diagnostic << "\n";
+                out_ << "      Diagnostic:  " << *result.diagnostic << "\n";
             }
             if (result.suggestion && !result.suggestion->empty()) {
-                out_ << "      Suggestion: " << *result.suggestion << "\n";
+                out_ << "      Suggestion:  " << *result.suggestion << "\n";
             }
         } else {
             out_ << " (" << format_duration(result.duration) << ")\n";
         }
+        
+        // Collect for severity-ranked summary
+        all_results_.push_back(result);
     }
     
     out_ << "\n";
@@ -88,6 +101,33 @@ void ConsoleReporter::report_summary(size_t total_tests, size_t passed, size_t f
     out_ << "  Total Time:   " << format_duration(total_duration) << "\n";
     out_ << "\n";
     
+    // Severity-ranked failure summary
+    std::vector<const tests::TestResult*> failures;
+    for (const auto& r : all_results_) {
+        if (r.status == tests::TestStatus::FAIL || r.status == tests::TestStatus::ERR) {
+            failures.push_back(&r);
+        }
+    }
+    
+    if (!failures.empty()) {
+        // Sort by severity: CRITICAL > ERROR > WARNING > INFO
+        std::sort(failures.begin(), failures.end(),
+            [](const tests::TestResult* a, const tests::TestResult* b) {
+                return static_cast<int>(a->severity) < static_cast<int>(b->severity);
+            });
+        
+        out_ << "  --- FAILURES BY SEVERITY ---\n\n";
+        for (const auto* r : failures) {
+            out_ << "  [" << tests::severity_to_string(r->severity) << "] "
+                 << r->test_name << " (" << r->function << ")\n";
+            out_ << "    " << r->actual << "\n";
+            if (r->suggestion && !r->suggestion->empty()) {
+                out_ << "    Fix: " << *r->suggestion << "\n";
+            }
+            out_ << "\n";
+        }
+    }
+    
     if (failed == 0 && errors == 0) {
         out_ << "  [PASS] ALL TESTS PASSED!\n";
     } else {
@@ -106,6 +146,8 @@ std::string ConsoleReporter::status_icon(tests::TestStatus status) const {
         case tests::TestStatus::PASS: return "[PASS]";
         case tests::TestStatus::FAIL: return "[FAIL]";
         case tests::TestStatus::SKIP: return "[SKIP]";
+        case tests::TestStatus::SKIP_UNSUPPORTED: return "[N/S ]";
+        case tests::TestStatus::SKIP_INCONCLUSIVE: return "[INC ]";
         case tests::TestStatus::ERR:  return "[ERR!]";
         default: return "[????]";
     }
@@ -211,7 +253,7 @@ void ConsoleReporter::report_function_info(const discovery::FunctionInfo::Functi
         for (const auto& func : funcs.supported) {
             out_ << func;
             count++;
-            if (count < funcs.supported.size()) {
+            if (count < static_cast<int>(funcs.supported.size())) {
                 out_ << ", ";
                 if (count % 5 == 0) out_ << "\n    ";
             }
@@ -226,7 +268,7 @@ void ConsoleReporter::report_function_info(const discovery::FunctionInfo::Functi
         for (const auto& func : funcs.unsupported) {
             out_ << func;
             count++;
-            if (count < funcs.unsupported.size()) {
+            if (count < static_cast<int>(funcs.unsupported.size())) {
                 out_ << ", ";
                 if (count % 5 == 0) out_ << "\n    ";
             }

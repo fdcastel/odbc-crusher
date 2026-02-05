@@ -28,15 +28,18 @@ void JsonReporter::report_category(const std::string& category_name,
             case tests::TestStatus::PASS: test["status"] = "PASS"; break;
             case tests::TestStatus::FAIL: test["status"] = "FAIL"; break;
             case tests::TestStatus::SKIP: test["status"] = "SKIP"; break;
+            case tests::TestStatus::SKIP_UNSUPPORTED: test["status"] = "SKIP_UNSUPPORTED"; break;
+            case tests::TestStatus::SKIP_INCONCLUSIVE: test["status"] = "SKIP_INCONCLUSIVE"; break;
             case tests::TestStatus::ERR:  test["status"] = "ERROR"; break;
         }
         
         // Severity
-        switch (result.severity) {
-            case tests::Severity::CRITICAL: test["severity"] = "CRITICAL"; break;
-            case tests::Severity::ERR:      test["severity"] = "ERROR"; break;
-            case tests::Severity::WARNING:  test["severity"] = "WARNING"; break;
-            case tests::Severity::INFO:     test["severity"] = "INFO"; break;
+        test["severity"] = tests::severity_to_string(result.severity);
+        
+        // Conformance
+        test["conformance_level"] = tests::conformance_to_string(result.conformance);
+        if (!result.spec_reference.empty()) {
+            test["spec_reference"] = result.spec_reference;
         }
         
         test["expected"] = result.expected;

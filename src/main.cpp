@@ -33,7 +33,9 @@ void tally_results(const std::vector<tests::TestResult>& results,
         switch (r.status) {
             case tests::TestStatus::PASS: total_passed++; break;
             case tests::TestStatus::FAIL: total_failed++; break;
-            case tests::TestStatus::SKIP: total_skipped++; break;
+            case tests::TestStatus::SKIP:
+            case tests::TestStatus::SKIP_UNSUPPORTED:
+            case tests::TestStatus::SKIP_INCONCLUSIVE: total_skipped++; break;
             case tests::TestStatus::ERR:  total_errors++; break;
         }
     }
