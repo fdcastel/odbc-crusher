@@ -12,6 +12,7 @@
 #include "tests/datatype_tests.hpp"
 #include "tests/transaction_tests.hpp"
 #include "tests/advanced_tests.hpp"
+#include "tests/buffer_validation_tests.hpp"
 #include "discovery/driver_info.hpp"
 #include "reporting/console_reporter.hpp"
 #include "reporting/json_reporter.hpp"
@@ -174,6 +175,22 @@ int main(int argc, char** argv) {
             tests::AdvancedTests adv_tests(conn);
             auto results = adv_tests.run();
             reporter->report_category(adv_tests.category_name(), results);
+            
+            for (const auto& r : results) {
+                total_tests++;
+                switch (r.status) {
+                    case tests::TestStatus::PASS: total_passed++; break;
+                    case tests::TestStatus::FAIL: total_failed++; break;
+                    case tests::TestStatus::SKIP: total_skipped++; break;
+                    case tests::TestStatus::ERR: total_errors++; break;
+                }
+            }
+        }
+        
+        {
+            tests::BufferValidationTests buffer_tests(conn);
+            auto results = buffer_tests.run();
+            reporter->report_category(buffer_tests.category_name(), results);
             
             for (const auto& r : results) {
                 total_tests++;

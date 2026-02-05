@@ -200,6 +200,14 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     // Failure probability
     config.failure_probability = get_int_value(pairs, "failureprobability", 50);
     
+    // Phase 10.1: Buffer validation mode
+    std::string buffer_val_str = to_lower(get_string_value(pairs, "buffervalidation", "strict"));
+    if (buffer_val_str == "lenient") {
+        config.buffer_validation = DriverConfig::BufferValidationMode::Lenient;
+    } else {
+        config.buffer_validation = DriverConfig::BufferValidationMode::Strict;
+    }
+    
     return config;
 }
 

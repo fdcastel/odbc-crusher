@@ -57,6 +57,13 @@ struct DriverConfig {
     std::string dbms_name = "MockDB";
     std::string dbms_version = "01.00.0000";
     
+    // Phase 10.1: Buffer validation mode
+    enum class BufferValidationMode {
+        Strict,   // Strictly validate buffers (null termination, no overflow)
+        Lenient   // Allow some buffer issues for testing app resilience
+    };
+    BufferValidationMode buffer_validation = BufferValidationMode::Strict;
+    
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
     
