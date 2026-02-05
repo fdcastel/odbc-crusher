@@ -695,6 +695,165 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - MySQL: 5/6 advanced tests pass (1 async skipped)
 - Total application tests: 34 tests (30 passed, 4 skipped)
 
+### Phase 10: Defensive Testing & Driver Robustness ⬜
+**Goal**: Implement defensive testing patterns inspired by Microsoft ODBCTest
+
+**Important Decision** ⭐:  
+**From this point forward, development of the application and the mock driver must remain fully consonant.**  
+Any changes to ODBC Crusher require corresponding updates to the Mock ODBC Driver. The mock driver exists solely to support this application and is not intended for external use. All future planning must be documented exclusively in PROJECT_PLAN.md.
+
+This phase focuses on three critical insights from Microsoft ODBCTest:
+1. Buffer overflow and null-termination checking
+2. Error queue management  
+3. Handle state tracking
+
+#### 10.1: Buffer Validation Framework
+**Application Changes**:
+- [ ] Create `BufferValidationTests` class
+- [ ] Test null-termination of string outputs (`SQLGetInfo`, `SQLGetDiagRec`, etc.)
+- [ ] Test buffer overflow protection (undersized buffers)
+- [ ] Test truncation behavior and indicators
+- [ ] Verify sentinel values in unused buffer space
+- [ ] Test proper handling of `SQL_NTS` vs explicit lengths
+
+**Mock Driver Updates**:
+- [ ] Add buffer validation modes to connection string (`BufferValidation=Strict|Lenient`)
+- [ ] Implement configurable null-termination behavior
+- [ ] Add truncation simulation for testing app resilience
+- [ ] Support sentinel value checking in unused buffers
+- [ ] Add buffer overflow detection capability
+
+**ODBC Functions Tested**:
+- String output functions: `SQLGetInfo`, `SQLGetDiagRec`, `SQLGetData`
+- Variable-length data handling: `SQLFetch`, `SQLGetData` with undersized buffers
+- Catalog functions with long names/descriptions
+
+**Test Cases**:
+1. **Null Termination Test** - Verify drivers add null terminators to strings
+2. **Buffer Overflow Test** - Ensure drivers respect buffer boundaries
+3. **Truncation Indicator Test** - Check `SQL_SUCCESS_WITH_INFO` and length indicators
+4. **Undersized Buffer Test** - Pass buffers smaller than needed, verify no crash
+5. **Sentinel Value Test** - Fill buffers with known pattern, verify untouched areas
+
+**Deliverables**:
+- Application: `BufferValidationTests` class with 5+ tests
+- Mock Driver: Buffer validation configuration support
+- Documentation: Buffer safety best practices for ODBC applications
+
+#### 10.2: Error Queue Management Tests
+**Application Changes**:
+- [ ] Create `ErrorQueueTests` class
+- [ ] Test accumulation of diagnostic records
+- [ ] Test clearing error queues (new operations)
+- [ ] Test multiple diagnostic records per handle
+- [ ] Verify error propagation across handle hierarchy
+- [ ] Test `SQLGetDiagRec` iteration (record numbers 1, 2, 3...)
+
+**Mock Driver Updates**:
+- [ ] Add multi-error simulation (`ErrorCount=3` in connection string)
+- [ ] Support multiple diagnostic records per error
+- [ ] Implement proper diagnostic record clearing behavior
+- [ ] Add configurable diagnostic detail levels
+- [ ] Support SQLSTATE/native error code injection
+
+**ODBC Functions Tested**:
+- `SQLGetDiagRec` - Iterate through multiple records
+- `SQLGetDiagField` - Individual field retrieval
+- Error clearing behavior after successful operations
+- Diagnostic propagation from statement to connection to environment
+
+**Test Cases**:
+1. **Single Error Test** - One error, one diagnostic record
+2. **Multiple Errors Test** - Queue multiple diagnostics, retrieve all
+3. **Error Clearing Test** - Successful operation clears queue
+4. **Hierarchy Test** - Errors propagate from statement to connection
+5. **Field Extraction Test** - Individual diagnostic field retrieval
+6. **Iteration Test** - Loop through records until `SQL_NO_DATA`
+
+**Deliverables**:
+- Application: `ErrorQueueTests` class with 6+ tests
+- Mock Driver: Multi-error simulation capability
+- Documentation: Error handling best practices
+
+#### 10.3: State Machine Validation
+**Application Changes**:
+- [ ] Create `StateMachineTests` class
+- [ ] Track handle state transitions
+- [ ] Test operations in invalid states (should fail)
+- [ ] Verify state changes after operations (connect, prepare, execute, fetch)
+- [ ] Test state reset operations (`SQLFreeStmt` options)
+- [ ] Validate proper error returns for state violations
+
+**Mock Driver Updates**:
+- [ ] Implement full ODBC state machine tracking
+- [ ] Add state validation for all operations
+- [ ] Return proper errors for invalid state transitions
+- [ ] Support state inspection via diagnostic fields
+- [ ] Add connection string option for strict/lenient state checking
+
+**ODBC States to Track**:
+- Environment: Allocated, Unallocated
+- Connection: Allocated, Connected, Disconnected
+- Statement: Allocated, Prepared, Executed, Cursor-Open, Fetched
+
+**ODBC Functions Tested**:
+- State-dependent operations: `SQLExecute` (requires prepared), `SQLFetch` (requires cursor)
+- State-changing operations: `SQLPrepare`, `SQLExecute`, `SQLCloseCursor`
+- State-resetting operations: `SQLFreeStmt(SQL_CLOSE)`, `SQLFreeStmt(SQL_UNBIND)`
+- Invalid transitions: Execute without prepare, fetch without execute
+
+**Test Cases**:
+1. **Valid Transitions Test** - Normal operation sequence works
+2. **Invalid Operation Test** - Operations in wrong state fail with proper error
+3. **State Reset Test** - `SQLCloseCursor`, `SQLFreeStmt` reset state correctly
+4. **Prepare-Execute Cycle** - Repeated prepare/execute transitions
+5. **Connection State Test** - Operations fail on disconnected connection
+6. **Multiple Statements Test** - Independent state tracking per statement
+
+**Deliverables**:
+- Application: `StateMachineTests` class with 6+ tests
+- Mock Driver: Full state machine implementation
+- Documentation: ODBC state machine reference
+
+#### Summary: Phase 10 Outcomes
+
+**Application Enhancements**:
+- 17+ new test cases focused on driver robustness
+- 3 new test classes: `BufferValidationTests`, `ErrorQueueTests`, `StateMachineTests`
+
+**Mock Driver Enhancements**:
+- Buffer validation modes for testing application resilience
+- Multi-error simulation for error queue testing
+- Full ODBC state machine implementation
+- Enhanced diagnostic capabilities
+
+**Test Coverage**:
+- Current: 34 tests (30 passed, 4 skipped)
+- Target: 51+ tests (47+ passed, 4 skipped)
+- Mock driver validation: Comprehensive state and buffer testing
+
+**Documentation**:
+- Buffer safety best practices
+- Error handling patterns
+- ODBC state machine reference
+
+**Files Created**:
+- `src/tests/buffer_validation_tests.hpp/cpp` - Buffer validation (5 tests)
+- `src/tests/error_queue_tests.hpp/cpp` - Error queue management (6 tests)
+- `src/tests/state_machine_tests.hpp/cpp` - State validation (6 tests)
+- `tests/test_buffer_validation.cpp` - Unit tests (2 integration tests)
+- `tests/test_error_queue.cpp` - Unit tests (2 integration tests)
+- `tests/test_state_machine.cpp` - Unit tests (2 integration tests)
+- `mock-driver/src/state_machine.hpp/cpp` - State tracking implementation
+- `mock-driver/src/buffer_validator.hpp/cpp` - Buffer validation utilities
+- `mock-driver/src/error_simulator.hpp/cpp` - Multi-error support
+
+**Success Metrics**:
+- Zero buffer overflows detected in any driver
+- Proper null termination in 100% of string outputs
+- Error queues properly managed (cleared after success)
+- State machine violations detected and reported
+
 ### Final Phase: Polish & Documentation (DO NOT IMPLEMENT YET) ⬜
 **Goal**: Production-ready tool
 
@@ -746,6 +905,57 @@ This phase is intentionally unnumbered and will be left for the end. As developm
 - {fmt} library for formatting
 - ANSI codes on Linux/macOS
 - Windows Console API or ANSI (Win10+)
+
+### Mock ODBC Driver Architecture
+**Purpose**: Test ODBC Crusher without database dependencies
+
+**Design Decisions**:
+- **Consonant Development** ⭐: Mock driver and application developed together
+  - All application features must be testable with mock driver
+  - Mock driver updates accompany application feature additions
+  - Not intended for external use - exists solely to support ODBC Crusher
+- **Configuration via Connection String**: Behavior controlled by parameters
+  - `Mode=Success|Failure|Random` - Operation success patterns
+  - `Catalog=Default|Empty|Large` - Mock schema presets  
+  - `ResultSetSize=N` - Rows returned in queries
+  - `FailOn=Function1,Function2` - Error injection
+  - `ErrorCode=SQLSTATE` - Custom error codes
+  - `BufferValidation=Strict|Lenient` - Buffer checking mode (Phase 10)
+  - `ErrorCount=N` - Multiple diagnostic records (Phase 10)
+  - `StateChecking=Strict|Lenient` - State machine validation (Phase 10)
+- **Full ODBC 3.x Compliance**: Implements all core ODBC functions
+- **Zero Dependencies**: No database server or network required
+- **Performance**: Microsecond-level operation latency
+- **Critical Bug Fix** ⭐: Solved dynamic_cast across DLL boundaries issue
+
+**Mock Catalog Schema**:
+```sql
+-- Default schema includes:
+USERS (USER_ID, USERNAME, EMAIL, CREATED_DATE, IS_ACTIVE, BALANCE)
+ORDERS (ORDER_ID, USER_ID, ORDER_DATE, TOTAL_AMOUNT, STATUS)
+PRODUCTS (PRODUCT_ID, NAME, DESCRIPTION, PRICE, STOCK)
+```
+
+**Development Principles**:
+1. **Test-First**: Application tests written before mock driver implementation
+2. **Behavior Parity**: Mock driver matches real driver behavior patterns
+3. **Error Simulation**: Comprehensive error injection for robustness testing
+4. **State Tracking**: Full ODBC state machine implementation
+5. **Documentation**: All behaviors documented and tested
+
+**Connection Example**:
+```cpp
+// Basic connection
+const char* conn_str = "Driver={Mock ODBC Driver};Mode=Success;";
+
+// Error injection testing  
+const char* fail_str = "Driver={Mock ODBC Driver};FailOn=SQLExecute;ErrorCode=42000;";
+
+// Buffer validation testing (Phase 10)
+const char* buffer_str = "Driver={Mock ODBC Driver};BufferValidation=Strict;";
+```
+
+**Status**: v1.0 Production Ready (61% ODBC Crusher test coverage, 100% regression tests passing)
 
 ---
 
@@ -1104,29 +1314,25 @@ These insights inform our roadmap for making ODBC Crusher a valuable tool for dr
 
 ## 🎉 Major Milestones
 
-### Mock ODBC Driver v1.0 - COMPLETE! ✅
+### Mock ODBC Driver v1.0 - Integrated with ODBC Crusher ✅
 **Completed**: February 5, 2026  
-**Status**: Production Ready
-
-The Mock ODBC Driver is a fully functional ODBC 3.x driver that enables testing without database installations.
+**Status**: Production Ready - Now Consonant Development Model
 
 **Achievement Summary**:
-- ✅ **9 development phases completed**
-- ✅ **61% ODBC Crusher integration** (19/31 tests passing - exceeds 50% target)
-- ✅ **100% regression tests passing** (driver functionality proven)
-- ✅ **100% error injection tests passing** (5/5 tests)
-- ✅ **100% performance tests passing** (4/4 benchmarks)
-- ✅ **CI/CD pipeline integrated** (automated builds and testing)
-
-**Critical Discovery** ⭐:
-Fixed major Windows ODBC driver bug: `dynamic_cast` across DLL boundaries causes access violations. Solution documented for the entire ODBC driver development community.
+- ✅ Full ODBC 3.x driver implementation
+- ✅ 61% ODBC Crusher test coverage (19/31 tests passing)
+- ✅ 100% regression tests passing
+- ✅ 100% error injection tests passing  
+- ✅ 100% performance tests passing
+- ✅ CI/CD pipeline integrated
+- ✅ Critical Windows ODBC bug fixed (dynamic_cast across DLL boundaries)
 
 **Key Capabilities**:
 - Configurable behavior via connection string parameters
-- Error injection for comprehensive testing
-- Fast execution (microsecond-level operations)
+- Error injection for comprehensive testing (FailOn, ErrorCode)
+- Fast execution (<1ms operations)
 - Zero database dependencies
-- Production-ready for CI/CD environments
+- Mock catalog with USERS, ORDERS, PRODUCTS tables
 
 **Performance Benchmarks**:
 - Connections: <1ms average
@@ -1134,25 +1340,28 @@ Fixed major Windows ODBC driver bug: `dynamic_cast` across DLL boundaries causes
 - Fetch operations: 0.22ms per row
 - Handle allocation: 0.13ms average
 
-**Deliverables**:
-- `mockodbc.dll` - Production driver
-- Registration scripts for Windows
-- Comprehensive test suite (15+ tests)
-- CI/CD integration
-- Full documentation with learnings
+**Important Decision** ⭐:  
+As of February 5, 2026, the Mock ODBC Driver and ODBC Crusher application follow a **consonant development model**. All future development must maintain feature parity between the application and the mock driver. The mock driver exists solely to support ODBC Crusher testing and is not intended for external use.
 
-See `MOCK_DRIVER_PLAN.md` for complete details.
+**Phase 10 Enhancements** (Planned):
+- Buffer validation modes (Strict/Lenient)
+- Multi-error simulation (ErrorCount parameter)
+- Full ODBC state machine tracking (StateChecking parameter)
+- Enhanced diagnostic capabilities
 
 ---
 
 ## 🚦 Current Status
 
 **Main Project Phase**: Phases 0-9 Complete ✅  
-**Mock Driver**: v1.0 Complete ✅  
+**Next Phase**: Phase 10 - Defensive Testing & Driver Robustness ⬜  
+**Mock Driver**: v1.0 Complete ✅ (Consonant Development Model)  
 **Version**: 2.0.0-dev  
-**Last Milestone**: Mock ODBC Driver v1.0 Released (February 5, 2026)  
-**Next Milestone**: Continue main ODBC Crusher development (Phase 10+)
+**Last Milestone**: Mock ODBC Driver v1.0 Integrated (February 5, 2026)  
+**Next Milestone**: Phase 10 - Buffer Validation, Error Queue Management, State Machine Testing
 
----
-
-**Important**: Keep this plan updated as the project evolves. Every significant change should be reflected here.
+**Development Philosophy**:
+- Application and Mock Driver developed in tandem
+- All application features testable with Mock Driver
+- Mock Driver is first-class test dependency, not external tool
+- Single source of truth: PROJECT_PLAN.md
