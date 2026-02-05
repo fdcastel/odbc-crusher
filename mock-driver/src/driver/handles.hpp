@@ -208,7 +208,23 @@ T* validate_handle(SQLHANDLE handle) {
     if (!handle) return nullptr;
     auto* h = static_cast<OdbcHandle*>(handle);
     if (!h->is_valid()) return nullptr;
-    return dynamic_cast<T*>(h);
+    
+    // Use manual type checking instead of dynamic_cast to avoid DLL boundary issues
+    HandleType expected_type;
+    if (std::is_same<T, EnvironmentHandle>::value) {
+        expected_type = HandleType::ENV;
+    } else if (std::is_same<T, ConnectionHandle>::value) {
+        expected_type = HandleType::DBC;
+    } else if (std::is_same<T, StatementHandle>::value) {
+        expected_type = HandleType::STMT;
+    } else if (std::is_same<T, DescriptorHandle>::value) {
+        expected_type = HandleType::DESC;
+    } else {
+        return nullptr;
+    }
+    
+    if (h->type() != expected_type) return nullptr;
+    return static_cast<T*>(h);
 }
 
 EnvironmentHandle* validate_env_handle(SQLHENV handle);
