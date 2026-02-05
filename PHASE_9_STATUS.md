@@ -125,10 +125,12 @@ return static_cast<T*>(h);
   - Not blocking for driver functionality
   - Integration layer issue, not driver code
 
-- [ ] **Update CI/CD**
+- [x] **Update CI/CD** ✅ (commit afc0fc7 + 6b6c152)
   - Add mock driver build to CI
   - Register driver in CI environment
   - Run tests with mock driver
+  - Upload mock driver as artifact
+  - Fixed Linux build issue
 
 - [ ] **Performance testing**
   - Measure mock driver overhead
