@@ -124,30 +124,30 @@ The report output is **poor for its target audience (driver developers)**. Speci
 
 ## 4. Roadmap
 
-### Phase 11: Fix Bugs & Report Quality ⬜
+### Phase 11: Fix Bugs & Report Quality ✅
 
 **Goal**: Fix all known bugs and transform the report output from "test log" to "driver compliance report."
 
 #### 11.1 Bug Fixes
 
-- [ ] **B1**: Fix `DriverInfo::get_properties()` key mismatch — collect additional `SQLGetInfo` calls for `SQL_ODBC_VER`, `SQL_DATABASE_NAME`, `SQL_SERVER_NAME`, `SQL_USER_NAME`, `SQL_CATALOG_TERM`, `SQL_SCHEMA_TERM`, `SQL_TABLE_TERM`, `SQL_PROCEDURE_TERM`, `SQL_IDENTIFIER_QUOTE_CHAR` and store them so `get_properties()` can find them
-- [ ] **B2**: Add discovery data to `JsonReporter` — add `driver_info`, `type_info`, and `function_info` sections to the JSON output
-- [ ] **B3**: Remove false `SQLBrowseConnect`/`SQLSetPos`/`SQLBulkOperations` from mock driver's supported function list
-- [ ] **B4**: Remove debug file I/O from mock driver
-- [ ] **B5**: Fix `OdbcStatement::close_cursor()` to properly check return codes
-- [ ] **B6**: Remove dead CLI stub files or implement them
-- [ ] **B7**: Extract result-tallying into a helper function in `main.cpp`
+- [x] **B1**: Fix `DriverInfo::get_properties()` key mismatch — collect additional `SQLGetInfo` calls for `SQL_ODBC_VER`, `SQL_DATABASE_NAME`, `SQL_SERVER_NAME`, `SQL_USER_NAME`, `SQL_CATALOG_TERM`, `SQL_SCHEMA_TERM`, `SQL_TABLE_TERM`, `SQL_PROCEDURE_TERM`, `SQL_IDENTIFIER_QUOTE_CHAR` and store them so `get_properties()` can find them
+- [x] **B2**: Add discovery data to `JsonReporter` — add `driver_info`, `type_info`, and `function_info` sections to the JSON output
+- [x] **B3**: Remove false `SQLBrowseConnect`/`SQLSetPos`/`SQLBulkOperations` from mock driver's supported function list
+- [x] **B4**: Remove debug file I/O from mock driver
+- [x] **B5**: Fix `OdbcStatement::close_cursor()` to properly check return codes
+- [x] **B6**: Remove dead CLI stub files or implement them
+- [x] **B7**: Extract result-tallying into a helper function in `main.cpp`
 
 #### 11.2 Report Overhaul
 
-- [ ] Add ODBC conformance level to each test result: `Core`, `Level 1`, `Level 2`
-- [ ] Add ODBC spec reference to each test (e.g., "Per ODBC 3.x, SQLGetInfo")
-- [ ] Split SKIP into `SKIP_UNSUPPORTED` (driver doesn't support optional feature) and `SKIP_INCONCLUSIVE` (test couldn't determine)
-- [ ] Add severity-ranked failure summary (CRITICAL → ERROR → WARNING)
-- [ ] Add function coverage matrix to report: which functions were called, result, and whether the driver claims support
-- [ ] Add discovery data (driver info, types, function support) to JSON reporter
-- [ ] Improve all suggestion text with actionable guidance citing spec sections
-- [ ] Add `--conformance-level` CLI flag to filter tests by Core/Level 1/Level 2
+- [x] Add ODBC conformance level to each test result: `Core`, `Level 1`, `Level 2`
+- [x] Add ODBC spec reference to each test (e.g., "Per ODBC 3.x, SQLGetInfo")
+- [x] Split SKIP into `SKIP_UNSUPPORTED` (driver doesn't support optional feature) and `SKIP_INCONCLUSIVE` (test couldn't determine)
+- [x] Add severity-ranked failure summary (CRITICAL → ERROR → WARNING)
+- [x] Add function coverage matrix to report: which functions were called, result, and whether the driver claims support
+- [x] Add discovery data (driver info, types, function support) to JSON reporter
+- [x] Improve all suggestion text with actionable guidance citing spec sections
+- [x] Add `--conformance-level` CLI flag to filter tests by Core/Level 1/Level 2
 
 #### 11.3 Updated `TestResult` Structure
 
