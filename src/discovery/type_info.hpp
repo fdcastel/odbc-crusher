@@ -3,6 +3,7 @@
 #include "core/odbc_connection.hpp"
 #include <string>
 #include <vector>
+#include <optional>
 
 namespace odbc_crusher::discovery {
 
@@ -31,6 +32,15 @@ struct DataTypeInfo {
 // Type information collected via SQLGetTypeInfo
 class TypeInfo {
 public:
+    // Simplified data type for reporting
+    struct DataType {
+        std::string type_name;
+        SQLSMALLINT sql_data_type;
+        SQLINTEGER column_size;
+        bool nullable;
+        std::optional<bool> auto_unique_value;
+    };
+    
     explicit TypeInfo(core::OdbcConnection& conn);
     
     // Collect all type information
@@ -38,6 +48,9 @@ public:
     
     // Get all types
     const std::vector<DataTypeInfo>& types() const { return types_; }
+    
+    // Get simplified types for reporting
+    std::vector<DataType> get_types() const;
     
     // Get types count
     size_t count() const { return types_.size(); }

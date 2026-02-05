@@ -10,6 +10,25 @@ namespace odbc_crusher::discovery {
 // Driver and DBMS information collected via SQLGetInfo
 class DriverInfo {
 public:
+    // Structured properties for reporting
+    struct Properties {
+        std::string driver_name;
+        std::string driver_ver;
+        std::string driver_odbc_ver;
+        std::string odbc_ver;
+        std::string dbms_name;
+        std::string dbms_ver;
+        std::string database_name;
+        std::string server_name;
+        std::string user_name;
+        std::string sql_conformance;
+        std::string catalog_term;
+        std::string schema_term;
+        std::string table_term;
+        std::string procedure_term;
+        std::string identifier_quote_char;
+    };
+    
     explicit DriverInfo(core::OdbcConnection& conn);
     
     // Collect all information
@@ -30,6 +49,9 @@ public:
     
     // Get all collected info
     const std::map<std::string, std::string>& all_info() const { return info_map_; }
+    
+    // Get structured properties for reporting
+    Properties get_properties() const;
     
     // Display summary
     std::string format_summary() const;

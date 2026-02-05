@@ -17,6 +17,14 @@ struct FunctionAvailability {
 // Function information collected via SQLGetFunctions
 class FunctionInfo {
 public:
+    // Structured function support for reporting
+    struct FunctionSupport {
+        size_t supported_count;
+        size_t total_checked;
+        std::vector<std::string> supported;
+        std::vector<std::string> unsupported;
+    };
+    
     explicit FunctionInfo(core::OdbcConnection& conn);
     
     // Collect all function information
@@ -33,6 +41,9 @@ public:
     
     // Get unsupported count
     size_t unsupported_count() const;
+    
+    // Get structured support info for reporting
+    FunctionSupport get_support() const;
     
     // Display summary
     std::string format_summary() const;

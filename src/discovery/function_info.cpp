@@ -209,4 +209,20 @@ std::string FunctionInfo::get_function_name(SQLUSMALLINT function_id) {
     }
 }
 
+FunctionInfo::FunctionSupport FunctionInfo::get_support() const {
+    FunctionSupport support;
+    support.supported_count = supported_count();
+    support.total_checked = functions_.size();
+    
+    for (const auto& func : functions_) {
+        if (func.supported) {
+            support.supported.push_back(func.function_name);
+        } else {
+            support.unsupported.push_back(func.function_name);
+        }
+    }
+    
+    return support;
+}
+
 } // namespace odbc_crusher::discovery

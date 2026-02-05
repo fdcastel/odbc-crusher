@@ -124,5 +124,44 @@ std::string DriverInfo::format_summary() const {
     
     return oss.str();
 }
-
+DriverInfo::Properties DriverInfo::get_properties() const {
+    Properties props;
+    props.driver_name = driver_name_.value_or("");
+    props.driver_ver = driver_version_.value_or("");
+    props.driver_odbc_ver = driver_odbc_version_.value_or("");
+    props.dbms_name = dbms_name_.value_or("");
+    props.dbms_ver = dbms_version_.value_or("");
+    props.sql_conformance = sql_conformance_.value_or("");
+    
+    // Get ODBC version from driver manager
+    auto it = info_map_.find("ODBC_VER");
+    props.odbc_ver = (it != info_map_.end()) ? it->second : "";
+    
+    // Get additional info from the map
+    it = info_map_.find("DATABASE_NAME");
+    props.database_name = (it != info_map_.end()) ? it->second : "";
+    
+    it = info_map_.find("SERVER_NAME");
+    props.server_name = (it != info_map_.end()) ? it->second : "";
+    
+    it = info_map_.find("USER_NAME");
+    props.user_name = (it != info_map_.end()) ? it->second : "";
+    
+    it = info_map_.find("CATALOG_TERM");
+    props.catalog_term = (it != info_map_.end()) ? it->second : "";
+    
+    it = info_map_.find("SCHEMA_TERM");
+    props.schema_term = (it != info_map_.end()) ? it->second : "";
+    
+    it = info_map_.find("TABLE_TERM");
+    props.table_term = (it != info_map_.end()) ? it->second : "";
+    
+    it = info_map_.find("PROCEDURE_TERM");
+    props.procedure_term = (it != info_map_.end()) ? it->second : "";
+    
+    it = info_map_.find("IDENTIFIER_QUOTE_CHAR");
+    props.identifier_quote_char = (it != info_map_.end()) ? it->second : "";
+    
+    return props;
+}
 } // namespace odbc_crusher::discovery

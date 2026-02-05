@@ -6,9 +6,9 @@ namespace odbc_crusher::reporting {
 
 void ConsoleReporter::report_start(const std::string& connection_string) {
     out_ << "\n";
-    out_ << "╔════════════════════════════════════════════════════════════════╗\n";
-    out_ << "║           ODBC CRUSHER - Driver Testing Report                ║\n";
-    out_ << "╚════════════════════════════════════════════════════════════════╝\n";
+    out_ << "================================================================================\n";
+    out_ << "                   ODBC CRUSHER - Driver Testing Tool\n";
+    out_ << "================================================================================\n";
     out_ << "\n";
     out_ << "Connection: " << connection_string << "\n";
     out_ << "\n";
@@ -16,9 +16,9 @@ void ConsoleReporter::report_start(const std::string& connection_string) {
 
 void ConsoleReporter::report_category(const std::string& category_name,
                                       const std::vector<tests::TestResult>& results) {
-    out_ << "────────────────────────────────────────────────────────────────\n";
+    out_ << "--------------------------------------------------------------------------------\n";
     out_ << "  " << category_name << "\n";
-    out_ << "────────────────────────────────────────────────────────────────\n";
+    out_ << "--------------------------------------------------------------------------------\n";
     
     size_t passed = 0, failed = 0, skipped = 0, errors = 0;
     
@@ -63,9 +63,9 @@ void ConsoleReporter::report_category(const std::string& category_name,
 void ConsoleReporter::report_summary(size_t total_tests, size_t passed, size_t failed,
                                      size_t skipped, size_t errors,
                                      std::chrono::microseconds total_duration) {
-    out_ << "════════════════════════════════════════════════════════════════\n";
+    out_ << "================================================================================\n";
     out_ << "                        FINAL SUMMARY\n";
-    out_ << "════════════════════════════════════════════════════════════════\n";
+    out_ << "================================================================================\n";
     out_ << "\n";
     out_ << "  Total Tests:  " << total_tests << "\n";
     out_ << "  Passed:       " << passed;
@@ -89,25 +89,25 @@ void ConsoleReporter::report_summary(size_t total_tests, size_t passed, size_t f
     out_ << "\n";
     
     if (failed == 0 && errors == 0) {
-        out_ << "  ✓ ALL TESTS PASSED!\n";
+        out_ << "  [PASS] ALL TESTS PASSED!\n";
     } else {
-        out_ << "  ✗ SOME TESTS FAILED\n";
+        out_ << "  [FAIL] SOME TESTS FAILED\n";
     }
     out_ << "\n";
 }
 
 void ConsoleReporter::report_end() {
-    out_ << "════════════════════════════════════════════════════════════════\n";
+    out_ << "================================================================================\n";
     out_ << std::flush;
 }
 
 std::string ConsoleReporter::status_icon(tests::TestStatus status) const {
     switch (status) {
-        case tests::TestStatus::PASS: return "✓";
-        case tests::TestStatus::FAIL: return "✗";
-        case tests::TestStatus::SKIP: return "-";
-        case tests::TestStatus::ERR:  return "!";
-        default: return "?";
+        case tests::TestStatus::PASS: return "[PASS]";
+        case tests::TestStatus::FAIL: return "[FAIL]";
+        case tests::TestStatus::SKIP: return "[SKIP]";
+        case tests::TestStatus::ERR:  return "[ERR!]";
+        default: return "[????]";
     }
 }
 
@@ -115,7 +115,7 @@ std::string ConsoleReporter::format_duration(std::chrono::microseconds duration)
     auto us = duration.count();
     
     if (us < 1000) {
-        return std::to_string(us) + " μs";
+        return std::to_string(us) + " us";
     } else if (us < 1000000) {
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(2) << (us / 1000.0) << " ms";
@@ -125,6 +125,116 @@ std::string ConsoleReporter::format_duration(std::chrono::microseconds duration)
         oss << std::fixed << std::setprecision(2) << (us / 1000000.0) << " s";
         return oss.str();
     }
+}
+
+void ConsoleReporter::report_driver_info(const discovery::DriverInfo::Properties& props) {
+    out_ << "================================================================================\n";
+    out_ << "                      DRIVER INFORMATION REPORT\n";
+    out_ << "================================================================================\n\n";
+    
+    out_ << "=== DRIVER & DATABASE MANAGEMENT SYSTEM ===\n";
+    out_ << "  Driver Name:          " << props.driver_name << "\n";
+    out_ << "  Driver Version:       " << props.driver_ver << "\n";
+    out_ << "  Driver ODBC Version:  " << props.driver_odbc_ver << "\n";
+    out_ << "  ODBC Version (DM):    " << props.odbc_ver << "\n";
+    out_ << "  DBMS Name:            " << props.dbms_name << "\n";
+    out_ << "  DBMS Version:         " << props.dbms_ver << "\n";
+    if (!props.database_name.empty()) {
+        out_ << "  Database:             " << props.database_name << "\n";
+    }
+    if (!props.server_name.empty()) {
+        out_ << "  Server:               " << props.server_name << "\n";
+    }
+    if (!props.user_name.empty()) {
+        out_ << "  User:                 " << props.user_name << "\n";
+    }
+    out_ << "\n";
+    
+    out_ << "=== SQL CONFORMANCE ===\n";
+    out_ << "  SQL Conformance:      " << props.sql_conformance << "\n";
+    out_ << "\n";
+    
+    out_ << "=== TERMINOLOGY ===\n";
+    out_ << "  Catalog Term:         " << props.catalog_term << "\n";
+    out_ << "  Schema Term:          " << props.schema_term << "\n";
+    out_ << "  Table Term:           " << props.table_term << "\n";
+    out_ << "  Procedure Term:       " << props.procedure_term << "\n";
+    if (!props.identifier_quote_char.empty()) {
+        out_ << "  Quote Character:      " << props.identifier_quote_char << "\n";
+    }
+    out_ << "\n";
+}
+
+void ConsoleReporter::report_type_info(const std::vector<discovery::TypeInfo::DataType>& types) {
+    out_ << "=== SUPPORTED DATA TYPES (" << types.size() << " types) ===\n\n";
+    
+    // Print table header
+    out_ << "+--------------------------------------------------+------------+--------------+----------+----------+\n";
+    out_ << "| Type Name                                        |   SQL Type |     Max Size | Nullable | Auto-Inc |\n";
+    out_ << "+--------------------------------------------------+------------+--------------+----------+----------+\n";
+    
+    for (const auto& type : types) {
+        out_ << "| " << std::left << std::setw(48) << type.type_name.substr(0, 48)
+             << " | " << std::right << std::setw(10) << type.sql_data_type
+             << " | " << std::setw(12);
+        
+        if (type.column_size == 0) {
+            out_ << "N/A";
+        } else {
+            out_ << type.column_size;
+        }
+        
+        out_ << " | " << std::setw(8) << (type.nullable ? "Yes" : "No")
+             << " | " << std::setw(8);
+        
+        if (type.auto_unique_value.has_value()) {
+            out_ << (*type.auto_unique_value ? "Yes" : "No");
+        } else {
+            out_ << "";
+        }
+        
+        out_ << " |\n";
+    }
+    
+    out_ << "+--------------------------------------------------+------------+--------------+----------+----------+\n\n";
+}
+
+void ConsoleReporter::report_function_info(const discovery::FunctionInfo::FunctionSupport& funcs) {
+    out_ << "=== ODBC FUNCTIONS (via SQLGetFunctions) ===\n";
+    out_ << "  " << funcs.supported_count << "/" << funcs.total_checked 
+         << " ODBC functions supported\n\n";
+    
+    if (!funcs.supported.empty() && verbose_) {
+        out_ << "  Supported functions:\n";
+        int count = 0;
+        out_ << "    ";
+        for (const auto& func : funcs.supported) {
+            out_ << func;
+            count++;
+            if (count < funcs.supported.size()) {
+                out_ << ", ";
+                if (count % 5 == 0) out_ << "\n    ";
+            }
+        }
+        out_ << "\n\n";
+    }
+    
+    if (!funcs.unsupported.empty()) {
+        out_ << "  MISSING functions:\n";
+        int count = 0;
+        out_ << "    ";
+        for (const auto& func : funcs.unsupported) {
+            out_ << func;
+            count++;
+            if (count < funcs.unsupported.size()) {
+                out_ << ", ";
+                if (count % 5 == 0) out_ << "\n    ";
+            }
+        }
+        out_ << "\n\n";
+    }
+    
+    out_ << "================================================================================\n\n";
 }
 
 } // namespace odbc_crusher::reporting

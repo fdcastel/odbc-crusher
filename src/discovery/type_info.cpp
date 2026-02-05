@@ -93,5 +93,28 @@ std::string TypeInfo::format_summary() const {
     
     return oss.str();
 }
-
+std::vector<TypeInfo::DataType> TypeInfo::get_types() const {
+    std::vector<DataType> result;
+    result.reserve(types_.size());
+    
+    for (const auto& t : types_) {
+        DataType dt;
+        dt.type_name = t.type_name;
+        dt.sql_data_type = t.sql_data_type;
+        dt.column_size = t.column_size;
+        dt.nullable = (t.nullable == SQL_NULLABLE);
+        
+        if (t.auto_unique_value == SQL_TRUE) {
+            dt.auto_unique_value = true;
+        } else if (t.auto_unique_value == SQL_FALSE) {
+            dt.auto_unique_value = false;
+        } else {
+            dt.auto_unique_value = std::nullopt;
+        }
+        
+        result.push_back(dt);
+    }
+    
+    return result;
+}
 } // namespace odbc_crusher::discovery

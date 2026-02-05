@@ -56,6 +56,29 @@ int main(int argc, char** argv) {
         // Connect to database
         conn.connect(connection_string);
         
+        // Phase 1: Collect driver information
+        if (output_format == "console") {
+            auto* console_rep = dynamic_cast<reporting::ConsoleReporter*>(reporter.get());
+            if (console_rep) {
+                // Collect driver info
+                discovery::DriverInfo driver_info(conn);
+                driver_info.collect();
+                console_rep->report_driver_info(driver_info.get_properties());
+                
+                // Collect type info
+                discovery::TypeInfo type_info(conn);
+                type_info.collect();
+                console_rep->report_type_info(type_info.get_types());
+                
+                // Collect function info
+                discovery::FunctionInfo func_info(conn);
+                func_info.collect();
+                console_rep->report_function_info(func_info.get_support());
+            }
+        }
+        
+        std::cout << "Phase 2: Running ODBC tests...\n\n";
+        
         // Track overall statistics
         size_t total_tests = 0;
         size_t total_passed = 0;
