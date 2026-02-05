@@ -59,22 +59,21 @@ TEST_F(SQLGetTypeInfoTest, CanFetchTypeInfoRows) {
     SQLRETURN ret = SQLGetTypeInfo(hstmt, SQL_ALL_TYPES);
     ASSERT_TRUE(SQL_SUCCEEDED(ret));
     
-    // Try to fetch at least one row
-    ret = SQLFetch(hstmt);
-    if (ret == SQL_NO_DATA) {
-        // No data is OK for mock driver
-        SUCCEED();
-    } else {
-        EXPECT_TRUE(SQL_SUCCEEDED(ret)) << "SQLFetch should succeed or return NO_DATA";
+    // Should return multiple type info rows
+    int rowCount = 0;
+    while ((ret = SQLFetch(hstmt)) == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+        rowCount++;
         
-        // If we got a row, try to get some data
-        if (SQL_SUCCEEDED(ret)) {
-            SQLCHAR typeName[128] = {0};
-            SQLLEN indicator = 0;
-            ret = SQLGetData(hstmt, 1, SQL_C_CHAR, typeName, sizeof(typeName), &indicator);
-            EXPECT_TRUE(SQL_SUCCEEDED(ret)) << "SQLGetData should succeed";
-        }
+        // Verify we can read the type name
+        SQLCHAR typeName[128] = {0};
+        SQLLEN indicator = 0;
+        ret = SQLGetData(hstmt, 1, SQL_C_CHAR, typeName, sizeof(typeName), &indicator);
+        EXPECT_TRUE(SQL_SUCCEEDED(ret)) << "SQLGetData should succeed for row " << rowCount;
+        EXPECT_GT(strlen((char*)typeName), 0) << "Type name should not be empty";
     }
+    
+    EXPECT_EQ(ret, SQL_NO_DATA) << "Should end with SQL_NO_DATA";
+    EXPECT_GT(rowCount, 0) << "Should have returned at least one type";
 }
 
 TEST_F(SQLGetTypeInfoTest, CanGetSpecificType) {
