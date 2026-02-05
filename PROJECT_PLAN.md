@@ -793,12 +793,300 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 
 ---
 
+## � Insights from Microsoft ODBCTest Tool
+
+### Overview
+
+We analyzed the source code of Microsoft's original ODBC Test Tool (ODBCTest), which was used internally for testing ODBC drivers. While this is an old Win32 GUI application from the Windows 3.x/9x/NT era, it contains valuable insights for ODBC driver testing that remain relevant today.
+
+**Source**: `tmp/ODBCTest/` - Available on GitHub, builds with Visual Studio 2015 (v140) platform toolset.
+
+> ⚠️ **Caveat**: This is a 25+ year old codebase with a complex Win32 GUI architecture. The coding style and architecture are dated, but the **conceptual approach** to ODBC testing is still valuable.
+
+### Key Insights Extracted
+
+#### 1. **Comprehensive ODBC Function Coverage (120+ Functions)**
+
+ODBCTest provides wrappers for virtually every ODBC function, organized by category:
+
+| Category | Functions | ODBCTest Files |
+|----------|-----------|----------------|
+| **Environment** | SQLAllocEnv, SQLFreeEnv, SQLSetEnvAttr, SQLGetEnvAttr | `fhenv.c` |
+| **Connection** | SQLConnect, SQLDriverConnect, SQLBrowseConnect, SQLDisconnect | `fhconn.c` |
+| **Statement** | SQLPrepare, SQLExecute, SQLExecDirect, SQLCancel | `fhstmt.c` |
+| **Binding** | SQLBindParameter, SQLBindCol, SQLDescribeParam | `fhbind.c` |
+| **Results** | SQLFetch, SQLFetchScroll, SQLExtendedFetch, SQLGetData | `fhrslt.c` |
+| **Catalog** | SQLTables, SQLColumns, SQLPrimaryKeys, SQLForeignKeys | `fhcatl.c` |
+| **Descriptors** | SQLCopyDesc, SQLGetDescField, SQLSetDescField | `fhdesc.c` |
+| **Diagnostics** | SQLGetDiagRec, SQLGetDiagField, SQLError | `fhdiag.c` |
+| **Attributes** | SQLSetConnectAttr, SQLGetConnectAttr, SQLSetStmtAttr | `fhattr.c` |
+| **Misc** | SQLGetFunctions, SQLTransact, SQLEndTran | `fhmisc.c` |
+| **Handles** | SQLAllocHandle, SQLFreeHandle | `fhhndl.c` |
+| **Locators** | SQLLocator, SQLGetLength, SQLGetPosition, SQLGetSubString | `fhlocatr.c` |
+
+**💡 Insight for ODBC Crusher**: Our current Phase 9 covers ~50 functions. Consider expanding to 80+ in future phases, especially:
+- `SQLBrowseConnect` - Iterative connection building
+- `SQLGetDescField` / `SQLSetDescField` - Full descriptor access
+- `SQLExtendedFetch` - Legacy but still used
+- Locator functions (for LOB handling)
+
+#### 2. **Automated Test DLL Architecture (GatorTst)**
+
+ODBCTest supports loading external test DLLs that implement a specific interface (`autotest.h`):
+
+```c
+// AutoTest DLL interface (from autotest.h)
+typedef struct tagSERVERINFO {
+    HWND        hwnd;           // Output window
+    TCHAR       szLogFile[];    // Log file path
+    HENV        henv;           // Shared environment handle
+    HDBC        hdbc;           // Shared connection handle
+    HSTMT       hstmt;          // Shared statement handle
+    TCHAR       szSource[];     // Data source name
+    TCHAR       szValidLogin[]; // Credentials
+    UINT*       rglMask;        // Bitmask of tests to run
+    int         cErrors;        // Error count
+    BOOL        fDebug;         // Debug mode
+    BOOL        fIsolate;       // Run tests in isolation
+    // ...
+} SERVERINFO;
+
+// Required DLL exports
+AutoTestName()  // Return test name
+AutoTestDesc()  // Return test description
+AutoTestFunc()  // Main test entry point
+```
+
+**💡 Insight for ODBC Crusher**: Consider a **plugin architecture** for future extensibility:
+- Allow users to write custom test modules
+- Load tests dynamically at runtime
+- Support both built-in and external tests
+- Could use C++ shared libraries or even script bindings (Lua, Python)
+
+#### 3. **Test Isolation Mode**
+
+ODBCTest supports running each test case in isolation (`fIsolate` flag):
+
+```c
+// From runtest.c - Isolated vs. batch test execution
+if(!lpSI->fIsolate) {
+    // Run all tests at once with entire bitmask
+    (*lpati->lpTestFunc)(lpSI);
+} else {
+    // Run each test individually with single bit set
+    for(dex=0; dex < cItems; dex++) {
+        if(BitGet(rglMask, dex)) {
+            BitSet(lpSI->rglMask, dex);
+            (*lpati->lpTestFunc)(lpSI);
+            BitClear(lpSI->rglMask, dex);
+        }
+    }
+}
+```
+
+**💡 Insight for ODBC Crusher**: Add `--isolate` flag to run each test with fresh handles. Useful for:
+- Debugging hanging tests
+- Finding tests that leave state behind
+- More accurate per-test timing
+
+#### 4. **Comprehensive Parameter Logging**
+
+Every ODBC call logs both input and output parameters:
+
+```c
+// From fhconn.c - Logging pattern used throughout
+// Log input parameters
+LOGPARAMETERS(szFuncName, lpParms, cParms, ci, TRUE);  // TRUE = input
+
+rc = SQLDriverConnect(...);
+
+// Log return code
+LOGRETURNCODE(NULL, ci, rc);
+
+// Log output parameters
+LOGPARAMETERS(szFuncName, lpParms, cParms, ci, FALSE); // FALSE = output
+
+// Check for errors and auto-log them
+AUTOLOGERRORCI(ci, rc, hdbc);
+```
+
+**💡 Insight for ODBC Crusher**: Implement detailed **call tracing mode** (`--trace`):
+- Log every ODBC call with all parameters
+- Show before/after values for output parameters
+- Capture timing per-call
+- Useful for debugging driver issues
+
+#### 5. **Buffer Overflow and Null Termination Checking**
+
+ODBCTest validates driver behavior regarding buffers:
+
+```c
+// From fhrslt.c - Output validation patterns
+// Null termination and buffer modification checking
+OUTPUTPARAMCHECK(ci, rc, lpParms, cParms, TRUE);
+
+// Check for unused buffer space
+UNUSEDBUFFERCHECK(ci, lpParms[...], lpParms[...], TRUE);
+
+// Verify proper null termination
+CHECKNULLTERM(ci, lpParms[...], lpParms[...], TRUE);
+
+// Detect truncation issues
+TRUNCATIONCHECK(lpParms[...]->fNull, ..., rc, hwndOut,
+    (LPTSTR)lpParms[...]->lpData,  // Buffer
+    cbBufferLength,                 // Buffer size
+    *pcbStringLength,              // Actual length
+    "pcbStringLength");            // Parameter name
+```
+
+**💡 Insight for ODBC Crusher**: Add **buffer validation tests**:
+- Detect drivers that don't null-terminate strings
+- Detect buffer overruns (write beyond allocated space)
+- Test with undersized buffers to verify proper truncation behavior
+- Fill buffers with sentinel values before calls
+
+#### 6. **Error Queue Management**
+
+ODBCTest includes functions to manage the diagnostic error queue:
+
+```c
+// From fhdiag.c - Clear error queue before testing
+VOID INTFUN ClearErrorQueue(SQLSMALLINT fHandleType, SQLHANDLE hHandle) {
+    switch(fHandleType) {
+        case SQL_HANDLE_ENV:
+            SQLGetEnvAttr(hHandle, SQL_ATTR_ODBC_VERSION, NULL, 0, NULL);
+            break;
+        case SQL_HANDLE_DBC:
+            SQLGetInfo(hHandle, SQL_ACTIVE_CONNECTIONS, NULL, 0, NULL);
+            break;
+        case SQL_HANDLE_STMT:
+            SQLGetStmtOption(hHandle, SQL_QUERY_TIMEOUT, NULL);
+            break;
+        case SQL_HANDLE_DESC:
+            SQLGetDescField(hHandle, 0, SQL_DESC_ALLOC_TYPE, NULL, 0, NULL);
+            break;
+    }
+}
+```
+
+**💡 Insight for ODBC Crusher**: Before running tests, ensure error queues are cleared. Some drivers accumulate diagnostic records that can confuse test results.
+
+#### 7. **Keyword-Based Test Configuration**
+
+ODBCTest uses keywords to control test behavior:
+
+```c
+// From autotest.h - Keyword bitmask constants
+#define MSK_KEY_LOCAL         0x00000001  // Localization testing
+#define MSK_KEY_ODBC3BEHAV    0x00000002  // ODBC 3.x behavior mode
+#define MSK_KEY_NOSTATECHK    0x00000004  // Skip state machine validation
+#define MSK_KEY_FSMAP         0x00000008  // Map SQLExtendedFetch to SQLFetchScroll
+#define MSK_KEY_FILLTABLE_NULL 0x00010000 // Test with NULL values
+#define MSK_KEY_FILLTABLE_CHAR 0x00020000 // Test with char patterns
+#define MSK_KEY_UNATTENDED    0x00000010  // No user prompts
+#define MSK_KEY_SHOWSQL       0x00000020  // Display SQL statements
+```
+
+**💡 Insight for ODBC Crusher**: Support test configuration keywords:
+- `--behavior=odbc2|odbc3|odbc4` - Test ODBC version behavior
+- `--fill-mode=nulls|chars|random` - Data generation patterns
+- `--no-state-check` - Skip state machine validation
+- `--show-sql` - Display generated SQL
+
+#### 8. **Handle State Tracking**
+
+ODBCTest tracks handle states to validate proper ODBC state machine adherence:
+
+```c
+// From connwin.c / fhstmt.c - State tracking
+#define STATE_ALLOCATED_HDBC    0x0001  // Handle allocated
+#define STATE_CONNECTED_HDBC    0x0002  // Connected to data source
+#define STATE_BROWSING_HDBC     0x0004  // In SQLBrowseConnect loop
+#define STATE_ALLOCATED_HSTMT   0x0008  // Statement allocated
+// ...
+
+lpci->uState |= STATE_CONNECTED_HDBC;  // On successful connect
+lpci->uState &= ~STATE_CONNECTED_HDBC; // On disconnect
+```
+
+**💡 Insight for ODBC Crusher**: Track and validate ODBC state machine:
+- Verify drivers reject calls in wrong states
+- Test that proper state transitions occur
+- Detect drivers with incorrect state management
+
+#### 9. **ODBC 4.0 Support (Structured Types)**
+
+The ODBCTest includes support for ODBC 4.0 features:
+
+```c
+// From fhcatl.c - ODBC 4.0 catalog functions
+RETCODE INTFUN lpSQLStructuredTypes(STD_FH_PARMS);
+RETCODE INTFUN lpSQLStructuredTypeColumns(STD_FH_PARMS);
+
+// From fhrslt.c - Nested handles
+RETCODE INTFUN DropNestedHandles(lpCONNECTIONINFO ci, lpSTATEMENTINFO lpStmt);
+```
+
+**💡 Insight for ODBC Crusher**: Consider future ODBC 4.0 testing:
+- `SQLStructuredTypes` - Structured type metadata
+- `SQLStructuredTypeColumns` - Structured type column info
+- `SQLNextColumn` - Nested result navigation
+- `SQLGetNestedHandle` - Nested handle retrieval
+
+#### 10. **Comprehensive Data Type Tables**
+
+ODBCTest maintains extensive lookup tables for ODBC types (`globals.c`, `table.c`):
+
+- All 123+ ODBC API functions enumerated
+- C data types to SQL data types mappings
+- SQL_C_* to buffer size calculations
+- Precision/scale handling per type
+
+**💡 Insight for ODBC Crusher**: Create comprehensive type mapping tables for:
+- Automatic buffer sizing based on C type
+- Default precision/scale per SQL type
+- Type conversion validation
+
+### Features to Consider for Future Phases
+
+Based on ODBCTest analysis, here are features to consider adding to ODBC Crusher:
+
+| Priority | Feature | Description | ODBCTest Reference |
+|----------|---------|-------------|-------------------|
+| **High** | Call Tracing | Log all ODBC calls with parameters | `LOGPARAMETERS` macro |
+| **High** | Buffer Validation | Detect overflow, truncation issues | `TRUNCATIONCHECK` macro |
+| **High** | Test Isolation | Run each test with fresh handles | `fIsolate` flag |
+| **Medium** | State Machine Validation | Verify proper ODBC state transitions | `uState` tracking |
+| **Medium** | Error Queue Testing | Test diagnostic record handling | `ClearErrorQueue()` |
+| **Medium** | SQLBrowseConnect Support | Iterative connection testing | `fhconn.c` |
+| **Medium** | Descriptor Testing | Full ARD/APD/IRD/IPD testing | `fhdesc.c` |
+| **Low** | Plugin Architecture | Load external test modules | GatorTst DLL model |
+| **Low** | ODBC 4.0 Features | Structured types, nested handles | `fhlocatr.c` |
+| **Low** | Interactive Mode | Step-by-step ODBC exploration | GUI mode in ODBCTest |
+
+### Summary
+
+The Microsoft ODBCTest tool, despite its age, demonstrates thorough ODBC testing methodology:
+
+1. **Exhaustive Coverage** - Every ODBC function has a test handler
+2. **Defensive Testing** - Buffer overflows, truncation, null termination all checked
+3. **Extensible Architecture** - Plugin model for custom tests
+4. **State Awareness** - Tracks handle states for validation
+5. **Detailed Logging** - Every parameter logged before and after calls
+6. **Isolation Support** - Tests can run independently
+7. **ODBC Version Awareness** - Adapts to ODBC 2.x/3.x/4.0 differences
+
+These insights inform our roadmap for making ODBC Crusher a valuable tool for driver developers.
+
+---
+
 ## 📚 References
 
 ### ODBC Specification
 - [ODBC Programmer's Reference](https://learn.microsoft.com/en-us/sql/odbc/reference/odbc-programmer-s-reference)
 - [ODBC API Reference](https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/odbc-api-reference)
 - [ODBC 3.8 Upgrade Guide](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-driver/upgrading-a-3-5-driver-to-a-3-8-driver)
+- [Microsoft ODBCTest Tool (GitHub)](https://msdn.microsoft.com/en-us/library/ms712676(v=vs.85).aspx)
 
 ### unixODBC (Linux)
 - [unixODBC Documentation](http://www.unixodbc.org/)
