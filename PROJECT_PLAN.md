@@ -347,7 +347,7 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - [x] `FunctionInfo` class using `SQLGetFunctions`
   - Bitmap of implemented functions
   - Human-readable function names
-- [ ] Display driver capabilities before running tests - Deferred to later phase
+- [x] Display driver capabilities before running tests ✅
 
 **ODBC Functions Covered**:
 - `SQLGetInfo` (all relevant info types) ✅
