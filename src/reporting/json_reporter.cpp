@@ -94,4 +94,49 @@ void JsonReporter::report_end() {
     }
 }
 
+void JsonReporter::report_driver_info(const discovery::DriverInfo::Properties& props) {
+    nlohmann::json driver_info;
+    driver_info["driver_name"] = props.driver_name;
+    driver_info["driver_version"] = props.driver_ver;
+    driver_info["driver_odbc_version"] = props.driver_odbc_ver;
+    driver_info["odbc_version"] = props.odbc_ver;
+    driver_info["dbms_name"] = props.dbms_name;
+    driver_info["dbms_version"] = props.dbms_ver;
+    driver_info["database_name"] = props.database_name;
+    driver_info["server_name"] = props.server_name;
+    driver_info["user_name"] = props.user_name;
+    driver_info["sql_conformance"] = props.sql_conformance;
+    driver_info["catalog_term"] = props.catalog_term;
+    driver_info["schema_term"] = props.schema_term;
+    driver_info["table_term"] = props.table_term;
+    driver_info["procedure_term"] = props.procedure_term;
+    driver_info["identifier_quote_char"] = props.identifier_quote_char;
+    root_["driver_info"] = driver_info;
+}
+
+void JsonReporter::report_type_info(const std::vector<discovery::TypeInfo::DataType>& types) {
+    nlohmann::json type_array = nlohmann::json::array();
+    for (const auto& type : types) {
+        nlohmann::json t;
+        t["type_name"] = type.type_name;
+        t["sql_data_type"] = type.sql_data_type;
+        t["column_size"] = type.column_size;
+        t["nullable"] = type.nullable;
+        if (type.auto_unique_value.has_value()) {
+            t["auto_unique_value"] = *type.auto_unique_value;
+        }
+        type_array.push_back(t);
+    }
+    root_["type_info"] = type_array;
+}
+
+void JsonReporter::report_function_info(const discovery::FunctionInfo::FunctionSupport& funcs) {
+    nlohmann::json func_info;
+    func_info["supported_count"] = funcs.supported_count;
+    func_info["total_checked"] = funcs.total_checked;
+    func_info["supported"] = funcs.supported;
+    func_info["unsupported"] = funcs.unsupported;
+    root_["function_info"] = func_info;
+}
+
 } // namespace odbc_crusher::reporting

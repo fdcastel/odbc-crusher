@@ -16,6 +16,8 @@
 #include "tests/error_queue_tests.hpp"
 #include "tests/state_machine_tests.hpp"
 #include "discovery/driver_info.hpp"
+#include "discovery/type_info.hpp"
+#include "discovery/function_info.hpp"
 #include "reporting/console_reporter.hpp"
 #include "reporting/json_reporter.hpp"
 
@@ -61,24 +63,29 @@ int main(int argc, char** argv) {
         // Connect to database
         conn.connect(connection_string);
         
-        // Phase 1: Collect driver information
+        // Phase 1: Collect driver information (for all output formats)
+        discovery::DriverInfo driver_info(conn);
+        driver_info.collect();
+        
+        discovery::TypeInfo type_info(conn);
+        type_info.collect();
+        
+        discovery::FunctionInfo func_info(conn);
+        func_info.collect();
+        
         if (output_format == "console") {
             auto* console_rep = dynamic_cast<reporting::ConsoleReporter*>(reporter.get());
             if (console_rep) {
-                // Collect driver info
-                discovery::DriverInfo driver_info(conn);
-                driver_info.collect();
                 console_rep->report_driver_info(driver_info.get_properties());
-                
-                // Collect type info
-                discovery::TypeInfo type_info(conn);
-                type_info.collect();
                 console_rep->report_type_info(type_info.get_types());
-                
-                // Collect function info
-                discovery::FunctionInfo func_info(conn);
-                func_info.collect();
                 console_rep->report_function_info(func_info.get_support());
+            }
+        } else if (output_format == "json") {
+            auto* json_rep = dynamic_cast<reporting::JsonReporter*>(reporter.get());
+            if (json_rep) {
+                json_rep->report_driver_info(driver_info.get_properties());
+                json_rep->report_type_info(type_info.get_types());
+                json_rep->report_function_info(func_info.get_support());
             }
         }
         

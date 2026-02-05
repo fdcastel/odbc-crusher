@@ -10,5 +10,6 @@ target_include_directories(odbc_crusher_reporting PUBLIC
 
 target_link_libraries(odbc_crusher_reporting PUBLIC
     odbc_crusher_tests_lib
+    odbc_crusher_discovery
     nlohmann_json::nlohmann_json
 )
