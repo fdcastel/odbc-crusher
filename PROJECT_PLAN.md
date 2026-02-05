@@ -2,7 +2,8 @@
 
 **Version**: 2.0.0  
 **Last Updated**: February 5, 2026  
-**Status**: Phase 6 - Complete ✅ All Core Phases Finished!
+**Status**: Phases 0-9 Complete ✅ All Major Features Implemented!  
+**Repository**: https://github.com/fdcastel/odbc-crusher
 
 ---
 
@@ -13,7 +14,8 @@
 **Language**: C++ (C++17 or later)  
 **Build System**: CMake (3.20+)  
 **Test Framework**: CTest with Google Test (gtest)  
-**Platforms**: Windows, Linux (primary), macOS (secondary)
+**Platforms**: Windows, Linux (primary), macOS (secondary)  
+**GitHub**: https://github.com/fdcastel/odbc-crusher
 
 ---
 

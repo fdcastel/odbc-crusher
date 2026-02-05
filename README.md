@@ -1,13 +1,15 @@
 # ODBC Crusher
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-27%2F27%20passing-brightgreen)]()
+[![CI](https://github.com/fdcastel/odbc-crusher/actions/workflows/ci.yml/badge.svg)](https://github.com/fdcastel/odbc-crusher/actions/workflows/ci.yml)
+[![Release](https://github.com/fdcastel/odbc-crusher/actions/workflows/release.yml/badge.svg)](https://github.com/fdcastel/odbc-crusher/actions/workflows/release.yml)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-blue)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
 
+**Repository**: https://github.com/fdcastel/odbc-crusher
+
 A comprehensive CLI debugging and testing tool for ODBC driver developers written in modern C++.
 
-## 🎉 Project Status: **COMPLETE** (Phases 0-7)
+## 🎉 Project Status: **COMPLETE** (Phases 0-9)
 
 All core phases including **reporting** have been successfully implemented. The application is **fully functional** with beautiful console output and JSON export capabilities!
 
@@ -56,14 +58,19 @@ All core phases including **reporting** have been successfully implemented. The 
 - Date/Time types (DATE with SQL_DATE_STRUCT)
 - NULL value handling (SQL_NULL_DATA indicator)
 
-### Reporting (Phase 7) ⭐ NEW!
-- **Console Reporter**: Beautiful formatted output with:
+### Reporting (Phase 7) ✅
+- **Console Reporter**: ASCII formatted output with:
   - Category-based organization
-  - Pass/fail/skip/error icons (✓/✗/-/!)
-  - Duration formatting (μs, ms, s)
+  - Pass/fail/skip/error icons ([PASS]/[FAIL]/[SKIP]/[ERR!])
+  - Duration formatting (us, ms, s)
   - Verbose mode (`-v`) for detailed diagnostics
   - Summary statistics with percentages
-  - Unicode box-drawing characters
+  - **Driver Information Display**: Shows comprehensive driver info BEFORE tests
+    - Driver name, version, ODBC version
+    - DBMS name and version
+    - SQL conformance levels
+    - All supported data types in formatted table
+    - ODBC function support (52 functions checked)
 - **JSON Reporter**: Structured output for CI/CD:
   - Machine-readable format
   - Complete test details and diagnostics
@@ -75,9 +82,25 @@ All core phases including **reporting** have been successfully implemented. The 
   - 2 = ODBC connection error
   - 3 = Other error
 
+### Transaction Tests (Phase 8) ✅
+- Autocommit mode testing (query and toggle)
+- Manual commit/rollback with `SQLEndTran`
+- Transaction isolation level queries
+- Table creation for transaction testing
+
+### Advanced Features (Phase 9) ✅
+- Cursor types (forward-only, static, keyset, dynamic)
+- Array/bulk parameter binding
+- Asynchronous execution capability
+- Rowset size for block cursors
+- Positioned operations (concurrency control)
+- Statement attribute queries
+
 ## 🚀 Quick Start
 
-### Prerequisites
+### Build from Source
+
+#### Prerequisites
 - CMake 3.20 or higher
 - Console output (default)
 .\build\src\Debug\odbc-crusher.exe "Driver={Your ODBC Driver};..."

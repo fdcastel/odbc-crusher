@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Matches v1.0.0, v2.1.3, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Get version from tag
+      id: get_version
+      run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: ODBC Crusher ${{ github.ref }}
+        draft: false
+        prerelease: false
+        body: |
+          ## ODBC Crusher C++ ${{ steps.get_version.outputs.version }}
+          
+          A comprehensive ODBC driver testing and debugging tool.
+          
+          ### Features
+          - 34+ ODBC driver tests across 6 categories
+          - Driver information discovery (functions, types, capabilities)
+          - Connection, statement, metadata, and data type testing
+          - Transaction and advanced feature testing
+          - Console and JSON output formats
+          - Cross-platform support (Windows, Linux, macOS)
+          
+          ### Installation
+          Download the appropriate binary for your platform below.
+          
+          ### Requirements
+          - ODBC Driver Manager (unixODBC on Linux/macOS, Windows built-in)
+          - ODBC driver(s) you want to test
+          
+          See the [README](https://github.com/fdcastel/odbc-crusher/blob/master/README.md) for usage instructions.
+
+  build-windows:
+    name: Build Windows Release
+    needs: create-release
+    runs-on: windows-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      
+    - name: Build
+      run: cmake --build build --config Release -j 4
+      
+    - name: Package
+      run: |
+        mkdir package
+        copy build\src\Release\odbc-crusher.exe package\
+        Compress-Archive -Path package\* -DestinationPath odbc-crusher-windows-x64.zip
+        
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./odbc-crusher-windows-x64.zip
+        asset_name: odbc-crusher-${{ needs.create-release.outputs.version }}-windows-x64.zip
+        asset_content_type: application/zip
+
+  build-linux:
+    name: Build Linux Release
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y unixodbc unixodbc-dev
+        
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      
+    - name: Build
+      run: cmake --build build --config Release -j 4
+      
+    - name: Package
+      run: |
+        mkdir -p package
+        cp build/src/odbc-crusher package/
+        tar czf odbc-crusher-linux-x64.tar.gz -C package .
+        
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./odbc-crusher-linux-x64.tar.gz
+        asset_name: odbc-crusher-${{ needs.create-release.outputs.version }}-linux-x64.tar.gz
+        asset_content_type: application/gzip
+
+  build-macos:
+    name: Build macOS Release
+    needs: create-release
+    runs-on: macos-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Install dependencies
+      run: brew install unixodbc
+      
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      
+    - name: Build
+      run: cmake --build build --config Release -j 4
+      
+    - name: Package
+      run: |
+        mkdir -p package
+        cp build/src/odbc-crusher package/
+        tar czf odbc-crusher-macos-x64.tar.gz -C package .
+        
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./odbc-crusher-macos-x64.tar.gz
+        asset_name: odbc-crusher-${{ needs.create-release.outputs.version }}-macos-x64.tar.gz
+        asset_content_type: application/gzip

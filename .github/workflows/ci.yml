@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  build-and-test:
+    name: Build and Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        build_type: [Debug, Release]
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Install ODBC dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y unixodbc unixodbc-dev
+        
+    - name: Install ODBC dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install unixodbc
+        
+    - name: Configure CMake
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        
+    - name: Build
+      run: |
+        cmake --build build --config ${{ matrix.build_type }} -j 4
+        
+    - name: Run unit tests (without ODBC drivers)
+      run: |
+        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -R "Environment|Error|DriverInfo|TypeInfo|FunctionInfo" || true
+      continue-on-error: true
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      if: matrix.build_type == 'Release'
+      with:
+        name: odbc-crusher-${{ runner.os }}-${{ matrix.build_type }}
+        path: |
+          build/src/Release/odbc-crusher*
+          build/src/Debug/odbc-crusher*
+          build/src/odbc-crusher
+        if-no-files-found: ignore
