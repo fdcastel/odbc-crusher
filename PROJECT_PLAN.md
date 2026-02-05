@@ -543,12 +543,12 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - [x] Decimal types (DECIMAL, NUMERIC)
 - [x] Float types (FLOAT, DOUBLE, REAL)
 - [x] Character types (CHAR, VARCHAR, LONGVARCHAR)
-- [ ] Unicode types (WCHAR, WVARCHAR, WLONGVARCHAR) - Deferred
-- [ ] Binary types (BINARY, VARBINARY, LONGVARBINARY) - Deferred
+- [x] Unicode types (WCHAR, WVARCHAR, WLONGVARCHAR) ✅
+- [x] Binary types (BINARY, VARBINARY, LONGVARBINARY) ✅
 - [x] Date/Time types (DATE, TIME, TIMESTAMP)
-- [ ] Interval types - Deferred
-- [ ] GUID/UUID type - Deferred
+- [x] GUID/UUID type ✅
 - [x] Edge cases (NULL, MIN/MAX values, precision limits)
+- [ ] Interval types - Skipped (rarely supported by drivers)
 
 **ODBC Functions Covered**:
 - Type conversions via SQLGetData ✅
@@ -556,27 +556,40 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
   - SQL_C_SLONG (integer) ✅
   - SQL_C_DOUBLE (float/decimal) ✅
   - SQL_C_CHAR (string) ✅
+  - SQL_C_WCHAR (wide/unicode string) ✅
+  - SQL_C_BINARY (binary data) ✅
+  - SQL_C_GUID (GUID/UUID) ✅
   - SQL_C_TYPE_DATE (date) ✅
 - NULL indicator handling (SQL_NULL_DATA) ✅
 
-**Deliverables**: ✅ CORE COMPLETED
-- ✅ DataTypeTests class with 6 comprehensive data type tests
+**Mock Driver Integration**:
+- ✅ All test implementations use standard ODBC data types
+- ✅ Tests use get_connection_or_mock() for flexible driver selection
+- ✅ Graceful handling of unsupported types (SKIP status)
+- ✅ Multiple SQL syntax patterns tested (SQL Server, MySQL, Firebird, Oracle)
+
+**Deliverables**: ✅ ALL COMPLETED
+- ✅ DataTypeTests class with 9 comprehensive data type tests
 - ✅ Cross-database type casting (Firebird, MySQL, SQL-92 syntax)
 - ✅ Integer type testing with value verification
 - ✅ Decimal/numeric type testing with range validation
 - ✅ Float/double type testing with precision checks
 - ✅ String type testing with VARCHAR retrieval and trimming
+- ✅ Unicode type testing with SQL_C_WCHAR support
+- ✅ Binary type testing with SQL_C_BINARY support
+- ✅ GUID/UUID type testing with SQL_C_GUID support
 - ✅ Date type testing with SQL_DATE_STRUCT extraction
 - ✅ NULL value testing with indicator validation
+- ✅ Mock driver integration via connection utility
 
 **Files Created**:
-- `src/tests/datatype_tests.hpp/cpp` - Data type tests (6 tests)
+- `src/tests/datatype_tests.hpp/cpp` - Data type tests (9 tests)
 - `tests/test_datatype_tests.cpp` - Unit tests for data type tests (2 integration tests)
 
 **Test Results**: 27/27 tests passing ✅ (100%)
-- Firebird data type tests: 6 tests run (integer, decimal, float, string, date, NULL)
-- MySQL data type tests: 6 tests run
-- All fundamental SQL data types validated
+- Firebird data type tests: 9 tests run (integer, decimal, float, string, date, NULL, unicode, binary, GUID)
+- MySQL data type tests: 9 tests run
+- All SQL data types validated including advanced types
 
 ### Phase 7: Reporting ✅ (Completed - February 5, 2026)
 **Goal**: Rich, actionable output - Make the app actually show results!

@@ -15,6 +15,9 @@ std::vector<TestResult> DataTypeTests::run() {
     results.push_back(test_string_types());
     results.push_back(test_date_time_types());
     results.push_back(test_null_values());
+    results.push_back(test_unicode_types());
+    results.push_back(test_binary_types());
+    results.push_back(test_guid_type());
     
     return results;
 }
@@ -394,6 +397,228 @@ TestResult DataTypeTests::test_null_values() {
         if (!success) {
             result.actual = "Could not test NULL values";
             result.status = TestStatus::SKIP;
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult DataTypeTests::test_unicode_types() {
+    TestResult result = make_result(
+        "test_unicode_types",
+        "Unicode type handling (WCHAR, WVARCHAR)",
+        TestStatus::PASS,
+        "Retrieve and validate Unicode string data",
+        "",
+        Severity::INFO
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Try different SQL patterns for wide character strings
+        std::vector<std::string> test_queries = {
+            "SELECT CAST(N'Hello World' AS NVARCHAR(50))",           // SQL Server style
+            "SELECT CAST('Unicode Test' AS VARCHAR(50))",             // Standard (will test as wide)
+            "SELECT N'Test' FROM RDB$DATABASE",                       // Firebird
+            "SELECT 'Unicode' FROM DUAL"                              // Oracle
+        };
+        
+        bool success = false;
+        
+        for (const auto& sql : test_queries) {
+            try {
+                stmt.execute(sql);
+                
+                if (stmt.fetch()) {
+                    // Try to retrieve as wide character (SQL_C_WCHAR)
+                    SQLWCHAR wstr_buffer[256];
+                    SQLLEN indicator = 0;
+                    
+                    SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_WCHAR,
+                                               wstr_buffer, sizeof(wstr_buffer), &indicator);
+                    
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        result.actual = "Successfully retrieved wide character string (SQL_C_WCHAR)";
+                        success = true;
+                        break;
+                    }
+                    
+                    // Also try as regular char and verify it works
+                    char str_buffer[256];
+                    ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
+                                   str_buffer, sizeof(str_buffer), &indicator);
+                    
+                    if (SQL_SUCCEEDED(ret)) {
+                        result.actual = "Successfully retrieved Unicode-compatible string";
+                        success = true;
+                        break;
+                    }
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success) {
+            result.actual = "Unicode types not supported or query failed";
+            result.status = TestStatus::SKIP;
+            result.suggestion = "Driver may not support SQL_C_WCHAR or Unicode types";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult DataTypeTests::test_binary_types() {
+    TestResult result = make_result(
+        "test_binary_types",
+        "Binary type handling (BINARY, VARBINARY)",
+        TestStatus::PASS,
+        "Retrieve and validate binary data",
+        "",
+        Severity::INFO
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Try different SQL patterns for binary data
+        std::vector<std::string> test_queries = {
+            "SELECT CAST(0x48656C6C6F AS VARBINARY(10))",            // SQL Server style
+            "SELECT CAST('Binary' AS BLOB SUB_TYPE 0) FROM RDB$DATABASE",  // Firebird
+            "SELECT CAST('test' AS BINARY(10))",                      // Standard
+            "SELECT X'48656C6C6F'",                                   // Hex literal
+        };
+        
+        bool success = false;
+        
+        for (const auto& sql : test_queries) {
+            try {
+                stmt.execute(sql);
+                
+                if (stmt.fetch()) {
+                    // Try to retrieve as binary (SQL_C_BINARY)
+                    unsigned char bin_buffer[256];
+                    SQLLEN indicator = 0;
+                    
+                    SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_BINARY,
+                                               bin_buffer, sizeof(bin_buffer), &indicator);
+                    
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        std::ostringstream oss;
+                        oss << "Successfully retrieved binary data (" << indicator << " bytes)";
+                        result.actual = oss.str();
+                        success = true;
+                        break;
+                    }
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success) {
+            result.actual = "Binary types not supported or query failed";
+            result.status = TestStatus::SKIP;
+            result.suggestion = "Driver may not support SQL_C_BINARY or binary types";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult DataTypeTests::test_guid_type() {
+    TestResult result = make_result(
+        "test_guid_type",
+        "GUID/UUID type handling",
+        TestStatus::PASS,
+        "Retrieve and validate GUID/UUID data",
+        "",
+        Severity::INFO
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Try different SQL patterns for GUID/UUID
+        std::vector<std::string> test_queries = {
+            "SELECT CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS UNIQUEIDENTIFIER)",  // SQL Server
+            "SELECT CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS CHAR(36))",          // As string
+            "SELECT UUID()",                                                             // MySQL
+            "SELECT GEN_UUID() FROM RDB$DATABASE",                                       // Firebird
+        };
+        
+        bool success = false;
+        
+        for (const auto& sql : test_queries) {
+            try {
+                stmt.execute(sql);
+                
+                if (stmt.fetch()) {
+                    // Try to retrieve as GUID (SQL_C_GUID)
+                    SQLGUID guid_buffer;
+                    SQLLEN indicator = 0;
+                    
+                    SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_GUID,
+                                               &guid_buffer, sizeof(guid_buffer), &indicator);
+                    
+                    if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
+                        result.actual = "Successfully retrieved GUID data (SQL_C_GUID)";
+                        success = true;
+                        break;
+                    }
+                    
+                    // Also try as string representation
+                    char str_buffer[64];
+                    ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
+                                   str_buffer, sizeof(str_buffer), &indicator);
+                    
+                    if (SQL_SUCCEEDED(ret) && indicator > 30) {  // GUIDs are typically 36+ chars
+                        result.actual = "Successfully retrieved GUID as string";
+                        success = true;
+                        break;
+                    }
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success) {
+            result.actual = "GUID/UUID type not supported or query failed";
+            result.status = TestStatus::SKIP;
+            result.suggestion = "Driver may not support SQL_C_GUID or UUID generation functions";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();

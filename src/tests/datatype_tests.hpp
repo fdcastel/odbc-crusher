@@ -20,6 +20,10 @@ private:
     TestResult test_string_types();
     TestResult test_date_time_types();
     TestResult test_null_values();
+    TestResult test_unicode_types();
+    TestResult test_binary_types();
+    TestResult test_guid_type();
+    // Note: Interval types are rarely supported, skipping for now
 };
 
 } // namespace odbc_crusher::tests
