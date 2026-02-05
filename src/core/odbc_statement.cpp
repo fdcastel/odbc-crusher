@@ -49,10 +49,13 @@ bool OdbcStatement::fetch() {
 
 void OdbcStatement::close_cursor() {
     SQLRETURN ret = SQLCloseCursor(handle_);
-    if (ret != SQL_ERROR) {  // Allow SQL_SUCCESS_WITH_INFO
+    if (SQL_SUCCEEDED(ret)) {
         return;
     }
-    check_odbc_result(ret, SQL_HANDLE_STMT, handle_, "SQLCloseCursor");
+    // 24000 = "Invalid cursor state" is expected when no cursor is open
+    if (ret == SQL_ERROR) {
+        check_odbc_result(ret, SQL_HANDLE_STMT, handle_, "SQLCloseCursor");
+    }
 }
 
 } // namespace odbc_crusher::core

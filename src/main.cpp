@@ -2,7 +2,6 @@
 #include <memory>
 #include <CLI/CLI.hpp>
 #include "odbc_crusher/version.hpp"
-#include "cli/cli_parser.hpp"
 #include "core/odbc_environment.hpp"
 #include "core/odbc_connection.hpp"
 #include "core/odbc_error.hpp"
@@ -22,6 +21,36 @@
 #include "reporting/json_reporter.hpp"
 
 using namespace odbc_crusher;
+
+namespace {
+
+void tally_results(const std::vector<tests::TestResult>& results,
+                   size_t& total_tests, size_t& total_passed,
+                   size_t& total_failed, size_t& total_skipped,
+                   size_t& total_errors) {
+    for (const auto& r : results) {
+        total_tests++;
+        switch (r.status) {
+            case tests::TestStatus::PASS: total_passed++; break;
+            case tests::TestStatus::FAIL: total_failed++; break;
+            case tests::TestStatus::SKIP: total_skipped++; break;
+            case tests::TestStatus::ERR:  total_errors++; break;
+        }
+    }
+}
+
+template<typename T>
+void run_test_category(T& test_suite, reporting::Reporter& reporter,
+                       size_t& total_tests, size_t& total_passed,
+                       size_t& total_failed, size_t& total_skipped,
+                       size_t& total_errors) {
+    auto results = test_suite.run();
+    reporter.report_category(test_suite.category_name(), results);
+    tally_results(results, total_tests, total_passed, total_failed,
+                  total_skipped, total_errors);
+}
+
+} // anonymous namespace
 
 int main(int argc, char** argv) {
     CLI::App app{"ODBC Crusher - ODBC Driver Testing Tool", "odbc-crusher"};
@@ -100,149 +129,32 @@ int main(int argc, char** argv) {
         auto overall_start = std::chrono::high_resolution_clock::now();
         
         // Run all test categories
-        {
-            tests::ConnectionTests conn_tests(conn);
-            auto results = conn_tests.run();
-            reporter->report_category(conn_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::ConnectionTests conn_tests(conn);
+        run_test_category(conn_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
-        {
-            tests::StatementTests stmt_tests(conn);
-            auto results = stmt_tests.run();
-            reporter->report_category(stmt_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::StatementTests stmt_tests(conn);
+        run_test_category(stmt_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
-        {
-            tests::MetadataTests meta_tests(conn);
-            auto results = meta_tests.run();
-            reporter->report_category(meta_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::MetadataTests meta_tests(conn);
+        run_test_category(meta_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
-        {
-            tests::DataTypeTests type_tests(conn);
-            auto results = type_tests.run();
-            reporter->report_category(type_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::DataTypeTests type_tests(conn);
+        run_test_category(type_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
-        {
-            tests::TransactionTests txn_tests(conn);
-            auto results = txn_tests.run();
-            reporter->report_category(txn_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::TransactionTests txn_tests(conn);
+        run_test_category(txn_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
-        {
-            tests::AdvancedTests adv_tests(conn);
-            auto results = adv_tests.run();
-            reporter->report_category(adv_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::AdvancedTests adv_tests(conn);
+        run_test_category(adv_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
-        {
-            tests::BufferValidationTests buffer_tests(conn);
-            auto results = buffer_tests.run();
-            reporter->report_category(buffer_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::BufferValidationTests buffer_tests(conn);
+        run_test_category(buffer_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
-        {
-            tests::ErrorQueueTests error_tests(conn);
-            auto results = error_tests.run();
-            reporter->report_category(error_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::ErrorQueueTests error_tests(conn);
+        run_test_category(error_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
-        {
-            tests::StateMachineTests state_tests(conn);
-            auto results = state_tests.run();
-            reporter->report_category(state_tests.category_name(), results);
-            
-            for (const auto& r : results) {
-                total_tests++;
-                switch (r.status) {
-                    case tests::TestStatus::PASS: total_passed++; break;
-                    case tests::TestStatus::FAIL: total_failed++; break;
-                    case tests::TestStatus::SKIP: total_skipped++; break;
-                    case tests::TestStatus::ERR: total_errors++; break;
-                }
-            }
-        }
+        tests::StateMachineTests state_tests(conn);
+        run_test_category(state_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
         auto overall_end = std::chrono::high_resolution_clock::now();
         auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(

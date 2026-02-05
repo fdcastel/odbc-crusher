@@ -1,22 +1,13 @@
-# CLI library
-add_library(odbc_crusher_cli
-    cli_parser.cpp
-    config.cpp
-)
+# CLI library (placeholder for future CLI utilities)
+add_library(odbc_crusher_cli INTERFACE)
 
 target_include_directories(odbc_crusher_cli
-    PUBLIC
+    INTERFACE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(odbc_crusher_cli
-    PRIVATE
+    INTERFACE
         CLI11::CLI11
-        project_warnings
-        project_options
 )
-
-target_compile_features(odbc_crusher_cli PUBLIC cxx_std_17)
