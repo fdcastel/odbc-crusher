@@ -64,6 +64,9 @@ struct DriverConfig {
     };
     BufferValidationMode buffer_validation = BufferValidationMode::Strict;
     
+    // Phase 10.2: Error queue management
+    int error_count = 1;  // Number of diagnostic records to generate per error
+    
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
     

@@ -208,6 +208,11 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         config.buffer_validation = DriverConfig::BufferValidationMode::Strict;
     }
     
+    // Phase 10.2: Error count
+    config.error_count = get_int_value(pairs, "errorcount", 1);
+    if (config.error_count < 1) config.error_count = 1;
+    if (config.error_count > 10) config.error_count = 10;  // Max 10 errors
+    
     return config;
 }
 

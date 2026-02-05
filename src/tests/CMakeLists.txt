@@ -8,6 +8,7 @@ add_library(odbc_crusher_tests_lib
     transaction_tests.cpp
     advanced_tests.cpp
     buffer_validation_tests.cpp
+    error_queue_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests_lib
