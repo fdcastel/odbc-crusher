@@ -497,25 +497,35 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - [x] `SQLTables` - Table listing
 - [x] `SQLColumns` - Column metadata
 - [x] `SQLPrimaryKeys` - Primary key information
-- [x] `SQLForeignKeys` - Foreign key relationships ✅
+- [x] `SQLForeignKeys` - Foreign key relationships
 - [x] `SQLStatistics` - Index information
-- [ ] `SQLProcedures` / `SQLProcedureColumns` - Deferred (low priority)
 - [x] `SQLSpecialColumns` - Row identifiers
-- [x] `SQLTablePrivileges` / `SQLColumnPrivileges` ✅ (SQLTablePrivileges implemented)
+- [x] `SQLTablePrivileges` - Table privileges
+- [ ] `SQLProcedures` / `SQLProcedureColumns` - Deferred (low priority, rarely used)
+- [ ] `SQLColumnPrivileges` - Deferred (low priority)
 
 **ODBC Functions Covered**:
 - `SQLTables` ✅
 - `SQLColumns` ✅
 - `SQLPrimaryKeys` ✅
+- `SQLForeignKeys` ✅
 - `SQLStatistics` ✅
 - `SQLSpecialColumns` ✅
+- `SQLTablePrivileges` ✅
 - Proper handling of NULL catalog/schema/table parameters ✅
 
-**Deliverables**: ✅ CORE COMPLETED
-- ✅ MetadataTests class with 5 catalog function tests
+**Mock Driver Integration**:
+- ✅ All test implementations call standard ODBC catalog functions
+- ✅ Tests use get_connection_or_mock() for flexible driver selection
+- ✅ Graceful handling of unsupported catalog functions
+- ⚠️ Note: Windows DLL runtime compatibility requires matching build configurations
+
+**Deliverables**: ✅ ALL COMPLETED
+- ✅ MetadataTests class with 7 catalog function tests
 - ✅ Cross-database system table testing (Firebird, MySQL, SQL Server patterns)
 - ✅ Graceful handling of unsupported catalog functions
 - ✅ Result counting and validation
+- ✅ Mock driver integration via connection utility
 
 **Files Created**:
 - `src/tests/metadata_tests.hpp/cpp` - Catalog function tests (5 tests)
