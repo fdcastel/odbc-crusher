@@ -7,9 +7,55 @@ on:
     branches: [ main, master, develop ]
 
 jobs:
-  build-and-test:
-    name: Build and Test on ${{ matrix.os }}
+  build-mock-driver:
+    name: Build Mock ODBC Driver on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]  # Mock driver currently Windows-only
+        build_type: [Debug, Release]
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Configure Mock Driver
+      run: |
+        cd mock-driver
+        cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        
+    - name: Build Mock Driver
+      run: |
+        cd mock-driver
+        cmake --build build --config ${{ matrix.build_type }} -j 4
+        
+    - name: Run Mock Driver Tests
+      run: |
+        cd mock-driver/build
+        ctest -C ${{ matrix.build_type }} --output-on-failure
+        
+    - name: Upload Mock Driver Artifacts
+      uses: actions/upload-artifact@v4
+      if: matrix.build_type == 'Release'
+      with:
+        name: mock-odbc-driver-${{ runner.os }}-${{ matrix.build_type }}
+        path: |
+          mock-driver/build/Release/mockodbc.dll
+          mock-driver/build/Release/mockodbc.lib
+          mock-driver/install/*.ps1
+          mock-driver/install/*.reg
+        if-no-files-found: ignore
+  
+  build-and-test:
+    name: Build and Test ODBC Crusher on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: build-mock-driver  # Run after mock driver builds
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +94,45 @@ jobs:
     - name: Run unit tests (without ODBC drivers)
       run: |
         ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -R "Environment|Error|DriverInfo|TypeInfo|FunctionInfo" || true
+      continue-on-error: true
+      
+    - name: Download Mock Driver (Windows)
+      if: runner.os == 'Windows' && matrix.build_type == 'Release'
+      uses: actions/download-artifact@v4
+      with:
+        name: mock-odbc-driver-Windows-Release
+        path: mock-driver-artifact
+        
+    - name: Register Mock Driver and Run Tests (Windows)
+      if: runner.os == 'Windows' && matrix.build_type == 'Release'
+      shell: powershell
+      run: |
+        # Copy mock driver DLL
+        Copy-Item mock-driver-artifact\mockodbc.dll -Destination C:\Windows\System32\
+        
+        # Register driver
+        $regContent = @"
+        Windows Registry Editor Version 5.00
+
+        [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers]
+        "Mock ODBC Driver"="Installed"
+
+        [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\Mock ODBC Driver]
+        "Driver"="C:\\Windows\\System32\\mockodbc.dll"
+        "Setup"="C:\\Windows\\System32\\mockodbc.dll"
+        "APILevel"="2"
+        "ConnectFunctions"="YYY"
+        "DriverODBCVer"="03.80"
+        "FileUsage"="0"
+        "SQLLevel"="1"
+        "@
+        $regContent | Out-File -FilePath mock-driver.reg -Encoding ASCII
+        reg import mock-driver.reg
+        
+        # Set environment and run tests
+        $env:FIREBIRD_ODBC_CONNECTION = "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;"
+        $env:MYSQL_ODBC_CONNECTION = $env:FIREBIRD_ODBC_CONNECTION
+        ctest --test-dir build -C Release --output-on-failure || true
       continue-on-error: true
       
     - name: Upload build artifacts
