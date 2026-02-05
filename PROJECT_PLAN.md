@@ -44,6 +44,44 @@ The original Python/pyodbc implementation taught us critical lessons that inform
 
 4. **Driver Developer Target**: ODBC drivers are written in C/C++ - tool should match
 
+### Critical Development Principle: Mock Driver First! 🎯
+
+**IMPORTANT**: With the completion of the Mock ODBC Driver v1.0, our development philosophy has changed:
+
+✅ **All tests MUST work with the Mock ODBC Driver**
+- NO tests should require real Firebird/MySQL database installations
+- The mock driver eliminates database dependencies from our development process
+- Tests can configure mock driver behavior via connection string parameters
+- Multiple test paths can be validated using different mock configurations
+
+❌ **Tests that require real databases are WRONG and must be refactored**
+- Real databases are for final validation only, not development
+- If a test only works with real databases, it needs to be rewritten
+- The mock driver supports configurable behaviors for comprehensive testing
+
+**Benefits**:
+- Fast test execution (no network, no database overhead)
+- Predictable, repeatable results
+- Test error conditions easily (FailOn parameter)
+- CI/CD friendly (no database setup required)
+- Parallel test execution without conflicts
+
+**Connection String Pattern**:
+```cpp
+// Mock driver connection - configurable behavior
+const char* conn_str = 
+    "Driver={Mock ODBC Driver};"
+    "Mode=Success;"           // or Failure, Partial, Random
+    "Catalog=Default;"         // or Empty, Large, Custom
+    "ResultSetSize=100;"       // Number of rows to return
+    "FailOn=SQLExecute;"      // Test error injection
+    "ErrorCode=42000;";       // SQLSTATE to return
+
+// Real databases - final validation only
+const char* firebird_conn = "Driver={Firebird/InterBase(r) driver};...";
+const char* mysql_conn = "Driver={MySQL ODBC 8.0 Driver};...";
+```
+
 ### Critical Knowledge Preserved
 
 #### Rule #1: DO NOT TRUST ANYTHING THE ODBC DRIVER TELLS YOU
