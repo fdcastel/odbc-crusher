@@ -114,15 +114,16 @@ return static_cast<T*>(h);
 - Does not affect driver's primary use cases
 
 ### ✅ Future Enhancements (Optional)
-- [ ] Investigate remaining test integration issues
-  - Not blocking for driver functionality
-  - Integration layer issue, not driver code
-  
-- [ ] **Add error injection tests**
+- [x] **Add error injection tests** ✅ (commit 8b16a77)
   - Test FailOn parameter
   - Test various SQLSTATE codes
   - Test connection limits
   - Test timeout behavior
+  - All 5 tests passing
+  
+- [ ] Investigate remaining test integration issues
+  - Not blocking for driver functionality
+  - Integration layer issue, not driver code
 
 - [ ] **Update CI/CD**
   - Add mock driver build to CI
