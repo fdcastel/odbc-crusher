@@ -3,6 +3,7 @@ add_subdirectory(core)
 add_subdirectory(discovery)
 add_subdirectory(tests)
 add_subdirectory(cli)
+add_subdirectory(reporting)
 
 # Main executable
 add_executable(odbc-crusher main.cpp)
@@ -10,6 +11,9 @@ add_executable(odbc-crusher main.cpp)
 target_link_libraries(odbc-crusher PRIVATE
     odbc_crusher_core
     odbc_crusher_cli
+    odbc_crusher_discovery
+    odbc_crusher_tests_lib
+    odbc_crusher_reporting
     CLI11::CLI11
 )
 

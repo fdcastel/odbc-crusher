@@ -1,0 +1,242 @@
+{
+  "categories": [
+    {
+      "name": "Connection Tests",
+      "tests": [
+        {
+          "actual": "Database name: bpcom_test",
+          "duration_us": 1251,
+          "expected": "Can retrieve connection information",
+          "function": "SQLGetInfo",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_connection_info"
+        },
+        {
+          "actual": "Driver: myodbc9w.dll",
+          "duration_us": 3,
+          "expected": "Connection is active and driver name is retrievable",
+          "function": "SQLGetInfo(SQL_DRIVER_NAME)",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_connection_string_format"
+        },
+        {
+          "actual": "Successfully allocated 3 statement handles",
+          "duration_us": 38,
+          "expected": "Can allocate multiple statement handles on one connection",
+          "function": "SQLAllocHandle(STMT)",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_multiple_statements"
+        },
+        {
+          "actual": "Autocommit: ON",
+          "duration_us": 26,
+          "expected": "Can get/set connection attributes",
+          "function": "SQLGetConnectAttr",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_connection_attributes"
+        },
+        {
+          "actual": "Connection timeout: 0 seconds",
+          "duration_us": 88,
+          "expected": "Can query connection timeout setting",
+          "function": "SQLGetConnectAttr(SQL_ATTR_CONNECTION_TIMEOUT)",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_connection_timeout"
+        }
+      ]
+    },
+    {
+      "name": "Statement Tests",
+      "tests": [
+        {
+          "actual": "Successfully executed: SELECT 1",
+          "duration_us": 4264,
+          "expected": "Execute a simple SELECT query",
+          "function": "SQLExecDirect",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_simple_query"
+        },
+        {
+          "actual": "Successfully prepared and executed query",
+          "duration_us": 3006,
+          "expected": "Prepare and execute a statement",
+          "function": "SQLPrepare/SQLExecute",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_prepared_statement"
+        },
+        {
+          "actual": "Parameter binding successful, retrieved value: 42",
+          "duration_us": 3771,
+          "expected": "Bind parameters to a prepared statement",
+          "function": "SQLBindParameter",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_parameter_binding"
+        },
+        {
+          "actual": "Successfully fetched result row",
+          "duration_us": 1294,
+          "expected": "Fetch results from a query",
+          "function": "SQLFetch",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_result_fetching"
+        },
+        {
+          "actual": "Found 1 column(s), type: -5",
+          "duration_us": 974,
+          "expected": "Get column metadata from result set",
+          "function": "SQLNumResultCols/SQLDescribeCol",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_column_metadata"
+        },
+        {
+          "actual": "Statement reused successfully",
+          "duration_us": 1652,
+          "expected": "Reuse a statement handle multiple times",
+          "function": "SQLCloseCursor/Reexecute",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_statement_reuse"
+        },
+        {
+          "actual": "SQLMoreResults callable (returned SQL_NO_DATA)",
+          "duration_us": 2488,
+          "expected": "Check if driver supports multiple result sets",
+          "function": "SQLMoreResults",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_multiple_result_sets"
+        }
+      ]
+    },
+    {
+      "name": "Metadata/Catalog Tests",
+      "tests": [
+        {
+          "actual": "Found 100 table(s)",
+          "duration_us": 2844,
+          "expected": "List tables in the database",
+          "function": "SQLTables",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_tables_catalog"
+        },
+        {
+          "actual": "SQLColumns callable but no system tables accessible",
+          "duration_us": 2933,
+          "expected": "List columns from system tables",
+          "function": "SQLColumns",
+          "severity": "INFO",
+          "status": "SKIP",
+          "test_name": "test_columns_catalog"
+        },
+        {
+          "actual": "SQLPrimaryKeys callable (no PKs found in test tables)",
+          "duration_us": 1289,
+          "expected": "Query primary key information",
+          "function": "SQLPrimaryKeys",
+          "severity": "INFO",
+          "status": "SKIP",
+          "test_name": "test_primary_keys"
+        },
+        {
+          "actual": "SQLStatistics not tested",
+          "duration_us": 412,
+          "expected": "Query index/statistics information",
+          "function": "SQLStatistics",
+          "severity": "INFO",
+          "status": "SKIP",
+          "test_name": "test_statistics"
+        },
+        {
+          "actual": "SQLSpecialColumns callable (no special columns)",
+          "duration_us": 2067,
+          "expected": "Query special columns (row identifiers)",
+          "function": "SQLSpecialColumns",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_special_columns"
+        }
+      ]
+    },
+    {
+      "name": "Data Type Tests",
+      "tests": [
+        {
+          "actual": "Successfully retrieved INTEGER value: 42",
+          "duration_us": 1269,
+          "expected": "Test SMALLINT, INTEGER, BIGINT types",
+          "function": "Integer type handling",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_integer_types"
+        },
+        {
+          "actual": "Successfully retrieved DECIMAL value: 123.45",
+          "duration_us": 906,
+          "expected": "Test DECIMAL, NUMERIC types",
+          "function": "Decimal/Numeric type handling",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_decimal_types"
+        },
+        {
+          "actual": "Successfully retrieved DOUBLE value: 3.14159",
+          "duration_us": 1233,
+          "expected": "Test FLOAT, DOUBLE, REAL types",
+          "function": "Float/Double type handling",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_float_types"
+        },
+        {
+          "actual": "Successfully retrieved VARCHAR value: Hello, ODBC!",
+          "duration_us": 809,
+          "expected": "Test CHAR, VARCHAR types",
+          "function": "String type handling",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_string_types"
+        },
+        {
+          "actual": "Successfully retrieved DATE: 2026-2-5",
+          "duration_us": 799,
+          "expected": "Test DATE, TIME, TIMESTAMP types",
+          "function": "Date/Time type handling",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_date_time_types"
+        },
+        {
+          "actual": "Successfully detected NULL value (indicator = SQL_NULL_DATA)",
+          "duration_us": 873,
+          "expected": "Test NULL value retrieval and indicator",
+          "function": "NULL value handling",
+          "severity": "INFO",
+          "status": "PASS",
+          "test_name": "test_null_values"
+        }
+      ]
+    }
+  ],
+  "connection_string": "Driver={MySQL ODBC 9.6 Unicode Driver};Server=SRV-MYSQL;Database=bpcom_test;UID=root;PWD=masterkey;",
+  "summary": {
+    "errors": 0,
+    "failed": 0,
+    "pass_rate": 86.95652173913044,
+    "passed": 20,
+    "skipped": 3,
+    "total_duration_us": 36047,
+    "total_tests": 23
+  },
+  "timestamp": 1770263792
+}
