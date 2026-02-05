@@ -2,6 +2,7 @@
 #include "discovery/type_info.hpp"
 #include "core/odbc_environment.hpp"
 #include "core/odbc_connection.hpp"
+#include "mock_connection.hpp"
 #include <cstdlib>
 #include <iostream>
 
@@ -16,11 +17,9 @@ protected:
     std::unique_ptr<core::OdbcEnvironment> env;
 };
 
-TEST_F(TypeInfoTest, CollectFirebirdTypes) {
-    const char* conn_str = std::getenv("FIREBIRD_ODBC_CONNECTION");
-    if (!conn_str) {
-        GTEST_SKIP() << "FIREBIRD_ODBC_CONNECTION not set";
-    }
+TEST_F(TypeInfoTest, CollectMockDriverTypes) {
+    // Use mock driver - no real database required!
+    const char* conn_str = test::get_mock_connection();
     
     core::OdbcConnection conn(*env);
     conn.connect(conn_str);
@@ -36,11 +35,9 @@ TEST_F(TypeInfoTest, CollectFirebirdTypes) {
     std::cout << info.format_summary() << "\n";
 }
 
-TEST_F(TypeInfoTest, CollectMySQLTypes) {
-    const char* conn_str = std::getenv("MYSQL_ODBC_CONNECTION");
-    if (!conn_str) {
-        GTEST_SKIP() << "MYSQL_ODBC_CONNECTION not set";
-    }
+TEST_F(TypeInfoTest, CollectWithDifferentResultSizes) {
+    // Test with different result set sizes using mock driver
+    std::string conn_str = test::get_mock_connection_with_size(50);
     
     core::OdbcConnection conn(*env);
     conn.connect(conn_str);
@@ -48,10 +45,11 @@ TEST_F(TypeInfoTest, CollectMySQLTypes) {
     discovery::TypeInfo info(conn);
     EXPECT_NO_THROW(info.collect());
     
-    // MySQL MUST support SQLGetTypeInfo - it's a core ODBC function
-    EXPECT_GT(info.count(), 0) << "MySQL driver should return data types via SQLGetTypeInfo";
-    std::cout << "Found " << info.count() << " MySQL data types\n";
+    // Mock driver should return type information
+    EXPECT_GT(info.count(), 0) << "Mock driver should return data types via SQLGetTypeInfo";
+    std::cout << "Found " << info.count() << " data types with ResultSetSize=50\n";
     
     // Print summary
     std::cout << info.format_summary() << "\n";
 }
+
