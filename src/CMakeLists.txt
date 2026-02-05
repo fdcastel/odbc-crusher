@@ -1,6 +1,7 @@
 # Add subdirectories for each component
 add_subdirectory(core)
 add_subdirectory(discovery)
+add_subdirectory(tests)
 add_subdirectory(cli)
 
 # Main executable

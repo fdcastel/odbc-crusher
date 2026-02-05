@@ -7,6 +7,7 @@ add_executable(odbc_crusher_tests
     test_driver_info.cpp
     test_type_info.cpp
     test_function_info.cpp
+    test_connection_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE
@@ -17,6 +18,7 @@ target_include_directories(odbc_crusher_tests PRIVATE
 target_link_libraries(odbc_crusher_tests PRIVATE
     odbc_crusher_core
     odbc_crusher_discovery
+    odbc_crusher_tests_lib
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
