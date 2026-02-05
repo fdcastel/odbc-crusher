@@ -37,8 +37,14 @@ bool OdbcStatement::fetch() {
         return false;
     }
     
+    // Allow SQL_SUCCESS_WITH_INFO (warnings)
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+        return true;
+    }
+    
+    // Other errors
     check_odbc_result(ret, SQL_HANDLE_STMT, handle_, "SQLFetch");
-    return true;
+    return false;  // Should not reach here
 }
 
 void OdbcStatement::close_cursor() {
