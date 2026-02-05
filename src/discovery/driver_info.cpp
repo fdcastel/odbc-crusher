@@ -85,6 +85,35 @@ void DriverInfo::collect() {
     if (auto procedures = get_info_string(SQL_PROCEDURES)) {
         info_map_["Procedures Support"] = *procedures;
     }
+    
+    // Collect fields needed by get_properties()
+    if (auto odbc_ver = get_info_string(SQL_ODBC_VER)) {
+        info_map_["ODBC Version"] = *odbc_ver;
+    }
+    if (auto db_name = get_info_string(SQL_DATABASE_NAME)) {
+        info_map_["Database Name"] = *db_name;
+    }
+    if (auto srv_name = get_info_string(SQL_SERVER_NAME)) {
+        info_map_["Server Name"] = *srv_name;
+    }
+    if (auto usr_name = get_info_string(SQL_USER_NAME)) {
+        info_map_["User Name"] = *usr_name;
+    }
+    if (auto cat_term = get_info_string(SQL_CATALOG_TERM)) {
+        info_map_["Catalog Term"] = *cat_term;
+    }
+    if (auto sch_term = get_info_string(SQL_SCHEMA_TERM)) {
+        info_map_["Schema Term"] = *sch_term;
+    }
+    if (auto tbl_term = get_info_string(SQL_TABLE_TERM)) {
+        info_map_["Table Term"] = *tbl_term;
+    }
+    if (auto proc_term = get_info_string(SQL_PROCEDURE_TERM)) {
+        info_map_["Procedure Term"] = *proc_term;
+    }
+    if (auto ident_quote = get_info_string(SQL_IDENTIFIER_QUOTE_CHAR)) {
+        info_map_["Identifier Quote Char"] = *ident_quote;
+    }
 }
 
 std::optional<std::string> DriverInfo::get_info_string(SQLUSMALLINT info_type) {
@@ -134,32 +163,32 @@ DriverInfo::Properties DriverInfo::get_properties() const {
     props.sql_conformance = sql_conformance_.value_or("");
     
     // Get ODBC version from driver manager
-    auto it = info_map_.find("ODBC_VER");
+    auto it = info_map_.find("ODBC Version");
     props.odbc_ver = (it != info_map_.end()) ? it->second : "";
     
     // Get additional info from the map
-    it = info_map_.find("DATABASE_NAME");
+    it = info_map_.find("Database Name");
     props.database_name = (it != info_map_.end()) ? it->second : "";
     
-    it = info_map_.find("SERVER_NAME");
+    it = info_map_.find("Server Name");
     props.server_name = (it != info_map_.end()) ? it->second : "";
     
-    it = info_map_.find("USER_NAME");
+    it = info_map_.find("User Name");
     props.user_name = (it != info_map_.end()) ? it->second : "";
     
-    it = info_map_.find("CATALOG_TERM");
+    it = info_map_.find("Catalog Term");
     props.catalog_term = (it != info_map_.end()) ? it->second : "";
     
-    it = info_map_.find("SCHEMA_TERM");
+    it = info_map_.find("Schema Term");
     props.schema_term = (it != info_map_.end()) ? it->second : "";
     
-    it = info_map_.find("TABLE_TERM");
+    it = info_map_.find("Table Term");
     props.table_term = (it != info_map_.end()) ? it->second : "";
     
-    it = info_map_.find("PROCEDURE_TERM");
+    it = info_map_.find("Procedure Term");
     props.procedure_term = (it != info_map_.end()) ? it->second : "";
     
-    it = info_map_.find("IDENTIFIER_QUOTE_CHAR");
+    it = info_map_.find("Identifier Quote Char");
     props.identifier_quote_char = (it != info_map_.end()) ? it->second : "";
     
     return props;
