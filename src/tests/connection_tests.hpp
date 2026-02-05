@@ -19,6 +19,7 @@ private:
     TestResult test_connection_string_format();
     TestResult test_multiple_statements();
     TestResult test_connection_attributes();
+    TestResult test_connection_pooling();
 };
 
 } // namespace odbc_crusher::tests

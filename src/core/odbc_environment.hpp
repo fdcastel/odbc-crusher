@@ -24,6 +24,7 @@ public:
     OdbcEnvironment& operator=(OdbcEnvironment&& other) noexcept;
     
     SQLHENV get_handle() const noexcept { return handle_; }
+    SQLHENV get() const noexcept { return handle_; } // Alias for consistency
     
 private:
     SQLHENV handle_ = SQL_NULL_HENV;

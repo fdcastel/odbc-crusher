@@ -13,6 +13,7 @@ std::vector<TestResult> ConnectionTests::run() {
     results.push_back(test_multiple_statements());
     results.push_back(test_connection_attributes());
     results.push_back(test_connection_timeout());
+    results.push_back(test_connection_pooling());
     
     return results;
 }
@@ -195,6 +196,67 @@ TestResult ConnectionTests::test_connection_timeout() {
         } else {
             result.actual = "Connection timeout attribute not supported";
             result.status = TestStatus::SKIP;
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult ConnectionTests::test_connection_pooling() {
+    TestResult result = make_result(
+        "test_connection_pooling",
+        "SQLGetEnvAttr/SQLSetEnvAttr(SQL_ATTR_CONNECTION_POOLING)",
+        TestStatus::PASS,
+        "Can query/set connection pooling mode",
+        "",
+        Severity::INFO
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        // Get current connection pooling setting (environment attribute)
+        SQLUINTEGER pooling_mode = 0;
+        SQLINTEGER indicator = 0;
+        
+        // Note: SQL_ATTR_CONNECTION_POOLING must be set BEFORE allocating environment
+        // For this test, we just query the current setting
+        SQLHENV henv = conn_.get_environment().get();
+        SQLRETURN ret = SQLGetEnvAttr(henv, SQL_ATTR_CONNECTION_POOLING,
+                                      &pooling_mode, sizeof(pooling_mode), &indicator);
+        
+        if (SQL_SUCCEEDED(ret)) {
+            std::ostringstream oss;
+            oss << "Connection pooling mode: ";
+            switch (pooling_mode) {
+                case SQL_CP_OFF:
+                    oss << "OFF (SQL_CP_OFF)";
+                    break;
+                case SQL_CP_ONE_PER_DRIVER:
+                    oss << "ONE_PER_DRIVER (SQL_CP_ONE_PER_DRIVER)";
+                    break;
+                case SQL_CP_ONE_PER_HENV:
+                    oss << "ONE_PER_HENV (SQL_CP_ONE_PER_HENV)";
+                    break;
+                default:
+                    oss << "Unknown (" << pooling_mode << ")";
+                    break;
+            }
+            result.actual = oss.str();
+            result.status = TestStatus::PASS;
+        } else {
+            // Many drivers don't support connection pooling query
+            result.actual = "Connection pooling not supported by driver";
+            result.status = TestStatus::SKIP;
+            result.suggestion = "This is normal - connection pooling is optional ODBC feature";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();

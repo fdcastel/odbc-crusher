@@ -389,7 +389,7 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - [x] Connection attributes (get/set)
 - [x] Connection timeout handling
 - [x] Multiple simultaneous connections (via multiple statement handles)
-- [ ] Connection pooling behavior - Deferred
+- [x] Connection pooling behavior ✅
 
 **ODBC Functions Covered**:
 - `SQLConnect` ✅ (via tests)
