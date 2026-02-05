@@ -272,7 +272,7 @@ target_link_libraries(odbc_crusher PRIVATE ODBC::ODBC)
 - [x] Configure compiler warnings (strict mode)
 - [x] Set up CTest integration
 - [x] Add Google Test as dependency
-- [ ] Create CI/CD pipeline (GitHub Actions) - Deferred
+- [x] Create CI/CD pipeline (GitHub Actions) ✅
 - [x] Basic CLI argument parsing
 - [x] Create AGENT_INSTRUCTIONS.md
 
