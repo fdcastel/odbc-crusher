@@ -295,12 +295,13 @@ ODBC drivers are required to return specific SQLSTATEs for specific error condit
 
 **Goal**: Production-ready tool with comprehensive documentation.
 
-- [ ] `--help` output covers all options with examples
-- [ ] README.md with quick-start, installation, usage, output interpretation
-- [ ] Example output files (console and JSON) for reference
-- [ ] Contributing guide
+- [ ] Version tagging from git tag
 - [ ] Release build configuration
-- [ ] Version tagging
+- [ ] Github actions workflows for testing and release
+- [ ] `--version` output application version.
+- [ ] `--help` output covers all options with examples
+- [ ] Rewrite README.md with quick-start, installation, usage, output interpretation. Focus on usage, not on techical details (these are for this document).
+- [ ] Contributing guide
 
 ---
 
