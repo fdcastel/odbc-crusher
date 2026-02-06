@@ -31,7 +31,10 @@ SQLRETURN SQL_API SQLExecDirect(
     // Check for failure injection
     const auto& config = BehaviorController::instance().config();
     if (config.should_fail("SQLExecDirect")) {
-        stmt->add_diagnostic(config.error_code, 0, "Simulated execution failure");
+        for (int i = 0; i < config.error_count; ++i) {
+            stmt->add_diagnostic(config.error_code, i + 1,
+                "Simulated execution failure (record " + std::to_string(i + 1) + " of " + std::to_string(config.error_count) + ")");
+        }
         return SQL_ERROR;
     }
     
