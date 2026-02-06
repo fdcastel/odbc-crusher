@@ -38,6 +38,7 @@ namespace sqlstate {
     constexpr const char* INVALID_STRING_OR_BUFFER_LENGTH = "HY090";
     constexpr const char* INVALID_ATTRIBUTE_VALUE = "HY024";
     constexpr const char* OPTIONAL_FEATURE_NOT_IMPLEMENTED = "HYC00";
+    constexpr const char* DRIVER_NOT_SUPPORT_FUNCTION = "IM001";
     constexpr const char* TIMEOUT_EXPIRED = "HYT00";
     constexpr const char* GENERAL_ERROR = "HY000";
     constexpr const char* MEMORY_ALLOCATION_ERROR = "HY001";

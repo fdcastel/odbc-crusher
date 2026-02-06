@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "diagnostics.hpp"
 #include <cstdint>
+#include <mutex>
 
 namespace mock_odbc {
 
@@ -35,10 +36,14 @@ public:
     SQLRETURN return_code_ = SQL_SUCCESS;
     SQLINTEGER row_count_ = 0;
     
+    // Per-handle mutex for thread safety
+    std::mutex& mutex() { return mutex_; }
+    
 protected:
     uint32_t magic_;
     HandleType type_;
     std::vector<DiagnosticRecord> diagnostics_;
+    std::mutex mutex_;
 };
 
 // Environment Handle
@@ -200,6 +205,21 @@ public:
 private:
     ConnectionHandle* conn_;
     bool is_app_desc_;
+};
+
+// RAII lock guard for any OdbcHandle
+class HandleLock {
+public:
+    explicit HandleLock(OdbcHandle* h) : handle_(h) {
+        if (handle_) handle_->mutex().lock();
+    }
+    ~HandleLock() {
+        if (handle_) handle_->mutex().unlock();
+    }
+    HandleLock(const HandleLock&) = delete;
+    HandleLock& operator=(const HandleLock&) = delete;
+private:
+    OdbcHandle* handle_;
 };
 
 // Handle validation helpers

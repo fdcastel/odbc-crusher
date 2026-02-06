@@ -20,6 +20,7 @@ SQLRETURN SQL_API SQLGetInfo(
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
+    HandleLock lock(conn);
     
     conn->clear_diagnostics();
     
@@ -291,6 +292,7 @@ SQLRETURN SQL_API SQLGetTypeInfo(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
+    HandleLock lock(stmt);
     
     stmt->clear_diagnostics();
     
@@ -374,18 +376,22 @@ SQLRETURN SQL_API SQLGetFunctions(
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
+    HandleLock lock(conn);
     
     conn->clear_diagnostics();
     
-    // List of supported functions
+    // List of supported functions — must exactly match .def exports
     static const SQLUSMALLINT supported_functions[] = {
         SQL_API_SQLALLOCHANDLE,
         SQL_API_SQLBINDCOL,
         SQL_API_SQLBINDPARAMETER,
+        SQL_API_SQLBROWSECONNECT,
+        SQL_API_SQLBULKOPERATIONS,
         SQL_API_SQLCANCEL,
         SQL_API_SQLCLOSECURSOR,
         SQL_API_SQLCOLATTRIBUTE,
         SQL_API_SQLCOLUMNS,
+        SQL_API_SQLCOLUMNPRIVILEGES,
         SQL_API_SQLCONNECT,
         SQL_API_SQLCOPYDESC,
         SQL_API_SQLDESCRIBECOL,
@@ -428,12 +434,12 @@ SQLRETURN SQL_API SQLGetFunctions(
         SQL_API_SQLSETDESCFIELD,
         SQL_API_SQLSETDESCREC,
         SQL_API_SQLSETENVATTR,
+        SQL_API_SQLSETPOS,
         SQL_API_SQLSETSTMTATTR,
         SQL_API_SQLSPECIALCOLUMNS,
         SQL_API_SQLSTATISTICS,
         SQL_API_SQLTABLES,
         SQL_API_SQLTABLEPRIVILEGES,
-        SQL_API_SQLCOLUMNPRIVILEGES,
     };
     
     const size_t num_supported = sizeof(supported_functions) / sizeof(supported_functions[0]);

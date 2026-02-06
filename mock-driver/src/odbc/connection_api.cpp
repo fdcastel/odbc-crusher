@@ -160,6 +160,7 @@ SQLRETURN SQL_API SQLGetConnectAttr(
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
+    HandleLock lock(conn);
     
     conn->clear_diagnostics();
     
@@ -186,6 +187,12 @@ SQLRETURN SQL_API SQLGetConnectAttr(
             
         case SQL_ATTR_TXN_ISOLATION:
             if (rgbValue) *static_cast<SQLUINTEGER*>(rgbValue) = conn->txn_isolation_;
+            if (pcbValue) *pcbValue = sizeof(SQLUINTEGER);
+            break;
+            
+        case SQL_ATTR_CONNECTION_DEAD:
+            if (rgbValue) *static_cast<SQLUINTEGER*>(rgbValue) = 
+                conn->is_connected() ? SQL_CD_FALSE : SQL_CD_TRUE;
             if (pcbValue) *pcbValue = sizeof(SQLUINTEGER);
             break;
             
@@ -217,6 +224,7 @@ SQLRETURN SQL_API SQLSetConnectAttr(
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
+    HandleLock lock(conn);
     
     conn->clear_diagnostics();
     
@@ -240,6 +248,12 @@ SQLRETURN SQL_API SQLSetConnectAttr(
         case SQL_ATTR_TXN_ISOLATION:
             conn->txn_isolation_ = reinterpret_cast<SQLUINTEGER>(rgbValue);
             break;
+            
+        case SQL_ATTR_CONNECTION_DEAD:
+            // Read-only attribute
+            conn->add_diagnostic(sqlstate::INVALID_ATTRIBUTE_VALUE, 0,
+                                "SQL_ATTR_CONNECTION_DEAD is read-only");
+            return SQL_ERROR;
             
         default:
             conn->add_diagnostic(sqlstate::INVALID_HANDLE_TYPE, 0,

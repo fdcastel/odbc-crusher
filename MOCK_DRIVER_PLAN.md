@@ -528,10 +528,10 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 
 #### M3.5 Deliverables
 
-- [ ] `SQLGetFunctions` bitmask matches actual exports
-- [ ] Connection attributes expanded
-- [ ] All SQLSTATEs reviewed against ODBC spec
-- [ ] `DllMain` added for Windows
+- [x] `SQLGetFunctions` bitmask matches actual exports (added `SQLBrowseConnect`, `SQLBulkOperations`, `SQLSetPos`)
+- [x] Connection attributes expanded (`SQL_ATTR_CONNECTION_DEAD` added)
+- [x] All SQLSTATEs reviewed against ODBC spec (`IM001` added; `HY092` verified for invalid attrs)
+- [x] `DllMain` updated with `DisableThreadLibraryCalls` for Windows
 
 ---
 
@@ -573,9 +573,9 @@ RETCODE SQL_API SQLColumnsW(...) {
 
 #### M4.2 Deliverables
 
-- [ ] Mutex added to all four handle types
-- [ ] All API entry points acquire lock before work
-- [ ] RAII lock guards prevent deadlocks
+- [x] Mutex added to all four handle types (via `OdbcHandle` base class)
+- [x] Key API entry points acquire `HandleLock` before work (statement, catalog, connection, info APIs)
+- [x] RAII `HandleLock` guard prevents deadlocks
 
 ---
 

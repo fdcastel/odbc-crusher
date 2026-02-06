@@ -40,7 +40,7 @@ SQLRETURN SQL_API SQLTables(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     stmt->clear_diagnostics();
     
     const auto& config = BehaviorController::instance().config();
@@ -106,7 +106,7 @@ SQLRETURN SQL_API SQLColumns(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     stmt->clear_diagnostics();
     
     const auto& config = BehaviorController::instance().config();
@@ -207,7 +207,7 @@ SQLRETURN SQL_API SQLPrimaryKeys(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     stmt->clear_diagnostics();
     
     (void)szCatalogName;
@@ -260,7 +260,7 @@ SQLRETURN SQL_API SQLForeignKeys(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     stmt->clear_diagnostics();
     
     (void)szPkCatalogName;
@@ -330,7 +330,7 @@ SQLRETURN SQL_API SQLStatistics(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     stmt->clear_diagnostics();
     
     (void)szCatalogName;
@@ -397,7 +397,7 @@ SQLRETURN SQL_API SQLSpecialColumns(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     stmt->clear_diagnostics();
     
     (void)szCatalogName;
@@ -453,7 +453,7 @@ SQLRETURN SQL_API SQLProcedures(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     stmt->clear_diagnostics();
     
     (void)szCatalogName;
@@ -488,7 +488,7 @@ SQLRETURN SQL_API SQLProcedureColumns(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     stmt->clear_diagnostics();
     
     (void)szCatalogName;
@@ -523,7 +523,7 @@ SQLRETURN SQL_API SQLTablePrivileges(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;
@@ -554,7 +554,7 @@ SQLRETURN SQL_API SQLColumnPrivileges(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);    
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;

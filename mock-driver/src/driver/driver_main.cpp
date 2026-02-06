@@ -10,11 +10,11 @@
 #include <windows.h>
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
-    (void)hinstDLL;
     (void)lpvReserved;
     
     switch (fdwReason) {
         case DLL_PROCESS_ATTACH:
+            DisableThreadLibraryCalls(hinstDLL);
             // Initialize default catalog
             mock_odbc::MockCatalog::instance().initialize("Default");
             break;

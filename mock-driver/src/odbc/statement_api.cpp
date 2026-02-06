@@ -18,6 +18,7 @@ SQLRETURN SQL_API SQLExecDirect(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
+    HandleLock lock(stmt);
     
     stmt->clear_diagnostics();
     
@@ -89,6 +90,7 @@ SQLRETURN SQL_API SQLPrepare(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
+    HandleLock lock(stmt);
     
     stmt->clear_diagnostics();
     
@@ -124,6 +126,7 @@ SQLRETURN SQL_API SQLPrepare(
 SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
+    HandleLock lock(stmt);
     
     stmt->clear_diagnostics();
     
@@ -184,6 +187,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
 SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
+    HandleLock lock(stmt);
     
     stmt->clear_diagnostics();
     
@@ -341,6 +345,7 @@ SQLRETURN SQL_API SQLGetData(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
+    HandleLock lock(stmt);
     
     if (!stmt->executed_ || stmt->current_row_ < 0) {
         stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,
@@ -717,6 +722,7 @@ SQLRETURN SQL_API SQLGetStmtAttr(
     if (!stmt) {
         return SQL_INVALID_HANDLE;
     }
+    HandleLock lock(stmt);
     
     switch (fAttribute) {
         case SQL_ATTR_CURSOR_TYPE: {
