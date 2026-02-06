@@ -5,7 +5,7 @@
 
 A command-line tool that tests ODBC drivers for correctness and spec compliance.
 
-Point it at any ODBC connection string and it will run **90+ tests** covering connections, statements, metadata, data types, transactions, error handling, buffer validation, and state machine compliance — then report what passed, failed, or was skipped.
+Point it at any ODBC connection string and it will run **120+ tests** covering connections, statements, metadata, data types, transactions, Unicode handling, catalog functions, diagnostics, cursor behavior, parameter binding, error handling, buffer validation, and state machine compliance — then report what passed, failed, or was skipped.
 
 ## Quick Start
 
@@ -32,55 +32,81 @@ odbc-crusher "Driver={...}" -o json | jq '.summary'
 
 | Category | Tests | What's Checked |
 |----------|-------|----------------|
-| Connection | 5 | Connect, attributes, multiple statements, timeout |
-| Statement | 7 | ExecDirect, Prepare/Execute, parameters, column metadata |
-| Metadata | 5 | Tables, columns, primary keys, statistics, special columns |
-| Data Types | 6 | Integer, decimal, float, string, date/time, NULL handling |
-| Transactions | 4 | Autocommit, commit/rollback, isolation levels |
-| Advanced | 6 | Cursor types, bulk ops, async, rowsets, concurrency |
+| Connection | 6 | Connect, attributes, multiple statements, timeout, pooling |
+| Statement | 15 | ExecDirect, Prepare/Execute, parameters, column metadata, row count |
+| Metadata | 7 | Tables, columns, primary keys, statistics, special columns, privileges |
+| Data Types | 9 | Integer, decimal, float, string, date/time, NULL, Unicode, binary, GUID |
+| Transactions | 5 | Autocommit, commit/rollback, isolation levels |
+| Advanced | 10 | Cursor types, bulk ops, async, rowsets, concurrency, bookmarks |
 | Buffer Validation | 5 | Null termination, overflow protection, truncation indicators |
 | Error Queue | 6 | Diagnostic records, clearing, hierarchy, field extraction |
 | State Machine | 6 | Valid transitions, invalid operations, state reset |
-| Descriptors | 5 | Implicit handles, IRD, APD fields, CopyDesc |
+| Descriptors | 2 | Implicit handles, IRD fields |
 | Cancellation | 2 | Cancel idle, cancel as reset |
-| SQLSTATE Validation | 10 | HY010, 24000, 07009, 42000, HY003, HY096, HY092 |
+| SQLSTATE Validation | 10 | HY010, 24000, 07009, 42000, HY003, HY096, HY092, HYC00 |
 | Boundary Values | 5 | Zero buffers, NULL parameters, empty SQL, column 0 |
-| Data Type Edge Cases | 10 | INT_MIN/MAX, empty strings, NULL indicators, type conversion |
+| Data Type Edge Cases | 5 | INT_MIN/MAX, empty strings, NULL indicators, type conversion |
+| **Unicode Tests** | 5 | SQLGetInfoW, SQLDescribeColW, SQL_C_WCHAR, Unicode patterns, truncation |
+| **Catalog Depth** | 6 | Search patterns, result set shape, statistics, procedures, privileges, NULL params |
+| **Diagnostic Depth** | 4 | SQL_DIAG_SQLSTATE, SQL_DIAG_NUMBER, SQL_DIAG_ROW_COUNT, multiple records |
+| **Cursor Behavior** | 4 | Forward-only fetch, scrolling restrictions, cursor attributes, SQLGetData |
+| **Parameter Binding** | 3 | SQL_C_WCHAR input, NULL indicators, rebind/re-execute |
 
 Every test reports `PASS`, `FAIL`, `SKIP` (unsupported), or `ERROR`, with ODBC spec references and fix suggestions where applicable.
 
 ## Example Output
 
 ```
-╔════════════════════════════════════════════════════════════════╗
-║           ODBC CRUSHER - Driver Testing Report                ║
-╚════════════════════════════════════════════════════════════════╝
+ODBC Crusher v0.2.0 - Driver analysis report
 
-Connection: Driver={MySQL ODBC 9.2 Unicode Driver};...
+DRIVER:
+  Driver Name:          myodbc9w.dll
+  Driver Version:       09.06.0000
+  Driver ODBC Version:  03.80
+  ODBC Version (DM):    03.80.0000
 
-────────────────────────────────────────────────────────────────
-  Connection Tests
-────────────────────────────────────────────────────────────────
-  ✓ test_connection_info (992 μs)
-  ✓ test_connection_string_format (3 μs)
-  ✓ test_multiple_statements (48 μs)
-  ✓ test_connection_attributes (25 μs)
-  ✓ test_connection_timeout (98 μs)
+DATABASE:
+  DBMS Name:            MySQL
+  DBMS Version:         8.0.35
+  Database:             test
+  Server:               localhost
+  User:                 root
+  SQL Conformance:      SQL-92 Intermediate
 
-  Category Summary: 5 passed
+ODBC FUNCTIONS:
+  51/52 ODBC functions supported (as reported by SQLGetFunctions)
+
+  MISSING functions:
+    SQLSetDescRec
+
+Connection Tests:                                                      6 passed
+  [PASS] test_connection_info [Core] (1.05 ms)
+  [PASS] test_connection_string_format [Core] (3 us)
+  [PASS] test_multiple_statements [Core] (30 us)
+  [PASS] test_connection_attributes [Core] (30 us)
+  [PASS] test_connection_timeout [Core] (14 us)
+  [PASS] test_connection_pooling [Core] (4 us)
+
+Statement Tests:                                 2 passed, 2 failed, 11 skipped
+  [PASS] test_simple_query [Core] (4.66 ms)
+  [PASS] test_prepared_statement [Core] (2.48 ms)
+  [ ?? ] test_parameter_binding [Core] (1.73 ms)
   ...
 
-════════════════════════════════════════════════════════════════
-                        FINAL SUMMARY
-════════════════════════════════════════════════════════════════
+SUMMARY:
+  Total Tests:  123
+  Passed:       92 (74.8%)
+  Failed:       2
+  Skipped:      29
+  Total Time:   204.58 ms
 
-  Total Tests:  82
-  Passed:       78 (95.1%)
-  Skipped:       4
-  Total Time:   142.5 ms
+FAILURES BY SEVERITY:
 
-  ✓ ALL TESTS PASSED!
-════════════════════════════════════════════════════════════════
+  [WARNING] test_setconnattr_invalid_attr (SQLSetConnectAttr)
+    SQLSetConnectAttr accepted invalid attribute 99999
+    Fix: Driver should return HY092 for unrecognized attributes
+
+  [FAIL] SOME TESTS FAILED
 ```
 
 ## Build From Source
@@ -150,10 +176,11 @@ The JSON includes driver information, type support, function support, all test r
 
 ## Interpreting Results
 
-- **PASS** — The driver behaves correctly for this test.
-- **FAIL** — The driver returned an unexpected result. Check the `actual` field and the ODBC spec reference for details.
-- **SKIP** — The test was skipped because the driver does not support the feature, or the result was inconclusive.
-- **ERROR** — An unexpected exception occurred during the test.
+- **[PASS]** — The driver behaves correctly for this test.
+- **[FAIL]** — The driver returned an unexpected result. Check the `actual` field and the ODBC spec reference for details.
+- **[NOT ]** — The test was skipped because the driver does not support this feature (SKIP_UNSUPPORTED).
+- **[ ?? ]** — The test result was inconclusive (SKIP_INCONCLUSIVE) — the driver may or may not support the feature.
+- **[ERR!]** — An unexpected exception occurred during the test.
 
 In verbose mode (`-v`), each test also shows:
 - The **expected** vs **actual** behavior
