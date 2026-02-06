@@ -68,6 +68,15 @@ StatementHandle::StatementHandle(ConnectionHandle* conn)
     if (conn_) {
         conn_->statements_.push_back(this);
     }
+    // The Windows DM calls SQLGetStmtAttrW for the four implicit
+    // descriptor handles immediately after SQLAllocHandle(SQL_HANDLE_STMT).
+    // If they are NULL the DM's internal statement structure is incomplete
+    // and every subsequent statement-level call crashes (access violation
+    // at ODBC32.dll+0x3E48).  Allocate them here unconditionally.
+    app_param_desc_ = new DescriptorHandle(conn_, true);
+    imp_param_desc_ = new DescriptorHandle(conn_, false);
+    app_row_desc_   = new DescriptorHandle(conn_, true);
+    imp_row_desc_   = new DescriptorHandle(conn_, false);
 }
 
 StatementHandle::~StatementHandle() {

@@ -6,6 +6,33 @@
 
 ---
 
+## 0. Status (February 6, 2026)
+
+### Completed
+
+- **Phase M1 (Unicode-First Architecture)** — DONE
+  - All 34 W-variant entry points implemented in `unicode_wrappers.cpp`
+  - Proper UTF-16 ↔ UTF-8 conversion utilities (`string_utils.cpp`) using Win32 `WideCharToMultiByte`/`MultiByteToWideChar` on Windows, portable BMP+surrogate implementation for Linux/macOS
+  - Explicit `.def` file matching MySQL ODBC Unicode Driver export pattern (W-only for string functions, plain names for non-string functions)
+  - `WINDOWS_EXPORT_ALL_SYMBOLS` removed — explicit `.def` file prevents DM symbol re-export
+  - **DM crash fix**: `StatementHandle` constructor now allocates all four implicit descriptor handles (`app_param_desc_`, `imp_param_desc_`, `app_row_desc_`, `imp_row_desc_`); `SQLGetStmtAttr` returns them for `SQL_ATTR_APP_PARAM_DESC`/`SQL_ATTR_IMP_PARAM_DESC`/`SQL_ATTR_APP_ROW_DESC`/`SQL_ATTR_IMP_ROW_DESC`. This was the root cause of the DM access violation at `ODBC32.dll+0x3E48` — the DM queries these descriptors immediately after `SQLAllocHandle(SQL_HANDLE_STMT)`.
+
+### Test Results
+
+- **Mock driver unit tests**: 48/48 pass (100%)
+- **odbc-crusher end-to-end**: 53/101 tests pass (52.5%), 2 fail, 46 skipped
+  - Failures are pre-existing: mock driver doesn't support arbitrary `SELECT` queries with literal values
+  - All connection, metadata, transaction, buffer validation, error queue, state machine, descriptor, and advanced feature tests pass
+- **odbc-crusher unit tests**: 42/45 pass (93%), 3 fail (pre-existing: require real Firebird/MySQL drivers or arbitrary SQL execution)
+
+### Remaining Work
+
+- Phase M2: Internal API hardening (Unicode-aware `SQLGetData`, catalog column types)
+- Phase M3: Spec compliance polish (SQLSTATEs, `DllMain`, connection attributes)
+- Phase M4: Thread safety (per-handle locking)
+
+---
+
 ## 1. Executive Summary
 
 The mock ODBC driver is the cornerstone of odbc-crusher's testing infrastructure. Without a correct, spec-compliant mock driver, the application cannot distinguish its own bugs from driver bugs.
@@ -183,15 +210,15 @@ The mock driver should follow this exact pattern.
 
 **psqlodbc solution**: Explicit `.def` file listing only implemented functions.
 
-**Status**: Partially fixed with a `.def` file, but W variants are missing.
+**Status**: Fixed with explicit `.def` file. `WINDOWS_EXPORT_ALL_SYMBOLS` removed from CMakeLists.txt.
 
 ### P2: No W-Variant Functions (CRITICAL)
 
 **What happens**: The DM on Windows detects a Unicode driver by looking for `SQLConnectW`. If found, it calls W variants for all functions. If not found, it falls back to ANSI, but still calls `SQLAllocHandleW`, `SQLGetTypeInfoW`, `SQLGetStmtAttrW`, `SQLSetStmtAttrW` as W variants regardless.
 
-**Current state**: Only `SQLAllocHandleW` and `SQLFreeHandleW` are implemented. A `unicode_wrappers.cpp` was hastily added but hasn't been tested.
+**Current state**: All W-variant entry points implemented in `unicode_wrappers.cpp`. `.def` file exports W variants for string functions and plain names for non-string functions, following the MySQL ODBC Unicode Driver pattern.
 
-**psqlodbc solution**: Dedicated `odbcapiw.c` and `odbcapi30w.c` files with all 34 W-variant functions.
+**psqlodbc solution**: Dedicated `odbcapiw.c` and `odbcapi30w.c` files with all 34 W-variant functions. Our approach uses a single `unicode_wrappers.cpp` file.
 
 ### P3: ANSI-First Internal Design (MEDIUM)
 
@@ -384,13 +411,14 @@ RETCODE SQL_API SQLColumnsW(
 
 #### M1.5 Deliverables
 
-- [ ] Restructure source into `api/` + `impl/` layers
-- [ ] Implement proper UTF-16 ↔ UTF-8 conversion utilities  
-- [ ] Create all 34 W-variant entry points
-- [ ] Create `.def` file with psqlodbc-style exports
-- [ ] Remove `WINDOWS_EXPORT_ALL_SYMBOLS` from CMakeLists.txt
-- [ ] Test: odbc-crusher connects and completes all phases against the mock driver on Windows
-- [ ] Test: Mock driver unit tests still pass
+- [x] ~~Restructure source into `api/` + `impl/` layers~~ (Kept simpler: W wrappers in `unicode_wrappers.cpp` delegate to ANSI implementations)
+- [x] Implement proper UTF-16 ↔ UTF-8 conversion utilities  
+- [x] Create all 34 W-variant entry points
+- [x] Create `.def` file with psqlodbc-style exports
+- [x] Remove `WINDOWS_EXPORT_ALL_SYMBOLS` from CMakeLists.txt
+- [x] Test: odbc-crusher connects and completes all phases against the mock driver on Windows
+- [x] Test: Mock driver unit tests still pass
+- [x] Fix: DM crash — allocate implicit descriptor handles in `StatementHandle` constructor; return them from `SQLGetStmtAttr`
 
 ---
 

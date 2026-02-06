@@ -1,0 +1,96 @@
+; Mock ODBC Driver — Module Definition File
+;
+; Unicode driver: The DM detects SQLConnectW → marks driver as Unicode.
+; Export pattern follows MySQL ODBC Unicode Driver exactly:
+;   - W variants ONLY for all string functions
+;   - Plain names for non-string functions
+;   - No legacy ODBC 2.x aliases
+
+LIBRARY mockodbc
+
+EXPORTS
+    ; ===== Handle management =====
+    SQLAllocHandle
+    SQLFreeHandle
+
+    ; ===== Environment =====
+    SQLGetEnvAttr
+    SQLSetEnvAttr
+
+    ; ===== Connection =====
+    SQLConnectW
+    SQLDriverConnectW
+    SQLBrowseConnectW
+    SQLDisconnect
+    SQLGetConnectAttrW
+    SQLSetConnectAttrW
+
+    ; ===== Statement execution =====
+    SQLExecDirectW
+    SQLPrepareW
+    SQLExecute
+    SQLCancel
+
+    ; ===== Result set =====
+    SQLFetch
+    SQLFetchScroll
+    SQLGetData
+    SQLNumResultCols
+    SQLRowCount
+    SQLMoreResults
+    SQLCloseCursor
+    SQLFreeStmt
+
+    ; ===== Column info =====
+    SQLDescribeColW
+    SQLColAttributeW
+    SQLBindCol
+    SQLBindParameter
+    SQLDescribeParam
+    SQLNumParams
+
+    ; ===== Catalog / Metadata =====
+    SQLTablesW
+    SQLColumnsW
+    SQLPrimaryKeysW
+    SQLForeignKeysW
+    SQLSpecialColumnsW
+    SQLStatisticsW
+    SQLColumnPrivilegesW
+    SQLTablePrivilegesW
+    SQLProceduresW
+    SQLProcedureColumnsW
+
+    ; ===== Driver info =====
+    SQLGetInfoW
+    SQLGetTypeInfoW
+    SQLGetFunctions
+
+    ; ===== Attributes =====
+    SQLGetStmtAttrW
+    SQLSetStmtAttrW
+
+    ; ===== Cursor =====
+    SQLGetCursorNameW
+    SQLSetCursorNameW
+
+    ; ===== Descriptors =====
+    SQLGetDescFieldW
+    SQLGetDescRecW
+    SQLSetDescFieldW
+    SQLSetDescRec
+    SQLCopyDesc
+
+    ; ===== Diagnostics =====
+    SQLGetDiagRecW
+    SQLGetDiagFieldW
+
+    ; ===== Transactions =====
+    SQLEndTran
+
+    ; ===== Miscellaneous =====
+    SQLNativeSqlW
+    SQLParamData
+    SQLPutData
+    SQLSetPos
+    SQLBulkOperations

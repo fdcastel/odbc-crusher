@@ -707,6 +707,26 @@ SQLRETURN SQL_API SQLGetStmtAttr(
             if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->async_enable_;
             if (pcbValue) *pcbValue = sizeof(SQLULEN);
             break;
+
+        // Implicit descriptor handles — the DM queries these right after
+        // SQLAllocHandle(SQL_HANDLE_STMT) to set up its internal dispatch.
+        // Returning NULL causes a DM crash (ODBC32.dll access violation).
+        case SQL_ATTR_APP_PARAM_DESC:
+            if (rgbValue) *static_cast<SQLHANDLE*>(rgbValue) = static_cast<SQLHANDLE>(stmt->app_param_desc_);
+            if (pcbValue) *pcbValue = sizeof(SQLHANDLE);
+            break;
+        case SQL_ATTR_IMP_PARAM_DESC:
+            if (rgbValue) *static_cast<SQLHANDLE*>(rgbValue) = static_cast<SQLHANDLE>(stmt->imp_param_desc_);
+            if (pcbValue) *pcbValue = sizeof(SQLHANDLE);
+            break;
+        case SQL_ATTR_APP_ROW_DESC:
+            if (rgbValue) *static_cast<SQLHANDLE*>(rgbValue) = static_cast<SQLHANDLE>(stmt->app_row_desc_);
+            if (pcbValue) *pcbValue = sizeof(SQLHANDLE);
+            break;
+        case SQL_ATTR_IMP_ROW_DESC:
+            if (rgbValue) *static_cast<SQLHANDLE*>(rgbValue) = static_cast<SQLHANDLE>(stmt->imp_row_desc_);
+            if (pcbValue) *pcbValue = sizeof(SQLHANDLE);
+            break;
             
         default:
             return SQL_SUCCESS;  // Ignore unknown attributes

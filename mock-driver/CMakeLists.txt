@@ -32,8 +32,8 @@ else()
     endif()
 endif()
 
-# Driver shared library
-add_library(mock-odbc-driver SHARED
+# Core sources — shared between the driver DLL and unit tests
+set(MOCK_DRIVER_CORE_SOURCES
     src/driver/driver_main.cpp
     src/driver/handles.cpp
     src/driver/environment.cpp
@@ -53,8 +53,12 @@ add_library(mock-odbc-driver SHARED
     src/odbc/info_api.cpp
     src/odbc/transaction_api.cpp
     src/odbc/diagnostic_api.cpp
+    src/odbc/unicode_wrappers.cpp
     src/utils/string_utils.cpp
 )
+
+# Driver shared library
+add_library(mock-odbc-driver SHARED ${MOCK_DRIVER_CORE_SOURCES})
 
 target_include_directories(mock-odbc-driver PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -66,7 +70,11 @@ if(WIN32)
         OUTPUT_NAME "mockodbc"
         PREFIX ""
         SUFFIX ".dll"
-        WINDOWS_EXPORT_ALL_SYMBOLS ON
+    )
+    # Use explicit .def file for symbol exports — never WINDOWS_EXPORT_ALL_SYMBOLS
+    # (WAES re-exports odbc32.lib symbols causing infinite recursion with the DM)
+    target_sources(mock-odbc-driver PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/mockodbc.def
     )
 else()
     set_target_properties(mock-odbc-driver PROPERTIES
@@ -94,7 +102,7 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# Unit tests
+# Unit tests — compile core sources directly to access internal symbols
 add_executable(mock-odbc-tests
     tests/test_main.cpp
     tests/test_handles.cpp
@@ -102,10 +110,10 @@ add_executable(mock-odbc-tests
     tests/test_gettypeinfo.cpp
     tests/test_error_injection.cpp
     tests/test_performance.cpp
+    ${MOCK_DRIVER_CORE_SOURCES}
 )
 
 target_link_libraries(mock-odbc-tests PRIVATE
-    mock-odbc-driver
     GTest::gtest
     GTest::gtest_main
     ${ODBC_LIBRARIES}
