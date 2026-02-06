@@ -12,9 +12,6 @@ jobs:
     env:
       ODBC_CONN: "Driver={PostgreSQL Unicode};Server=127.0.0.1;Port=5432;Database=postgres;Uid=postgres;Pwd=postgres;"
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Install unixODBC
       run: |
         sudo apt-get update -y -q
@@ -65,9 +62,6 @@ jobs:
     env:
       ODBC_CONN: "Driver={MariaDB Unicode};Server=127.0.0.1;Port=3306;User=root;Password=root;"
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Install unixODBC
       run: |
         sudo apt-get update -y -q
@@ -119,9 +113,6 @@ jobs:
       ODBC_CONN: "Driver={MySQL};Server=127.0.0.1;Port=3306;User=crusher;Password=crusher;"
       MYSQL_ODBC_LIB_URL: https://dev.mysql.com/get/Downloads/Connector-ODBC/9.2/mysql-connector-odbc-9.2.0-linux-glibc2.28-x86-64bit.tar.gz
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Install unixODBC
       run: |
         sudo apt-get update -y -q
@@ -185,9 +176,6 @@ jobs:
       MSSQL_SA_PASSWORD: "P@ssword2"
       ODBC_CONN: "Driver={ODBC Driver 18 for SQL Server};Server=tcp:127.0.0.1,1433;UID=sa;PWD=P@ssword2;TrustServerCertificate=yes;"
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Install unixODBC
       run: |
         sudo apt-get update -y -q
@@ -255,9 +243,6 @@ jobs:
     env:
       ODBC_CONN: "Driver={SQLite3};Database=/tmp/test.db;"
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Install unixODBC and SQLite ODBC driver
       run: |
         sudo apt-get update -y -q
@@ -297,9 +282,6 @@ jobs:
     env:
       ODBC_CONN: "Driver={Firebird/InterBase(r) driver};Database=localhost:C:/tmp/test.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;"
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Install Firebird Server
       shell: bash
       run: |
@@ -312,7 +294,7 @@ jobs:
     - name: Install Firebird ODBC driver
       shell: bash
       run: |
-        choco install firebird-odbc --version 3.0.1.21 --no-progress
+        choco install firebird-odbc --version 3.0.1.21 --pre --no-progress
         # List registered ODBC drivers
         powershell.exe -Command "Get-OdbcDriver | Format-Table Name, Platform"
 
@@ -352,36 +334,21 @@ jobs:
     env:
       ODBC_CONN: "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;"
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-
-    - name: Build Mock Driver
+    - name: Download mock driver
+      shell: bash
       run: |
-        cmake -B mock-driver/build -S mock-driver -DCMAKE_BUILD_TYPE=Release
-        cmake --build mock-driver/build --config Release -j 4
+        gh release download --repo fdcastel/odbc-crusher --pattern "mock-odbc-driver-windows-x64.zip" --dir .
+        unzip mock-odbc-driver-windows-x64.zip -d mock-driver
+        ls -la mock-driver/
+      env:
+        GH_TOKEN: ${{ github.token }}
 
     - name: Register Mock Driver
       shell: powershell
       run: |
-        Copy-Item mock-driver\build\Release\mockodbc.dll -Destination C:\Windows\System32\
-        $regContent = @"
-        Windows Registry Editor Version 5.00
-
-        [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers]
-        "Mock ODBC Driver"="Installed"
-
-        [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\Mock ODBC Driver]
-        "Driver"="C:\\Windows\\System32\\mockodbc.dll"
-        "Setup"="C:\\Windows\\System32\\mockodbc.dll"
-        "APILevel"="2"
-        "ConnectFunctions"="YYY"
-        "DriverODBCVer"="03.80"
-        "FileUsage"="0"
-        "SQLLevel"="1"
-        "@
-        $regContent | Out-File -FilePath mock-driver.reg -Encoding ASCII
-        reg import mock-driver.reg
+        $driverDest = "C:\Windows\System32\mockodbc.dll"
+        Copy-Item mock-driver\mockodbc.dll -Destination $driverDest
+        & mock-driver\register.ps1 -DriverPath $driverDest
 
     - name: Download odbc-crusher
       shell: bash

@@ -1,19 +1,37 @@
 # Register Mock ODBC Driver
 # This script must be run as Administrator
+#
+# Usage:
+#   .\register.ps1                   # Auto-detect DLL location
+#   .\register.ps1 -DriverPath C:\path\to\mockodbc.dll  # Explicit path
+
+param(
+    [string]$DriverPath
+)
 
 $ErrorActionPreference = "Stop"
 
-$driverPath = Join-Path $PSScriptRoot "..\build\Release\mockodbc.dll"
-$driverPath = Resolve-Path $driverPath
+if (-not $DriverPath) {
+    # Try: same directory as this script (release package layout)
+    $candidate = Join-Path $PSScriptRoot "mockodbc.dll"
+    if (Test-Path $candidate) {
+        $DriverPath = (Resolve-Path $candidate).Path
+    } else {
+        # Try: build output relative to script (development layout)
+        $candidate = Join-Path $PSScriptRoot "..\build\Release\mockodbc.dll"
+        if (Test-Path $candidate) {
+            $DriverPath = (Resolve-Path $candidate).Path
+        }
+    }
+}
 
-if (-not (Test-Path $driverPath)) {
-    Write-Error "Driver DLL not found at: $driverPath"
-    Write-Host "Please build the driver first using CMake"
+if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
+    Write-Error "Driver DLL not found. Please specify -DriverPath or place mockodbc.dll next to this script."
     exit 1
 }
 
 Write-Host "Registering Mock ODBC Driver..."
-Write-Host "Driver path: $driverPath"
+Write-Host "Driver path: $DriverPath"
 
 # Check if running as Administrator
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -34,8 +52,8 @@ if (-not (Test-Path $driverKey)) {
     New-Item -Path $driverKey -Force | Out-Null
 }
 
-Set-ItemProperty -Path $driverKey -Name "Driver" -Value $driverPath
-Set-ItemProperty -Path $driverKey -Name "Setup" -Value $driverPath
+Set-ItemProperty -Path $driverKey -Name "Driver" -Value $DriverPath
+Set-ItemProperty -Path $driverKey -Name "Setup" -Value $DriverPath
 Set-ItemProperty -Path $driverKey -Name "APILevel" -Value "2"
 Set-ItemProperty -Path $driverKey -Name "ConnectFunctions" -Value "YYY"
 Set-ItemProperty -Path $driverKey -Name "DriverODBCVer" -Value "03.80"
