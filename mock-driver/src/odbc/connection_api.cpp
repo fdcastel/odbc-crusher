@@ -242,8 +242,9 @@ SQLRETURN SQL_API SQLSetConnectAttr(
             break;
             
         default:
-            // Silently ignore unknown attributes for compatibility
-            break;
+            conn->add_diagnostic(sqlstate::INVALID_HANDLE_TYPE, 0,
+                                "Invalid attribute/option identifier");
+            return SQL_ERROR;
     }
     
     return SQL_SUCCESS;

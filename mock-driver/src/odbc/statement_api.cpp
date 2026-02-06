@@ -188,8 +188,8 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) {
     stmt->clear_diagnostics();
     
     if (!stmt->executed_) {
-        stmt->add_diagnostic(sqlstate::FUNCTION_SEQUENCE_ERROR, 0,
-                            "Statement not executed");
+        stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,
+                            "Cursor is not open");
         return SQL_ERROR;
     }
     
@@ -567,6 +567,34 @@ SQLRETURN SQL_API SQLBindParameter(
         stmt->add_diagnostic(sqlstate::INVALID_PARAMETER_NUMBER, 0,
                             "Parameter number must be >= 1");
         return SQL_ERROR;
+    }
+    
+    // Validate C type
+    switch (fCType) {
+        case SQL_C_CHAR:
+        case SQL_C_WCHAR:
+        case SQL_C_SSHORT:
+        case SQL_C_USHORT:
+        case SQL_C_SLONG:
+        case SQL_C_ULONG:
+        case SQL_C_FLOAT:
+        case SQL_C_DOUBLE:
+        case SQL_C_BIT:
+        case SQL_C_STINYINT:
+        case SQL_C_UTINYINT:
+        case SQL_C_SBIGINT:
+        case SQL_C_UBIGINT:
+        case SQL_C_BINARY:
+        case SQL_C_TYPE_DATE:
+        case SQL_C_TYPE_TIME:
+        case SQL_C_TYPE_TIMESTAMP:
+        case SQL_C_NUMERIC:
+        case SQL_C_DEFAULT:
+            break; // Valid
+        default:
+            stmt->add_diagnostic(sqlstate::INVALID_APPLICATION_BUFFER_TYPE, 0,
+                                "Invalid application buffer type");
+            return SQL_ERROR;
     }
     
     if (!rgbValue) {

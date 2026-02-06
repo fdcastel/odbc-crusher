@@ -275,9 +275,9 @@ SQLRETURN SQL_API SQLGetInfo(
             RETURN_ULONG(SQL_SVE_CASE | SQL_SVE_CAST | SQL_SVE_COALESCE | SQL_SVE_NULLIF);
             
         default:
-            // Return empty for unknown info types
-            if (pcbInfoValue) *pcbInfoValue = 0;
-            return SQL_SUCCESS;
+            conn->add_diagnostic(sqlstate::INVALID_INFO_TYPE, 0,
+                                "Information type out of range");
+            return SQL_ERROR;
     }
     
     #undef RETURN_STRING

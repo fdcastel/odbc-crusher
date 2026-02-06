@@ -44,6 +44,8 @@ namespace sqlstate {
     constexpr const char* INVALID_ARGUMENT_VALUE = "HY009";
     constexpr const char* INVALID_PARAMETER_NUMBER = "07009";
     constexpr const char* DATA_TYPE_ATTRIBUTE_VIOLATION = "07006";
+    constexpr const char* INVALID_APPLICATION_BUFFER_TYPE = "HY003";
+    constexpr const char* INVALID_INFO_TYPE = "HY096";
     constexpr const char* INDICATOR_REQUIRED = "22002";
     constexpr const char* NUMERIC_VALUE_OUT_OF_RANGE = "22003";
     constexpr const char* STRING_DATA_TRUNCATED = "22001";

@@ -12,6 +12,9 @@ add_library(odbc_crusher_tests_lib
     state_machine_tests.cpp
     descriptor_tests.cpp
     cancellation_tests.cpp
+    sqlstate_tests.cpp
+    boundary_tests.cpp
+    datatype_edge_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests_lib
