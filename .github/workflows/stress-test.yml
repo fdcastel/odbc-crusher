@@ -299,11 +299,6 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v2
 
     - name: Install Firebird Server
       shell: bash
@@ -317,25 +312,28 @@ jobs:
     - name: Install Firebird ODBC driver
       shell: bash
       run: |
-        choco install firebird-odbc --no-progress
+        choco install firebird-odbc --version 3.0.1.21 --no-progress
         # List registered ODBC drivers
         powershell.exe -Command "Get-OdbcDriver | Format-Table Name, Platform"
 
-    - name: Build odbc-crusher
+    - name: Download odbc-crusher
+      shell: bash
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Release
-        cmake --build build --config Release -j 4
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-windows-x64.zip" --dir .
+        unzip odbc-crusher-windows-x64.zip
+      env:
+        GH_TOKEN: ${{ github.token }}
 
     - name: Run odbc-crusher
       shell: bash
       run: |
-        ./build/src/Release/odbc-crusher.exe "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt || true
+        ./odbc-crusher.exe "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt || true
       continue-on-error: true
 
     - name: Run odbc-crusher (JSON)
       shell: bash
       run: |
-        ./build/src/Release/odbc-crusher.exe "${ODBC_CONN}" -o json -f crusher-report.json || true
+        ./odbc-crusher.exe "${ODBC_CONN}" -o json -f crusher-report.json || true
       continue-on-error: true
 
     - name: Upload report
@@ -356,11 +354,7 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
-    - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v2
 
     - name: Build Mock Driver
       run: |
@@ -389,21 +383,24 @@ jobs:
         $regContent | Out-File -FilePath mock-driver.reg -Encoding ASCII
         reg import mock-driver.reg
 
-    - name: Build odbc-crusher
+    - name: Download odbc-crusher
+      shell: bash
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Release
-        cmake --build build --config Release -j 4
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-windows-x64.zip" --dir .
+        unzip odbc-crusher-windows-x64.zip
+      env:
+        GH_TOKEN: ${{ github.token }}
 
     - name: Run odbc-crusher
       shell: bash
       run: |
-        ./build/src/Release/odbc-crusher.exe "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt || true
+        ./odbc-crusher.exe "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt || true
       continue-on-error: true
 
     - name: Run odbc-crusher (JSON)
       shell: bash
       run: |
-        ./build/src/Release/odbc-crusher.exe "${ODBC_CONN}" -o json -f crusher-report.json || true
+        ./odbc-crusher.exe "${ODBC_CONN}" -o json -f crusher-report.json || true
       continue-on-error: true
 
     - name: Upload report
