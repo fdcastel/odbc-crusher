@@ -1,8 +1,8 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.1  
+**Version**: 2.2  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
-**Last Updated**: February 5, 2026
+**Last Updated**: February 6, 2026
 
 ---
 
@@ -302,6 +302,74 @@ ODBC drivers are required to return specific SQLSTATEs for specific error condit
 - [x] `--help` output covers all options with examples and detailed descriptions.
 - [x] README.md rewritten — focused on usage: Quick Start, What It Tests, Example Output, Build From Source, CLI Reference, Exit Codes, JSON Output, Interpreting Results.
 - [x] `CONTRIBUTING.md` — development setup, project structure, how to add tests, code style, mock driver usage, PR/issue guidelines.
+
+---
+
+### Phase 15: Mock Driver Unicode Rewrite & Extended Test Coverage
+
+**Goal**: Rewrite the mock driver with a Unicode-first architecture (modeled after psqlodbc) and extend odbc-crusher's test coverage based on insights from studying a production ODBC driver.
+
+**Reference**: `MOCK_DRIVER_PLAN.md` contains the full analysis and implementation plan.
+
+**Background**: A study of the psqlodbc PostgreSQL ODBC driver (2000+ commits, ~30 years of production use) revealed that the mock driver's current architecture prevents it from working correctly with the Windows ODBC Driver Manager. The DM calls W-variant functions (`SQLColumnsW`, `SQLGetInfoW`, etc.) on Unicode drivers, and the mock driver either doesn't export them or exports stubs that crash. This is why the mock driver produces empty test reports in CI.
+
+#### 15.1 Mock Driver Rewrite (from MOCK_DRIVER_PLAN.md)
+
+- [ ] **Phase M1**: Unicode-First Architecture — Three-layer design (API → Internal → Mock), proper UTF-16 ↔ UTF-8 conversion, psqlodbc-style `.def` file, all 34 W-variant entry points
+- [ ] **Phase M2**: Internal API Hardening — Unicode-aware `SQLGetInfo` output, `SQL_C_WCHAR` support in `SQLGetData`, `SQL_WVARCHAR` catalog columns, byte-based buffer lengths
+- [ ] **Phase M3**: Spec Compliance Polish — Accurate `SQLGetFunctions` bitmask, expanded connection attributes, complete SQLSTATE coverage, `DllMain`
+- [ ] **Phase M4**: Thread Safety — Per-handle mutexes, RAII lock guards on all API entry points
+
+#### 15.2 New Tests for odbc-crusher (Insights from psqlodbc Test Suite)
+
+The psqlodbc test suite (`test/src/`) contains 50+ test programs covering areas that odbc-crusher doesn't currently test. Key additions:
+
+**Unicode-Specific Tests** (new category — 5 tests):
+- [ ] `SQLGetInfo` returns valid `SQLWCHAR*` for string info types (SQL_DBMS_NAME, SQL_DRIVER_NAME, etc.)
+- [ ] `SQLDescribeCol` returns column names as `SQLWCHAR*`
+- [ ] `SQLGetData` with `SQL_C_WCHAR` retrieves Unicode string data
+- [ ] `SQLColumns` with Unicode table/column name patterns
+- [ ] String truncation (`01004`) with `SQLWCHAR*` buffers (buffer size in bytes vs chars)
+
+**Catalog Function Depth Tests** (extend Metadata category — 6 tests):
+- [ ] `SQLTables` with `SQL_ALL_CATALOGS` / `SQL_ALL_SCHEMAS` / `SQL_ALL_TABLE_TYPES` search patterns
+- [ ] `SQLColumns` result set has all 18 ODBC-specified columns with correct types
+- [ ] `SQLStatistics` returns index information with correct ordering
+- [ ] `SQLProcedures` / `SQLProcedureColumns` return valid result sets (even if empty)
+- [ ] `SQLTablePrivileges` / `SQLColumnPrivileges` return valid result sets
+- [ ] Catalog function with NULL catalog/schema parameters (tests default behavior)
+
+**Diagnostic Depth Tests** (extend Error Queue — 4 tests):
+- [ ] `SQLGetDiagField` with `SQL_DIAG_SQLSTATE` returns 5-char state
+- [ ] `SQLGetDiagField` with `SQL_DIAG_NUMBER` returns correct record count
+- [ ] `SQLGetDiagField` with `SQL_DIAG_ROW_COUNT` after DML
+- [ ] Multiple diagnostic records from a single operation (error chain)
+
+**Cursor Behavior Tests** (new category — 4 tests):
+- [ ] Forward-only cursor fetch past end returns `SQL_NO_DATA`
+- [ ] `SQLFetchScroll(SQL_FETCH_FIRST)` on forward-only cursor returns error
+- [ ] `SQL_ATTR_CURSOR_TYPE` reflects actual cursor capabilities
+- [ ] `SQLGetData` called twice on same column (tests `SQL_GD_ANY_COLUMN` / `SQL_GD_ANY_ORDER` behavior)
+
+**Parameter Binding Tests** (extend Statement category — 3 tests):
+- [ ] `SQLBindParameter` with `SQL_C_WCHAR` input type
+- [ ] `SQLBindParameter` with `SQL_NULL_DATA` indicator
+- [ ] Parameter markers in prepared statement: bind, execute, rebind, execute
+
+#### 15.3 Consonant Development Verification
+
+After the mock driver rewrite, verify the consonant development rule:
+
+- [ ] Every W-variant exported in `.def` has an implementation
+- [ ] Every function listed in `SQLGetFunctions` is exercisable and tested
+- [ ] odbc-crusher runs against the mock driver and completes all 9+ test categories with non-empty results
+- [ ] Mock driver unit tests cover all API entry points
+
+**Deliverables**:
+- Mock driver works correctly on Windows (no crash, no empty reports)
+- 22+ new tests covering Unicode, catalog depth, diagnostics, cursor behavior, and parameter binding
+- Mock driver architecture documented in `MOCK_DRIVER_PLAN.md`
+- CI stress-test produces full reports from the mock driver job
 
 ---
 
