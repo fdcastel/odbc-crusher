@@ -19,6 +19,11 @@
 #include "tests/sqlstate_tests.hpp"
 #include "tests/boundary_tests.hpp"
 #include "tests/datatype_edge_tests.hpp"
+#include "tests/unicode_tests.hpp"
+#include "tests/catalog_depth_tests.hpp"
+#include "tests/diagnostic_depth_tests.hpp"
+#include "tests/cursor_behavior_tests.hpp"
+#include "tests/param_binding_tests.hpp"
 #include "discovery/driver_info.hpp"
 #include "discovery/type_info.hpp"
 #include "discovery/function_info.hpp"
@@ -193,6 +198,21 @@ int main(int argc, char** argv) {
         
         tests::DataTypeEdgeCaseTests dtype_edge_tests(conn);
         run_test_category(dtype_edge_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::UnicodeTests unicode_tests(conn);
+        run_test_category(unicode_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::CatalogDepthTests catalog_depth_tests(conn);
+        run_test_category(catalog_depth_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::DiagnosticDepthTests diag_depth_tests(conn);
+        run_test_category(diag_depth_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::CursorBehaviorTests cursor_tests(conn);
+        run_test_category(cursor_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::ParameterBindingTests param_tests(conn);
+        run_test_category(param_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
         auto overall_end = std::chrono::high_resolution_clock::now();
         auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(
