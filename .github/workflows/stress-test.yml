@@ -116,7 +116,7 @@ jobs:
     name: MySQL (Linux)
     runs-on: ubuntu-latest
     env:
-      ODBC_CONN: "Driver={MySQL};Server=127.0.0.1;Port=3306;User=root;Password=root;"
+      ODBC_CONN: "Driver={MySQL};Server=127.0.0.1;Port=3306;User=crusher;Password=crusher;"
       MYSQL_ODBC_LIB_URL: https://dev.mysql.com/get/Downloads/Connector-ODBC/9.2/mysql-connector-odbc-9.2.0-linux-glibc2.28-x86-64bit.tar.gz
     steps:
     - name: Checkout
@@ -131,7 +131,9 @@ jobs:
       run: |
         sudo systemctl start mysql
         sudo systemctl status mysql
-        sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;"
+        # On Ubuntu 24.04, MySQL 8.4+ uses caching_sha2_password by default
+        sudo mysql --defaults-file=/etc/mysql/debian.cnf -e "CREATE USER 'crusher'@'%' IDENTIFIED BY 'crusher'; GRANT ALL ON *.* TO 'crusher'@'%'; FLUSH PRIVILEGES;"
+        mysql -u crusher -pcrusher -e "SELECT VERSION();"
 
     - name: Install MySQL ODBC driver
       run: |
@@ -140,12 +142,9 @@ jobs:
         DRIVER_DIR=$(ls -d mysql-connector-odbc-*/lib/)
         DRIVER_PATH=$(readlink -f ${DRIVER_DIR}/libmyodbc9w.so)
         echo "MySQL ODBC driver: ${DRIVER_PATH}"
-        cat > /tmp/mysql-odbc.ini << EOF
-        [MySQL]
-        Description = MySQL ODBC Unicode Driver
-        Driver = ${DRIVER_PATH}
-        EOF
-        sudo odbcinst -i -d -f /tmp/mysql-odbc.ini
+        echo "[MySQL]" | sudo tee -a /etc/odbcinst.ini
+        echo "Description = MySQL ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
+        echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
 
     - name: Download odbc-crusher
