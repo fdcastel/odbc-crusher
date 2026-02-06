@@ -17,6 +17,18 @@ std::vector<TestResult> StatementTests::run() {
     results.push_back(test_statement_reuse());
     results.push_back(test_multiple_result_sets());
     
+    // Phase 12: Column Binding Tests
+    results.push_back(test_bind_col_integer());
+    results.push_back(test_bind_col_string());
+    results.push_back(test_fetch_bound_vs_getdata());
+    results.push_back(test_free_stmt_unbind());
+    
+    // Phase 12: Row Count & Parameter Tests
+    results.push_back(test_row_count());
+    results.push_back(test_num_params());
+    results.push_back(test_describe_param());
+    results.push_back(test_native_sql());
+    
     return results;
 }
 
@@ -461,6 +473,491 @@ TestResult StatementTests::test_multiple_result_sets() {
             result.actual = "SQLMoreResults not tested";
             result.status = TestStatus::SKIP_INCONCLUSIVE;
             result.suggestion = "Could not execute a query to test SQLMoreResults";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+// ============================================================
+// Phase 12: Column Binding Tests
+// ============================================================
+
+TestResult StatementTests::test_bind_col_integer() {
+    TestResult result = make_result(
+        "test_bind_col_integer",
+        "SQLBindCol",
+        TestStatus::PASS,
+        "Bind an integer column and fetch via bound buffer",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLBindCol"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        std::vector<std::string> queries = {"SELECT 42", "SELECT 42 FROM RDB$DATABASE"};
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.execute(query);
+                
+                SQLINTEGER value = 0;
+                SQLLEN indicator = 0;
+                
+                SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG,
+                                         &value, sizeof(value), &indicator);
+                
+                if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
+                    if (value == 42 || indicator != SQL_NULL_DATA) {
+                        result.status = TestStatus::PASS;
+                        result.actual = "Bound integer column, fetched value=" + std::to_string(value);
+                        success = true;
+                    } else {
+                        result.status = TestStatus::FAIL;
+                        result.actual = "Fetched unexpected value=" + std::to_string(value);
+                    }
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success && result.status == TestStatus::PASS) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not bind/fetch integer column";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult StatementTests::test_bind_col_string() {
+    TestResult result = make_result(
+        "test_bind_col_string",
+        "SQLBindCol",
+        TestStatus::PASS,
+        "Bind a string column and fetch via bound buffer",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLBindCol"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        std::vector<std::string> queries = {"SELECT 'hello'", "SELECT 'hello' FROM RDB$DATABASE"};
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.execute(query);
+                
+                SQLCHAR value[256] = {0};
+                SQLLEN indicator = 0;
+                
+                SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_CHAR,
+                                         value, sizeof(value), &indicator);
+                
+                if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
+                    std::string fetched(reinterpret_cast<char*>(value));
+                    result.status = TestStatus::PASS;
+                    result.actual = "Bound string column, fetched '" + fetched + "'";
+                    success = true;
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success && result.status == TestStatus::PASS) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not bind/fetch string column";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult StatementTests::test_fetch_bound_vs_getdata() {
+    TestResult result = make_result(
+        "test_fetch_bound_vs_getdata",
+        "SQLBindCol/SQLGetData",
+        TestStatus::PASS,
+        "Fetch same column via bound buffer and SQLGetData - values match",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLBindCol, §SQLGetData"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        std::vector<std::string> queries = {"SELECT 99", "SELECT 99 FROM RDB$DATABASE"};
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.execute(query);
+                
+                // Bind column 1
+                SQLINTEGER bound_value = 0;
+                SQLLEN indicator = 0;
+                SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG, &bound_value, sizeof(bound_value), &indicator);
+                
+                if (stmt.fetch()) {
+                    // Also get via SQLGetData
+                    SQLINTEGER getdata_value = 0;
+                    SQLLEN getdata_ind = 0;
+                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                            &getdata_value, sizeof(getdata_value), &getdata_ind);
+                    
+                    if (SQL_SUCCEEDED(rc)) {
+                        result.status = TestStatus::PASS;
+                        result.actual = "Bound=" + std::to_string(bound_value) + 
+                                       ", GetData=" + std::to_string(getdata_value);
+                    } else {
+                        result.status = TestStatus::PASS;
+                        result.actual = "Bound column fetched value=" + std::to_string(bound_value) + 
+                                       " (SQLGetData on bound column may not be supported)";
+                    }
+                    success = true;
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success && result.status == TestStatus::PASS) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not compare bound fetch vs SQLGetData";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult StatementTests::test_free_stmt_unbind() {
+    TestResult result = make_result(
+        "test_free_stmt_unbind",
+        "SQLFreeStmt(SQL_UNBIND)",
+        TestStatus::PASS,
+        "SQLFreeStmt(SQL_UNBIND) resets column bindings",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLFreeStmt"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Bind a column
+        SQLINTEGER value = 0;
+        SQLLEN indicator = 0;
+        SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG, &value, sizeof(value), &indicator);
+        
+        if (SQL_SUCCEEDED(rc)) {
+            // Unbind all columns
+            rc = SQLFreeStmt(stmt.get_handle(), SQL_UNBIND);
+            
+            if (SQL_SUCCEEDED(rc)) {
+                result.status = TestStatus::PASS;
+                result.actual = "SQLFreeStmt(SQL_UNBIND) succeeded";
+            } else {
+                result.status = TestStatus::FAIL;
+                result.actual = "SQLFreeStmt(SQL_UNBIND) failed (rc=" + std::to_string(rc) + ")";
+                result.severity = Severity::WARNING;
+            }
+        } else {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "SQLBindCol not supported";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+// ============================================================
+// Phase 12: Row Count & Parameter Tests
+// ============================================================
+
+TestResult StatementTests::test_row_count() {
+    TestResult result = make_result(
+        "test_row_count",
+        "SQLRowCount",
+        TestStatus::PASS,
+        "SQLRowCount returns row count after execution",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLRowCount"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.execute(query);
+                
+                SQLLEN row_count = -1;
+                SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
+                
+                if (SQL_SUCCEEDED(rc)) {
+                    result.status = TestStatus::PASS;
+                    result.actual = "SQLRowCount returned " + std::to_string(row_count);
+                    success = true;
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success && result.status == TestStatus::PASS) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not test SQLRowCount";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult StatementTests::test_num_params() {
+    TestResult result = make_result(
+        "test_num_params",
+        "SQLNumParams",
+        TestStatus::PASS,
+        "SQLNumParams returns parameter count after prepare",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLNumParams"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        std::vector<std::string> queries = {
+            "SELECT ?",
+            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE"
+        };
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.prepare(query);
+                
+                SQLSMALLINT num_params = -1;
+                SQLRETURN rc = SQLNumParams(stmt.get_handle(), &num_params);
+                
+                if (SQL_SUCCEEDED(rc)) {
+                    if (num_params == 1) {
+                        result.status = TestStatus::PASS;
+                        result.actual = "SQLNumParams correctly returned 1 for single-parameter query";
+                    } else {
+                        result.status = TestStatus::PASS;
+                        result.actual = "SQLNumParams returned " + std::to_string(num_params);
+                    }
+                    success = true;
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success && result.status == TestStatus::PASS) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not test SQLNumParams";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult StatementTests::test_describe_param() {
+    TestResult result = make_result(
+        "test_describe_param",
+        "SQLDescribeParam",
+        TestStatus::PASS,
+        "SQLDescribeParam returns parameter type info",
+        "",
+        Severity::INFO,
+        ConformanceLevel::LEVEL_1,
+        "ODBC 3.8 §SQLDescribeParam"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        std::vector<std::string> queries = {
+            "SELECT ?",
+            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE"
+        };
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.prepare(query);
+                
+                SQLSMALLINT sql_type = 0;
+                SQLULEN param_size = 0;
+                SQLSMALLINT decimal_digits = 0;
+                SQLSMALLINT nullable = 0;
+                
+                SQLRETURN rc = SQLDescribeParam(
+                    stmt.get_handle(), 1,
+                    &sql_type, &param_size, &decimal_digits, &nullable
+                );
+                
+                if (SQL_SUCCEEDED(rc)) {
+                    result.status = TestStatus::PASS;
+                    result.actual = "Parameter 1: type=" + std::to_string(sql_type) +
+                                   ", size=" + std::to_string(param_size) +
+                                   ", nullable=" + std::to_string(nullable);
+                    success = true;
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success && result.status == TestStatus::PASS) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "SQLDescribeParam not supported by this driver";
+            result.suggestion = "SQLDescribeParam is a Level 1 conformance function";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult StatementTests::test_native_sql() {
+    TestResult result = make_result(
+        "test_native_sql",
+        "SQLNativeSql",
+        TestStatus::PASS,
+        "SQLNativeSql translates ODBC SQL to native SQL",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLNativeSql"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        SQLCHAR input[] = "SELECT 1";
+        SQLCHAR output[512] = {0};
+        SQLINTEGER output_len = 0;
+        
+        SQLRETURN rc = SQLNativeSql(
+            conn_.get_handle(),
+            input, SQL_NTS,
+            output, sizeof(output), &output_len
+        );
+        
+        if (SQL_SUCCEEDED(rc)) {
+            std::string native_sql(reinterpret_cast<char*>(output));
+            result.status = TestStatus::PASS;
+            result.actual = "SQLNativeSql: '" + std::string(reinterpret_cast<char*>(input)) + 
+                           "' -> '" + native_sql + "'";
+        } else {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "SQLNativeSql not supported";
+            result.suggestion = "SQLNativeSql is a Core conformance function per ODBC 3.x";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();

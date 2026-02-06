@@ -17,6 +17,8 @@ add_executable(odbc_crusher_tests
     test_buffer_validation.cpp
     test_error_queue.cpp
     test_state_machine.cpp
+    test_descriptor_tests.cpp
+    test_cancellation_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE

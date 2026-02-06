@@ -44,15 +44,15 @@ TEST(ErrorQueueTests, MockDriverTests) {
         switch (result.status) {
             case tests::TestStatus::PASS: passed++; break;
             case tests::TestStatus::FAIL: failed++; break;
-            case tests::TestStatus::SKIP: skipped++; break;
+            case tests::TestStatus::SKIP:
+            case tests::TestStatus::SKIP_UNSUPPORTED:
+            case tests::TestStatus::SKIP_INCONCLUSIVE: skipped++; break;
             case tests::TestStatus::ERR: errors++; break;
         }
         
         // Print result for debugging
         std::cout << result.test_name << ": " 
-                  << (result.status == tests::TestStatus::PASS ? "PASS" :
-                      result.status == tests::TestStatus::FAIL ? "FAIL" :
-                      result.status == tests::TestStatus::SKIP ? "SKIP" : "ERROR")
+                  << tests::status_to_string(result.status)
                   << " - " << result.actual
                   << std::endl;
     }

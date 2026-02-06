@@ -16,6 +16,12 @@ std::vector<TestResult> AdvancedTests::run() {
     results.push_back(test_positioned_operations());
     results.push_back(test_statement_attributes());
     
+    // Phase 12: Scrollable Cursor Tests
+    results.push_back(test_fetch_scroll_next());
+    results.push_back(test_fetch_scroll_first_last());
+    results.push_back(test_fetch_scroll_absolute());
+    results.push_back(test_cursor_scrollable_attr());
+    
     return results;
 }
 
@@ -419,6 +425,251 @@ TestResult AdvancedTests::test_statement_attributes() {
         
         result.actual = oss.str();
         result.status = TestStatus::PASS;
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+// ============================================================
+// Phase 12: Scrollable Cursor Tests
+// ============================================================
+
+TestResult AdvancedTests::test_fetch_scroll_next() {
+    TestResult result = make_result(
+        "test_fetch_scroll_next",
+        "SQLFetchScroll(SQL_FETCH_NEXT)",
+        TestStatus::PASS,
+        "SQLFetchScroll with SQL_FETCH_NEXT works",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 §SQLFetchScroll"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.execute(query);
+                
+                SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_NEXT, 0);
+                
+                if (SQL_SUCCEEDED(rc)) {
+                    result.status = TestStatus::PASS;
+                    result.actual = "SQLFetchScroll(SQL_FETCH_NEXT) succeeded";
+                    success = true;
+                    break;
+                } else if (rc == SQL_NO_DATA) {
+                    result.status = TestStatus::PASS;
+                    result.actual = "SQLFetchScroll(SQL_FETCH_NEXT) returned SQL_NO_DATA (empty result)";
+                    success = true;
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not test SQLFetchScroll(SQL_FETCH_NEXT)";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult AdvancedTests::test_fetch_scroll_first_last() {
+    TestResult result = make_result(
+        "test_fetch_scroll_first_last",
+        "SQLFetchScroll(SQL_FETCH_FIRST/SQL_FETCH_LAST)",
+        TestStatus::PASS,
+        "SQLFetchScroll with FIRST/LAST orientation",
+        "",
+        Severity::INFO,
+        ConformanceLevel::LEVEL_2,
+        "ODBC 3.8 §SQLFetchScroll, §SQL_FETCH_FIRST"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Need scrollable cursor
+        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_CURSOR_TYPE,
+                      (SQLPOINTER)SQL_CURSOR_STATIC, 0);
+        
+        std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.execute(query);
+                
+                SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_FIRST, 0);
+                
+                if (SQL_SUCCEEDED(rc)) {
+                    result.status = TestStatus::PASS;
+                    result.actual = "SQLFetchScroll(SQL_FETCH_FIRST) succeeded (scrollable cursor)";
+                    success = true;
+                    break;
+                } else if (rc == SQL_ERROR) {
+                    SQLCHAR sqlstate[6] = {0};
+                    SQLINTEGER native = 0;
+                    SQLCHAR msg[256] = {0};
+                    SQLSMALLINT msg_len = 0;
+                    SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
+                                 sqlstate, &native, msg, sizeof(msg), &msg_len);
+                    std::string state(reinterpret_cast<char*>(sqlstate));
+                    
+                    result.status = TestStatus::SKIP_UNSUPPORTED;
+                    result.actual = "SQLFetchScroll(SQL_FETCH_FIRST) not supported (SQLSTATE=" + state + ")";
+                    result.suggestion = "Scrollable cursors (SQL_FETCH_FIRST/LAST) are a Level 2 feature";
+                    success = true;
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not test scrollable cursor";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult AdvancedTests::test_fetch_scroll_absolute() {
+    TestResult result = make_result(
+        "test_fetch_scroll_absolute",
+        "SQLFetchScroll(SQL_FETCH_ABSOLUTE)",
+        TestStatus::PASS,
+        "SQLFetchScroll with absolute row position",
+        "",
+        Severity::INFO,
+        ConformanceLevel::LEVEL_2,
+        "ODBC 3.8 §SQLFetchScroll, §SQL_FETCH_ABSOLUTE"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Need scrollable cursor
+        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_CURSOR_TYPE,
+                      (SQLPOINTER)SQL_CURSOR_STATIC, 0);
+        
+        std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
+        bool success = false;
+        
+        for (const auto& query : queries) {
+            try {
+                stmt.execute(query);
+                
+                SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_ABSOLUTE, 1);
+                
+                if (SQL_SUCCEEDED(rc)) {
+                    result.status = TestStatus::PASS;
+                    result.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE, 1) succeeded";
+                    success = true;
+                    break;
+                } else if (rc == SQL_ERROR) {
+                    result.status = TestStatus::SKIP_UNSUPPORTED;
+                    result.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE) not supported";
+                    result.suggestion = "Absolute positioning is a Level 2 cursor feature";
+                    success = true;
+                    break;
+                }
+            } catch (const core::OdbcError&) {
+                continue;
+            }
+        }
+        
+        if (!success) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not test SQL_FETCH_ABSOLUTE";
+        }
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+    
+    return result;
+}
+
+TestResult AdvancedTests::test_cursor_scrollable_attr() {
+    TestResult result = make_result(
+        "test_cursor_scrollable_attr",
+        "SQLSetStmtAttr(SQL_ATTR_CURSOR_SCROLLABLE)",
+        TestStatus::PASS,
+        "Set and verify SQL_ATTR_CURSOR_SCROLLABLE",
+        "",
+        Severity::INFO,
+        ConformanceLevel::LEVEL_2,
+        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_CURSOR_SCROLLABLE"
+    );
+    
+    try {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        core::OdbcStatement stmt(conn_);
+        
+        // Try to set cursor scrollable
+        SQLRETURN rc = SQLSetStmtAttr(
+            stmt.get_handle(),
+            SQL_ATTR_CURSOR_SCROLLABLE,
+            (SQLPOINTER)SQL_SCROLLABLE,
+            0
+        );
+        
+        if (SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::PASS;
+            result.actual = "SQL_ATTR_CURSOR_SCROLLABLE set to SQL_SCROLLABLE";
+        } else {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "SQL_ATTR_CURSOR_SCROLLABLE not supported";
+            result.suggestion = "Scrollable cursors are a Level 2 feature per ODBC 3.x";
+        }
         
         auto end_time = std::chrono::high_resolution_clock::now();
         result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);

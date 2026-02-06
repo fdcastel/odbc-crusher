@@ -14,6 +14,8 @@
 #include "tests/buffer_validation_tests.hpp"
 #include "tests/error_queue_tests.hpp"
 #include "tests/state_machine_tests.hpp"
+#include "tests/descriptor_tests.hpp"
+#include "tests/cancellation_tests.hpp"
 #include "discovery/driver_info.hpp"
 #include "discovery/type_info.hpp"
 #include "discovery/function_info.hpp"
@@ -157,6 +159,12 @@ int main(int argc, char** argv) {
         
         tests::StateMachineTests state_tests(conn);
         run_test_category(state_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::DescriptorTests desc_tests(conn);
+        run_test_category(desc_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::CancellationTests cancel_tests(conn);
+        run_test_category(cancel_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
         auto overall_end = std::chrono::high_resolution_clock::now();
         auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(
