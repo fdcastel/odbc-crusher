@@ -374,21 +374,51 @@ SQLRETURN SQL_API SQLGetInfoW(
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
 
+    // Determine if this info type returns a string value.
+    // Use an explicit list — the heuristic based on length was fragile.
+    bool is_string = false;
+    switch (fInfoType) {
+        case SQL_DRIVER_NAME:
+        case SQL_DRIVER_VER:
+        case SQL_DRIVER_ODBC_VER:
+        case SQL_ODBC_VER:
+        case SQL_DBMS_NAME:
+        case SQL_DBMS_VER:
+        case SQL_SERVER_NAME:
+        case SQL_DATA_SOURCE_NAME:
+        case SQL_DATA_SOURCE_READ_ONLY:
+        case SQL_DATABASE_NAME:
+        case SQL_USER_NAME:
+        case SQL_IDENTIFIER_QUOTE_CHAR:
+        case SQL_CATALOG_NAME:
+        case SQL_CATALOG_NAME_SEPARATOR:
+        case SQL_CATALOG_TERM:
+        case SQL_SCHEMA_TERM:
+        case SQL_TABLE_TERM:
+        case SQL_PROCEDURE_TERM:
+        case SQL_DESCRIBE_PARAMETER:
+        case SQL_MULT_RESULT_SETS:
+        case SQL_MULTIPLE_ACTIVE_TXN:
+        case SQL_NEED_LONG_DATA_LEN:
+        case SQL_OUTER_JOINS:
+        case SQL_ORDER_BY_COLUMNS_IN_SELECT:
+        case SQL_PROCEDURES:
+        case SQL_ROW_UPDATES:
+        case SQL_SEARCH_PATTERN_ESCAPE:
+        case SQL_SPECIAL_CHARACTERS:
+            is_string = true;
+            break;
+        default:
+            is_string = false;
+            break;
+    }
+
     // Call ANSI version into a temp buffer
     SQLCHAR ansi_buf[1024] = {0};
     SQLSMALLINT ansi_len = 0;
     SQLRETURN ret = SQLGetInfo(hdbc, fInfoType,
                                 ansi_buf, sizeof(ansi_buf), &ansi_len);
     if (ret == SQL_ERROR) return ret;
-
-    // Determine if the info type returns a string or numeric value.
-    // String info types have ansi_len > 0 AND the value is a
-    // null-terminated string (heuristic: ansi_len <= sizeof buffer
-    // and the content looks like text).
-    // Better: check if ansi_len equals sizeof(SQLUSMALLINT) or
-    // sizeof(SQLUINTEGER) — those are numeric.
-    bool is_string = (ansi_len != sizeof(SQLUSMALLINT) &&
-                      ansi_len != sizeof(SQLUINTEGER));
 
     if (is_string) {
         std::string val(reinterpret_cast<char*>(ansi_buf),

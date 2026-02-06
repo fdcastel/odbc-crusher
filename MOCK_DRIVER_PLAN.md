@@ -461,11 +461,12 @@ Current behavior: `SQLGetData` only handles `SQL_C_CHAR` for strings. `SQL_C_WCH
 
 #### M2.5 Deliverables
 
-- [ ] `IMPL_GetInfo` produces Unicode output for string info types
-- [ ] Catalog result sets use `SQL_WVARCHAR` for string columns
-- [ ] `SQLGetData` supports `SQL_C_WCHAR` target type
-- [ ] `SQLDescribeColW` returns Unicode column names
-- [ ] All buffer length calculations are in bytes (not characters)
+- [x] `SQLGetInfoW` produces Unicode output for string info types (explicit string-type list, not heuristic)
+- [x] Catalog result sets use `SQL_WVARCHAR` for string columns (all 10 catalog functions updated)
+- [x] `SQLGetData` supports `SQL_C_WCHAR` target type (strings, integers, doubles → UTF-16)
+- [x] `SQLDescribeColW` returns Unicode column names (via W wrapper + `SQL_WVARCHAR` column types)
+- [x] `SQLColAttribute` handles `SQL_WVARCHAR` in length/display-size switches
+- [x] All buffer length calculations are in bytes (not characters)
 
 ---
 

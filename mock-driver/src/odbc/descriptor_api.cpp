@@ -198,7 +198,8 @@ SQLRETURN SQL_API SQLColAttribute(
                     case SQL_INTEGER: *pNumAttr = 4; break;
                     case SQL_SMALLINT: *pNumAttr = 2; break;
                     case SQL_BIGINT: *pNumAttr = 8; break;
-                    case SQL_VARCHAR: *pNumAttr = 255; break;
+                    case SQL_VARCHAR:
+                    case SQL_WVARCHAR: *pNumAttr = 255; break;
                     case SQL_DECIMAL: *pNumAttr = 18; break;
                     default: *pNumAttr = 255;
                 }
@@ -234,7 +235,8 @@ SQLRETURN SQL_API SQLColAttribute(
                     case SQL_INTEGER: *pNumAttr = 11; break;
                     case SQL_SMALLINT: *pNumAttr = 6; break;
                     case SQL_BIGINT: *pNumAttr = 20; break;
-                    case SQL_VARCHAR: *pNumAttr = 255; break;
+                    case SQL_VARCHAR:
+                    case SQL_WVARCHAR: *pNumAttr = 255; break;
                     case SQL_DECIMAL: *pNumAttr = 20; break;
                     case SQL_TYPE_DATE: *pNumAttr = 10; break;
                     case SQL_TYPE_TIMESTAMP: *pNumAttr = 26; break;

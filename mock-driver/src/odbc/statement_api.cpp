@@ -390,6 +390,9 @@ SQLRETURN SQL_API SQLGetData(
                 if (pcbValue) *pcbValue = sizeof(SQLSMALLINT);
                 break;
                 
+            case SQL_C_WCHAR:
+                break;  // Handled by SQL_C_WCHAR catch-all below
+                
             case SQL_C_CHAR:
             default: {
                 std::string str = std::to_string(value);
@@ -416,6 +419,9 @@ SQLRETURN SQL_API SQLGetData(
                 if (pcbValue) *pcbValue = sizeof(SQLREAL);
                 break;
                 
+            case SQL_C_WCHAR:
+                break;  // Handled by SQL_C_WCHAR catch-all below
+                
             case SQL_C_CHAR:
             default: {
                 std::string str = std::to_string(value);
@@ -431,18 +437,56 @@ SQLRETURN SQL_API SQLGetData(
     } else if (std::holds_alternative<std::string>(cell)) {
         const std::string& value = std::get<std::string>(cell);
         
-        if (rgbValue && cbValueMax > 0) {
-            size_t copy_len = std::min(value.length(), static_cast<size_t>(cbValueMax - 1));
-            std::memcpy(rgbValue, value.c_str(), copy_len);
-            static_cast<char*>(rgbValue)[copy_len] = '\0';
+        if (fCType == SQL_C_WCHAR) {
+            // Convert UTF-8 string to UTF-16 (SQLWCHAR)
+            SQLSMALLINT wbytes = 0;
+            SQLRETURN r = copy_string_to_wbuffer(value,
+                              static_cast<SQLWCHAR*>(rgbValue),
+                              static_cast<SQLINTEGER>(cbValueMax), &wbytes);
+            // pcbValue reports total bytes needed (excl NUL), regardless of truncation
+            if (pcbValue) *pcbValue = static_cast<SQLLEN>(wbytes);
+            if (r == SQL_SUCCESS_WITH_INFO) {
+                stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                    "String data, right truncated");
+                return SQL_SUCCESS_WITH_INFO;
+            }
+        } else {
+            // SQL_C_CHAR or default — return ANSI
+            if (rgbValue && cbValueMax > 0) {
+                size_t copy_len = std::min(value.length(), static_cast<size_t>(cbValueMax - 1));
+                std::memcpy(rgbValue, value.c_str(), copy_len);
+                static_cast<char*>(rgbValue)[copy_len] = '\0';
+            }
+            if (pcbValue) *pcbValue = static_cast<SQLLEN>(value.length());
+            
+            if (static_cast<SQLLEN>(value.length()) >= cbValueMax) {
+                stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                    "String data, right truncated");
+                return SQL_SUCCESS_WITH_INFO;
+            }
         }
-        if (pcbValue) *pcbValue = static_cast<SQLLEN>(value.length());
-        
-        if (static_cast<SQLLEN>(value.length()) >= cbValueMax) {
+    }
+    
+    // For integer/double cells requested as SQL_C_WCHAR, convert via string
+    if (fCType == SQL_C_WCHAR && !std::holds_alternative<std::string>(cell) &&
+        !std::holds_alternative<std::monostate>(cell)) {
+        std::string str;
+        if (std::holds_alternative<long long>(cell)) {
+            str = std::to_string(std::get<long long>(cell));
+        } else if (std::holds_alternative<double>(cell)) {
+            str = std::to_string(std::get<double>(cell));
+        }
+        SQLSMALLINT wbytes = 0;
+        SQLRETURN r = copy_string_to_wbuffer(str,
+                          static_cast<SQLWCHAR*>(rgbValue),
+                          static_cast<SQLINTEGER>(cbValueMax), &wbytes);
+        if (pcbValue) *pcbValue = static_cast<SQLLEN>(wbytes);
+        if (r == SQL_SUCCESS_WITH_INFO) {
             stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
                                 "String data, right truncated");
-            return SQL_SUCCESS_WITH_INFO;  // Truncation
+            return SQL_SUCCESS_WITH_INFO;
         }
+        return SQL_SUCCESS;
     }
     
     return SQL_SUCCESS;
@@ -499,7 +543,10 @@ SQLRETURN SQL_API SQLDescribeCol(
             case SQL_INTEGER: *pcbColDef = 10; break;
             case SQL_SMALLINT: *pcbColDef = 5; break;
             case SQL_BIGINT: *pcbColDef = 19; break;
-            case SQL_VARCHAR: *pcbColDef = 255; break;
+            case SQL_VARCHAR:
+            case SQL_WVARCHAR: *pcbColDef = 255; break;
+            case SQL_CHAR:
+            case SQL_WCHAR: *pcbColDef = 1; break;
             case SQL_DECIMAL: *pcbColDef = 18; break;
             case SQL_TYPE_DATE: *pcbColDef = 10; break;
             case SQL_TYPE_TIMESTAMP: *pcbColDef = 26; break;
