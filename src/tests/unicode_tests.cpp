@@ -1,5 +1,6 @@
 #include "unicode_tests.hpp"
 #include "core/odbc_statement.hpp"
+#include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
@@ -120,7 +121,7 @@ TestResult UnicodeTests::test_describecol_wchar_names() {
         
         // Execute a query to get a result set with known column names
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -195,7 +196,7 @@ TestResult UnicodeTests::test_getdata_sql_c_wchar() {
         core::OdbcStatement stmt(conn_);
         
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -274,8 +275,8 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
         SQLRETURN ret = SQLColumnsW(stmt.get_handle(),
             nullptr, 0,       // Catalog
             nullptr, 0,       // Schema
-            (SQLWCHAR*)L"CUSTOMERS", SQL_NTS,  // Table name
-            (SQLWCHAR*)L"%", SQL_NTS);         // Column name pattern
+            SqlWcharBuf("CUSTOMERS").ptr(), SQL_NTS,  // Table name
+            SqlWcharBuf("%").ptr(), SQL_NTS);         // Column name pattern
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;

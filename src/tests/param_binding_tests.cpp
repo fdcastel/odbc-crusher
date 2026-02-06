@@ -1,5 +1,6 @@
 #include "param_binding_tests.hpp"
 #include "core/odbc_statement.hpp"
+#include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
@@ -41,7 +42,7 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
         
         // Prepare a statement with a parameter marker
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS WHERE NAME = ?", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS WHERE NAME = ?").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -52,13 +53,13 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
         }
         
         // Bind a Unicode string parameter
-        SQLWCHAR param_value[] = L"TestCustomer";
+        auto param_wbuf = to_sqlwchar("TestCustomer"); SQLWCHAR* param_value = param_wbuf.data();
         SQLLEN param_len = SQL_NTS;
         
         ret = SQLBindParameter(stmt.get_handle(), 1,
             SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
             50, 0,
-            param_value, sizeof(param_value), &param_len);
+            param_value, (param_wbuf.size() * sizeof(SQLWCHAR)), &param_len);
         
         std::ostringstream actual;
         if (SQL_SUCCEEDED(ret)) {
@@ -108,7 +109,7 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
         core::OdbcStatement stmt(conn_);
         
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS WHERE NAME = ?", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS WHERE NAME = ?").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -169,7 +170,7 @@ TestResult ParameterBindingTests::test_param_rebind_execute() {
         core::OdbcStatement stmt(conn_);
         
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS WHERE CUSTOMER_ID = ?", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS WHERE CUSTOMER_ID = ?").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;

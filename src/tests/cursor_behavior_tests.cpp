@@ -1,5 +1,6 @@
 #include "cursor_behavior_tests.hpp"
 #include "core/odbc_statement.hpp"
+#include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
@@ -41,7 +42,7 @@ TestResult CursorBehaviorTests::test_forward_only_past_end() {
         core::OdbcStatement stmt(conn_);
         
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -105,7 +106,7 @@ TestResult CursorBehaviorTests::test_fetchscroll_first_forward_only() {
             (SQLPOINTER)(intptr_t)SQL_CURSOR_FORWARD_ONLY, 0);
         
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -238,7 +239,7 @@ TestResult CursorBehaviorTests::test_getdata_same_column_twice() {
         core::OdbcStatement stmt(conn_);
         
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;

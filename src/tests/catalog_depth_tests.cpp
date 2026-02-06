@@ -1,5 +1,6 @@
 #include "catalog_depth_tests.hpp"
 #include "core/odbc_statement.hpp"
+#include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
@@ -47,7 +48,7 @@ TestResult CatalogDepthTests::test_tables_search_patterns() {
             nullptr, 0,        // Catalog
             nullptr, 0,        // Schema  
             nullptr, 0,        // Table name
-            (SQLWCHAR*)L"%", SQL_NTS);  // All table types
+            SqlWcharBuf("%").ptr(), SQL_NTS);  // All table types
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -102,8 +103,8 @@ TestResult CatalogDepthTests::test_columns_result_set_shape() {
         
         SQLRETURN ret = SQLColumnsW(stmt.get_handle(),
             nullptr, 0, nullptr, 0,
-            (SQLWCHAR*)L"%", SQL_NTS,     // All tables
-            (SQLWCHAR*)L"%", SQL_NTS);    // All columns
+            SqlWcharBuf("%").ptr(), SQL_NTS,     // All tables
+            SqlWcharBuf("%").ptr(), SQL_NTS);    // All columns
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -157,7 +158,7 @@ TestResult CatalogDepthTests::test_statistics_result() {
         
         SQLRETURN ret = SQLStatisticsW(stmt.get_handle(),
             nullptr, 0, nullptr, 0,
-            (SQLWCHAR*)L"CUSTOMERS", SQL_NTS,
+            SqlWcharBuf("CUSTOMERS").ptr(), SQL_NTS,
             SQL_INDEX_ALL, SQL_QUICK);
         
         if (!SQL_SUCCEEDED(ret)) {
@@ -219,7 +220,7 @@ TestResult CatalogDepthTests::test_procedures_result() {
         
         SQLRETURN ret = SQLProceduresW(stmt.get_handle(),
             nullptr, 0, nullptr, 0,
-            (SQLWCHAR*)L"%", SQL_NTS);
+            SqlWcharBuf("%").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_UNSUPPORTED;
@@ -241,8 +242,8 @@ TestResult CatalogDepthTests::test_procedures_result() {
         core::OdbcStatement stmt2(conn_);
         SQLRETURN ret2 = SQLProcedureColumnsW(stmt2.get_handle(),
             nullptr, 0, nullptr, 0,
-            (SQLWCHAR*)L"%", SQL_NTS,
-            (SQLWCHAR*)L"%", SQL_NTS);
+            SqlWcharBuf("%").ptr(), SQL_NTS,
+            SqlWcharBuf("%").ptr(), SQL_NTS);
         
         bool proc_cols_ok = SQL_SUCCEEDED(ret2);
         
@@ -282,7 +283,7 @@ TestResult CatalogDepthTests::test_privileges_result() {
         
         SQLRETURN ret = SQLTablePrivilegesW(stmt.get_handle(),
             nullptr, 0, nullptr, 0,
-            (SQLWCHAR*)L"CUSTOMERS", SQL_NTS);
+            SqlWcharBuf("CUSTOMERS").ptr(), SQL_NTS);
         
         bool tbl_priv_ok = SQL_SUCCEEDED(ret);
         int tbl_priv_rows = 0;
@@ -296,8 +297,8 @@ TestResult CatalogDepthTests::test_privileges_result() {
         core::OdbcStatement stmt2(conn_);
         SQLRETURN ret2 = SQLColumnPrivilegesW(stmt2.get_handle(),
             nullptr, 0, nullptr, 0,
-            (SQLWCHAR*)L"CUSTOMERS", SQL_NTS,
-            (SQLWCHAR*)L"%", SQL_NTS);
+            SqlWcharBuf("CUSTOMERS").ptr(), SQL_NTS,
+            SqlWcharBuf("%").ptr(), SQL_NTS);
         
         bool col_priv_ok = SQL_SUCCEEDED(ret2);
         

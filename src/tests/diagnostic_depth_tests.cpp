@@ -1,5 +1,6 @@
 #include "diagnostic_depth_tests.hpp"
 #include "core/odbc_statement.hpp"
+#include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
@@ -42,7 +43,7 @@ TestResult DiagnosticDepthTests::test_diagfield_sqlstate() {
         
         // Generate an error by executing invalid SQL
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"THIS IS INVALID SQL SYNTAX !@#$", SQL_NTS);
+            SqlWcharBuf("THIS IS INVALID SQL SYNTAX !@#$").ptr(), SQL_NTS);
         
         if (SQL_SUCCEEDED(ret)) {
             // Driver accepted it - try a different approach
@@ -109,7 +110,7 @@ TestResult DiagnosticDepthTests::test_diagfield_record_count() {
         
         // Generate an error
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"THIS IS INVALID SQL !@#$", SQL_NTS);
+            SqlWcharBuf("THIS IS INVALID SQL !@#$").ptr(), SQL_NTS);
         
         if (SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -170,7 +171,7 @@ TestResult DiagnosticDepthTests::test_diagfield_row_count() {
         
         // Execute a SELECT to generate a result set
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"SELECT * FROM CUSTOMERS", SQL_NTS);
+            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -232,7 +233,7 @@ TestResult DiagnosticDepthTests::test_multiple_diagnostic_records() {
         
         // Execute invalid SQL to generate diagnostics
         SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            (SQLWCHAR*)L"INVALID SQL THAT SHOULD FAIL !@#$", SQL_NTS);
+            SqlWcharBuf("INVALID SQL THAT SHOULD FAIL !@#$").ptr(), SQL_NTS);
         
         if (SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
