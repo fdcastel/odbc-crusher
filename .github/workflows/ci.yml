@@ -20,25 +20,19 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        submodules: recursive
+        fetch-depth: 0
         
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v2
       
     - name: Configure Mock Driver
-      run: |
-        cd mock-driver
-        cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+      run: cmake -B mock-driver/build -S mock-driver -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
         
     - name: Build Mock Driver
-      run: |
-        cd mock-driver
-        cmake --build build --config ${{ matrix.build_type }} -j 4
+      run: cmake --build mock-driver/build --config ${{ matrix.build_type }} -j 4
         
     - name: Run Mock Driver Tests
-      run: |
-        cd mock-driver/build
-        ctest -C ${{ matrix.build_type }} --output-on-failure
+      run: ctest --test-dir mock-driver/build -C ${{ matrix.build_type }} --output-on-failure
         
     - name: Upload Mock Driver Artifacts
       uses: actions/upload-artifact@v4
@@ -66,7 +60,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        submodules: recursive
+        fetch-depth: 0
         
     - name: Setup MSVC (Windows)
       if: runner.os == 'Windows'
@@ -93,7 +87,7 @@ jobs:
         
     - name: Run unit tests (without ODBC drivers)
       run: |
-        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -R "Environment|Error|DriverInfo|TypeInfo|FunctionInfo" || true
+        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -R "Environment|Error|DriverInfo|TypeInfo|FunctionInfo"
       continue-on-error: true
       
     - name: Download Mock Driver (Windows)

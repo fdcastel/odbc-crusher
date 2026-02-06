@@ -2,131 +2,61 @@
 
 [![CI](https://github.com/fdcastel/odbc-crusher/actions/workflows/ci.yml/badge.svg)](https://github.com/fdcastel/odbc-crusher/actions/workflows/ci.yml)
 [![Release](https://github.com/fdcastel/odbc-crusher/actions/workflows/release.yml/badge.svg)](https://github.com/fdcastel/odbc-crusher/actions/workflows/release.yml)
-[![C++](https://img.shields.io/badge/C%2B%2B-17-blue)]()
-[![License](https://img.shields.io/badge/license-MIT-blue)]()
 
-**Repository**: https://github.com/fdcastel/odbc-crusher
+A command-line tool that tests ODBC drivers for correctness and spec compliance.
 
-A comprehensive CLI debugging and testing tool for ODBC driver developers written in modern C++.
+Point it at any ODBC connection string and it will run **90+ tests** covering connections, statements, metadata, data types, transactions, error handling, buffer validation, and state machine compliance — then report what passed, failed, or was skipped.
 
-## 🎉 Project Status: **COMPLETE** (Phases 0-9)
+## Quick Start
 
-All core phases including **reporting** have been successfully implemented. The application is **fully functional** with beautiful console output and JSON export capabilities!
+Download a binary from the [latest release](https://github.com/fdcastel/odbc-crusher/releases/latest), or [build from source](#build-from-source).
 
-## ✨ Features
+```bash
+# Basic usage
+odbc-crusher "Driver={MySQL ODBC 9.2 Unicode Driver};Server=localhost;Database=test;UID=root;PWD=secret"
 
-### Core Infrastructure (Phase 1)
-- **RAII ODBC Wrappers**: Safe, modern C++ wrappers for ODBC handles
-  - `OdbcEnvironment` - Environment handle management
-  - `OdbcConnection` - Connection handle with connect/disconnect
-  - `OdbcStatement` - Statement handle with execute/fetch/prepare
-- **Comprehensive Error Handling**: `OdbcError` exception class with full diagnostic extraction
-- **Memory Safe**: No manual memory management, zero leaks
+# Use a DSN
+odbc-crusher "DSN=MyFirebird"
 
-### Driver Discovery (Phase 2)
-- **DriverInfo**: Collects 11+ driver and DBMS properties via `SQLGetInfo`
-- **TypeInfo**: Enumerates all supported data types via `SQLGetTypeInfo`
-- **FunctionInfo**: Checks 50+ ODBC functions via `SQLGetFunctions` bitmap
-
-### Connection Tests (Phase 3)
-- Connection establishment and validation
-- Connection attributes (autocommit, timeout)
-- Multiple statement handle allocation
-- Driver name and database name retrieval
-
-### Statement Tests (Phase 4)
-- Simple query execution (`SQLExecDirect`)
-- Prepared statements (`SQLPrepare`/`SQLExecute`)
-- Parameter binding (`SQLBindParameter`)
-- Result fetching (`SQLFetch`)
-- Column metadata (`SQLNumResultCols`, `SQLDescribeCol`)
-- Statement reuse (`SQLCloseCursor`)
-- Multiple result sets (`SQLMoreResults`)
-
-### Metadata/Catalog Tests (Phase 5)
-- Table listing (`SQLTables`)
-- Column metadata (`SQLColumns`)
-- Primary key information (`SQLPrimaryKeys`)
-- Index/statistics (`SQLStatistics`)
-- Special columns (`SQLSpecialColumns`)
-
-### Data Type Tests (Phase 6)
-- Integer types (SMALLINT, INTEGER, BIGINT)
-- Decimal types (DECIMAL, NUMERIC)
-- Float types (FLOAT, DOUBLE, REAL)
-- String types (CHAR, VARCHAR)
-- Date/Time types (DATE with SQL_DATE_STRUCT)
-- NULL value handling (SQL_NULL_DATA indicator)
-
-### Reporting (Phase 7) ✅
-- **Console Reporter**: ASCII formatted output with:
-  - Category-based organization
-  - Pass/fail/skip/error icons ([PASS]/[FAIL]/[SKIP]/[ERR!])
-  - Duration formatting (us, ms, s)
-  - Verbose mode (`-v`) for detailed diagnostics
-  - Summary statistics with percentages
-  - **Driver Information Display**: Shows comprehensive driver info BEFORE tests
-    - Driver name, version, ODBC version
-    - DBMS name and version
-    - SQL conformance levels
-    - All supported data types in formatted table
-    - ODBC function support (52 functions checked)
-- **JSON Reporter**: Structured output for CI/CD:
-  - Machine-readable format
-  - Complete test details and diagnostics
-  - Timestamp and connection metadata
-  - File (`-f filename.json`) or stdout output
-- **Smart Exit Codes**:
-  - 0 = All tests passed
-  - 1 = Some tests failed/errored
-  - 2 = ODBC connection error
-  - 3 = Other error
-
-### Transaction Tests (Phase 8) ✅
-- Autocommit mode testing (query and toggle)
-- Manual commit/rollback with `SQLEndTran`
-- Transaction isolation level queries
-- Table creation for transaction testing
-
-### Advanced Features (Phase 9) ✅
-- Cursor types (forward-only, static, keyset, dynamic)
-- Array/bulk parameter binding
-- Asynchronous execution capability
-- Rowset size for block cursors
-- Positioned operations (concurrency control)
-- Statement attribute queries
-
-## 🚀 Quick Start
-
-### Build from Source
-
-#### Prerequisites
-- CMake 3.20 or higher
-- Console output (default)
-.\build\src\Debug\odbc-crusher.exe "Driver={Your ODBC Driver};..."
-
-# Verbose mode - shows detailed diagnostics
-.\build\src\Debug\odbc-crusher.exe "Driver={...}" -v
-
-# JSON output to stdout
-.\build\src\Debug\odbc-crusher.exe "Driver={...}" -o json
+# Verbose mode — shows diagnostics and suggestions for each test
+odbc-crusher "Driver={...}" -v
 
 # JSON output to file
-.\build\src\Debug\odbc-crusher.exe "Driver={...}" -o json -f report.json
+odbc-crusher "Driver={...}" -o json -f report.json
 
-# Example with environment variable
-$env:MYSQL_ODBC_CONNECTION='Driver={MySQL ODBC 9.6 Unicode Driver};Server=localhost;Database=test;UID=root;PWD=password'
-.\build\src\Debug\odbc-crusher.exe $env:MYSQL_ODBC_CONNECTION
+# JSON output to stdout (pipe to jq, etc.)
+odbc-crusher "Driver={...}" -o json | jq '.summary'
 ```
 
-### Example Output
+## What It Tests
+
+| Category | Tests | What's Checked |
+|----------|-------|----------------|
+| Connection | 5 | Connect, attributes, multiple statements, timeout |
+| Statement | 7 | ExecDirect, Prepare/Execute, parameters, column metadata |
+| Metadata | 5 | Tables, columns, primary keys, statistics, special columns |
+| Data Types | 6 | Integer, decimal, float, string, date/time, NULL handling |
+| Transactions | 4 | Autocommit, commit/rollback, isolation levels |
+| Advanced | 6 | Cursor types, bulk ops, async, rowsets, concurrency |
+| Buffer Validation | 5 | Null termination, overflow protection, truncation indicators |
+| Error Queue | 6 | Diagnostic records, clearing, hierarchy, field extraction |
+| State Machine | 6 | Valid transitions, invalid operations, state reset |
+| Descriptors | 5 | Implicit handles, IRD, APD fields, CopyDesc |
+| Cancellation | 2 | Cancel idle, cancel as reset |
+| SQLSTATE Validation | 10 | HY010, 24000, 07009, 42000, HY003, HY096, HY092 |
+| Boundary Values | 5 | Zero buffers, NULL parameters, empty SQL, column 0 |
+| Data Type Edge Cases | 10 | INT_MIN/MAX, empty strings, NULL indicators, type conversion |
+
+Every test reports `PASS`, `FAIL`, `SKIP` (unsupported), or `ERROR`, with ODBC spec references and fix suggestions where applicable.
+
+## Example Output
 
 ```
 ╔════════════════════════════════════════════════════════════════╗
 ║           ODBC CRUSHER - Driver Testing Report                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-Connection: Driver={MySQL ODBC 9.6 Unicode Driver};...
+Connection: Driver={MySQL ODBC 9.2 Unicode Driver};...
 
 ────────────────────────────────────────────────────────────────
   Connection Tests
@@ -138,150 +68,108 @@ Connection: Driver={MySQL ODBC 9.6 Unicode Driver};...
   ✓ test_connection_timeout (98 μs)
 
   Category Summary: 5 passed
-
-... (more test categories) ...
+  ...
 
 ════════════════════════════════════════════════════════════════
                         FINAL SUMMARY
 ════════════════════════════════════════════════════════════════
 
-  Total Tests:  23
-  Passed:       20 (87.0%)
-  Skipped:      3
-  Total Time:   74.28 ms
+  Total Tests:  82
+  Passed:       78 (95.1%)
+  Skipped:       4
+  Total Time:   142.5 ms
 
   ✓ ALL TESTS PASSED!
-
 ════════════════════════════════════════════════════════════════
-```powershell
-# Windows with MSVC
-cmake -B build -G "Visual Studio 17 2022"
-cmake --build build --config Debug
+```
 
-# Linux with GCC
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
+## Build From Source
+
+### Prerequisites
+
+- **CMake** 3.20+
+- **C++17 compiler** (MSVC 2019+, GCC 9+, Clang 10+)
+- **ODBC Driver Manager** — Windows has it built-in; on Linux install `unixodbc-dev`; on macOS use `brew install unixodbc`
+
+All other dependencies (Google Test, CLI11, nlohmann/json) are fetched automatically by CMake.
+
+### Build
+
+```bash
+# Windows (MSVC)
+cmake -B build
+cmake --build build --config Release
+
+# Linux / macOS
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-### Run
+The binary is at `build/src/Release/odbc-crusher.exe` (Windows) or `build/src/odbc-crusher` (Linux/macOS).
 
-```powershell
-# Basic usage
-.\build\src\Debug\odbc-crusher.exe "Driver={Your ODBC Driver};..."
+### Run Unit Tests
 
-# With environment variables
-$env:FIREBIRD_ODBC_CONNECTION='Driver={Firebird ODBC Driver};...'
-.\build\src\Debug\odbc-crusher.exe $env:FIREBIRD_ODBC_CONNECTION
+```bash
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-### Test
-
-```powershell
-# Set connection strings
-$env:FIREBIRD_ODBC_CONNECTION='Driver={Firebird ODBC Driver};Database=/path/to/db.fdb;UID=SYSDBA;PWD=masterkey'
-$env:MYSQL_ODBC_CONNECTION='Driver={MySQL ODBC 9.6 Unicode Driver};Server=localhost;Database=test;UID=root;PWD=password'
-
-# Run all tests
-ctest --test-dir build -C Debug --output-on-failure
-```
-
-## 📊 Test Results
+## CLI Reference
 
 ```
-Test Project C:/temp/new/odbc-crusher/build
-  Total Tests: 27
-  Passed:      27 (100%)
-  Failed:      0
-  Skipped:     05,000+ lines of C++17
-- **Test Files**: 16 files
-- **Reporting System**: 2 reporters (Console, JSON)
-- **Build Time**: <30 seconds (MSVC, Windows)
-- **Test Execution**: <100ms for all 23 tests
-- **Code Quality**: 
-  - RAII throughout, no manual memory management
-  - Exception-based error handling
-  - Modern C++17 features (std::optional, std::chrono, std::unique_ptr)
-  - Beautiful Unicode output with box-drawing characters MySQL)
-- **Statement Tests**: 2 integration tests
-- **Metadata Tests**: 2 integration tests
-- **Data Type Tests**: 2 integration tests
+Usage: odbc-crusher [OPTIONS] connection
 
-## 🏗️ Architecture
+Positionals:
+  connection TEXT REQUIRED    ODBC connection string (Driver={...};... or DSN=...)
 
-```
-odbc-crusher/
-├── src/
-│   ├── core/          # Core ODBC wrappers
-│   │   ├── odbc_environment.hpp/cpp
-│   │   ├── odbc_connection.hpp/cpp
-│   │   ├── odbc_statement.hpp/cpp
-│   │   └── odbc_error.hpp/cpp
-│   ├── discovery/     # Driver discovery
-│   │   ├── driver_info.hpp/cpp
-│   │   ├── type_info.hpp/cpp
-│   │   └── function_info.hpp/cpp
-│   ├── tests/         # Test infrastructure
-│   │   ├── test_base.hpp/cpp
-│   │   ├── connection_tests.hpp/cpp
-│   │   ├── statement_tests.hpp/cpp
-│   │   ├── metadata_tests.hpp/cpp
-│   │   └── datatype_tests.hpp/cpp
-│   └── cli/           # Command-line interface
-├── tests/             # Unit tests
-├── cmake/             # CMake modules
-└── CMakeLists.txt
+Options:
+  -h,--help                   Print help and exit
+  -V,--version                Print version and exit
+  -v,--verbose                Show detailed diagnostics and suggestions
+  -o,--output TEXT            Output format: 'console' (default) or 'json'
+  -f,--file TEXT              Write JSON output to FILE instead of stdout
 ```
 
-## 🧪 Tested Databases
+### Exit Codes
 
-- ✅ **Firebird 5.0** (Firebird ODBC Driver)
-- ✅ **MySQL 8.0+** (MySQL Connector/ODBC 9.6)
+| Code | Meaning |
+|------|---------|
+| 0 | All tests passed |
+| 1 | One or more tests failed |
+| 2 | ODBC connection error |
+| 3 | Other error |
 
-## 📈 Project Metrics
+## JSON Output
 
-- **Total Lines of Code**: ~4,500+ lines of C++17
-- **Test Files**: 16 files
-- **Build Time**: <30 seconds (MSVC, Windows)
-- **Test Execution**: <2 seconds for all 27 tests
-- **Code Quality**: 
-  - RAII throughout, no manual memory management
-  - Exception-based error handling
-  - Modern C++17 features (std::optional, std::chrono)
+With `-o json`, the output is a machine-readable JSON document suitable for CI pipelines:
 
-## 🎯 Design Principles
+```bash
+odbc-crusher "Driver={...}" -o json -f report.json
+```
 
-### 1. Direct ODBC API Access
-No wrapper limitations - direct access to all ODBC functions and handles.
+The JSON includes driver information, type support, function support, all test results with status/duration/diagnostics, and a summary object.
 
-### 2. Cross-Database Compatibility
-Test queries support multiple database syntaxes:
-- Firebird: `SELECT ... FROM RDB$DATABASE`
-- MySQL: `SELECT ...`
-- Oracle: `SELECT ... FROM DUAL`
-- SQL-92: Standard literals
+## Interpreting Results
 
-### 3. Graceful Degradation
-Tests skip gracefully when features aren't supported by the driver.
+- **PASS** — The driver behaves correctly for this test.
+- **FAIL** — The driver returned an unexpected result. Check the `actual` field and the ODBC spec reference for details.
+- **SKIP** — The test was skipped because the driver does not support the feature, or the result was inconclusive.
+- **ERROR** — An unexpected exception occurred during the test.
 
-### 4. Comprehensive Diagnostics
-Full SQLSTATE and diagnostic record extraction on every error.
+In verbose mode (`-v`), each test also shows:
+- The **expected** vs **actual** behavior
+- A **suggestion** for fixing failures
+- The relevant **ODBC spec section**
 
-## 📝 License
+## Tested Databases
 
-MIT License - see LICENSE file for details.
+- **Firebird 5.0** via Firebird ODBC Driver
+- **MySQL 8.0+** via MySQL Connector/ODBC 9.x
+- **Mock ODBC Driver** (included in `mock-driver/`, used for CI)
 
-## 🙏 Acknowledgments
+## Contributing
 
-- Based on lessons learned from the Python/pyodbc version
-- Inspired by the need for better ODBC driver testing tools
-- Built following [AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md) standards
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## 🔗 Related Projects
+## License
 
-- [Firebird ODBC Driver](https://github.com/FirebirdSQL/firebird-odbc-driver)
-- [MySQL Connector/ODBC](https://dev.mysql.com/downloads/connector/odbc/)
-- [unixODBC](http://www.unixodbc.org/) (Linux/macOS)
-
----
-
-**Built with ❤️ and modern C++**
+MIT

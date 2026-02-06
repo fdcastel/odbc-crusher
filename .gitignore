@@ -6,6 +6,9 @@ build/
 cmake-build-*/
 out/
 
+# Generated files
+include/odbc_crusher/version.hpp
+
 # Temporary files
 tmp/
 

@@ -60,23 +60,39 @@ void run_test_category(T& test_suite, reporting::Reporter& reporter,
 } // anonymous namespace
 
 int main(int argc, char** argv) {
-    CLI::App app{"ODBC Crusher - ODBC Driver Testing Tool", "odbc-crusher"};
+    CLI::App app{
+        "ODBC Crusher - ODBC Driver Testing Tool\n"
+        "\n"
+        "  Connects to an ODBC driver and runs a comprehensive suite of\n"
+        "  conformance tests covering connections, statements, metadata,\n"
+        "  data types, transactions, error handling, and more.\n"
+        "\n"
+        "Examples:\n"
+        "  odbc-crusher \"Driver={MySQL ODBC 9.2 Unicode Driver};Server=localhost;...\"\n"
+        "  odbc-crusher \"DSN=MyFirebird\" -v\n"
+        "  odbc-crusher \"Driver={PostgreSQL};...\" -o json -f report.json\n",
+        "odbc-crusher"
+    };
     
-    app.set_version_flag("--version", ODBC_CRUSHER_VERSION);
+    app.set_version_flag("--version,-V", ODBC_CRUSHER_VERSION);
     
     std::string connection_string;
-    app.add_option("connection", connection_string, "ODBC connection string")
+    app.add_option("connection", connection_string,
+                   "ODBC connection string (Driver={...};... or DSN=...)")
         ->required();
     
     bool verbose = false;
-    app.add_flag("-v,--verbose", verbose, "Verbose output");
+    app.add_flag("-v,--verbose", verbose,
+                 "Show detailed diagnostics and suggestions for each test");
     
     std::string output_format = "console";
-    app.add_option("-o,--output", output_format, "Output format (console, json)")
+    app.add_option("-o,--output", output_format,
+                   "Output format: 'console' (default) or 'json'")
         ->check(CLI::IsMember({"console", "json"}));
     
     std::string json_file;
-    app.add_option("-f,--file", json_file, "JSON output file (for json format)");
+    app.add_option("-f,--file", json_file,
+                   "Write JSON output to FILE instead of stdout");
     
     CLI11_PARSE(app, argc, argv);
     

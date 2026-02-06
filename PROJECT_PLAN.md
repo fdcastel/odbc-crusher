@@ -291,17 +291,17 @@ ODBC drivers are required to return specific SQLSTATEs for specific error condit
 
 ---
 
-### Phase 14: Polish & Documentation ⬜
+### Phase 14: Polish & Documentation ✅
 
 **Goal**: Production-ready tool with comprehensive documentation.
 
-- [ ] Version tagging from git tag
-- [ ] Release build configuration
-- [ ] Github actions workflows for testing and release
-- [ ] `--version` output application version.
-- [ ] `--help` output covers all options with examples
-- [ ] Rewrite README.md with quick-start, installation, usage, output interpretation. Focus on usage, not on techical details (these are for this document).
-- [ ] Contributing guide
+- [x] Version tagging from git tag — `cmake/Version.cmake` reads `git describe --tags` and generates `version.hpp` at configure time. Falls back to CMake `project(VERSION)` if no tag is found.
+- [x] Release build configuration — `install()` target in `src/CMakeLists.txt`, platform packaging in release workflow.
+- [x] GitHub Actions workflows for testing and release — CI (`ci.yml`) builds and tests on Windows/Linux/macOS with `fetch-depth: 0` for tag detection. Release (`release.yml`) builds binaries on all 3 platforms and creates a GitHub Release with artifacts using `softprops/action-gh-release@v2`.
+- [x] `--version` (`-V`) outputs the application version from the generated header.
+- [x] `--help` output covers all options with examples and detailed descriptions.
+- [x] README.md rewritten — focused on usage: Quick Start, What It Tests, Example Output, Build From Source, CLI Reference, Exit Codes, JSON Output, Interpreting Results.
+- [x] `CONTRIBUTING.md` — development setup, project structure, how to add tests, code style, mock driver usage, PR/issue guidelines.
 
 ---
 
