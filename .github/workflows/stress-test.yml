@@ -280,7 +280,7 @@ jobs:
     name: Firebird (Windows)
     runs-on: windows-latest
     env:
-      ODBC_CONN: "Driver={Firebird/InterBase(r) driver};Database=localhost:C:/tmp/test.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;"
+      ODBC_CONN: "Driver={Firebird ODBC Driver};Database=localhost:C:/tmp/test.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;"
     steps:
     - name: Install Firebird Server
       shell: bash
