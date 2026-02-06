@@ -439,6 +439,8 @@ SQLRETURN SQL_API SQLGetData(
         if (pcbValue) *pcbValue = static_cast<SQLLEN>(value.length());
         
         if (static_cast<SQLLEN>(value.length()) >= cbValueMax) {
+            stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                "String data, right truncated");
             return SQL_SUCCESS_WITH_INFO;  // Truncation
         }
     }
