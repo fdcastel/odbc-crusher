@@ -1,0 +1,416 @@
+name: Stress Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  # ── PostgreSQL on Linux ─────────────────────────────────────
+  postgresql:
+    name: PostgreSQL (Linux)
+    runs-on: ubuntu-latest
+    env:
+      ODBC_CONN: "Driver={PostgreSQL Unicode};Server=127.0.0.1;Port=5432;Database=postgres;Uid=postgres;Pwd=postgres;"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install unixODBC
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q unixodbc unixodbc-dev
+
+    - name: Start PostgreSQL
+      run: |
+        sudo systemctl start postgresql
+        sudo systemctl status postgresql
+        sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres'"
+
+    - name: Install PostgreSQL ODBC driver
+      run: |
+        sudo apt-get install -y -q odbc-postgresql
+        cat /etc/odbcinst.ini
+
+    - name: Download odbc-crusher
+      run: |
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
+        tar xzf odbc-crusher-linux-x64.tar.gz
+        chmod +x odbc-crusher
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Run odbc-crusher
+      run: |
+        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
+        echo "EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+      continue-on-error: true
+
+    - name: Run odbc-crusher (JSON)
+      run: ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
+      continue-on-error: true
+
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: report-postgresql
+        path: |
+          crusher-report.txt
+          crusher-report.json
+
+  # ── MariaDB on Linux ────────────────────────────────────────
+  mariadb:
+    name: MariaDB (Linux)
+    runs-on: ubuntu-latest
+    env:
+      ODBC_CONN: "Driver={MariaDB Unicode};Server=127.0.0.1;Port=3306;User=root;Password=root;"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install unixODBC
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q unixodbc unixodbc-dev
+
+    - name: Start MariaDB
+      run: |
+        sudo apt-get install -y -q mariadb-server
+        sudo systemctl start mariadb
+        sudo systemctl status mariadb
+        sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root';"
+
+    - name: Install MariaDB ODBC driver
+      run: |
+        sudo apt-get install -y -q odbc-mariadb
+        cat /etc/odbcinst.ini
+
+    - name: Download odbc-crusher
+      run: |
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
+        tar xzf odbc-crusher-linux-x64.tar.gz
+        chmod +x odbc-crusher
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Run odbc-crusher
+      run: |
+        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
+      continue-on-error: true
+
+    - name: Run odbc-crusher (JSON)
+      run: ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
+      continue-on-error: true
+
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: report-mariadb
+        path: |
+          crusher-report.txt
+          crusher-report.json
+
+  # ── MySQL on Linux ──────────────────────────────────────────
+  mysql:
+    name: MySQL (Linux)
+    runs-on: ubuntu-latest
+    env:
+      ODBC_CONN: "Driver={MySQL};Server=127.0.0.1;Port=3306;User=root;Password=root;"
+      MYSQL_ODBC_LIB_URL: https://dev.mysql.com/get/Downloads/Connector-ODBC/9.2/mysql-connector-odbc-9.2.0-linux-glibc2.28-x86-64bit.tar.gz
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install unixODBC
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q unixodbc unixodbc-dev
+
+    - name: Start MySQL
+      run: |
+        sudo systemctl start mysql
+        sudo systemctl status mysql
+        sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;"
+
+    - name: Install MySQL ODBC driver
+      run: |
+        curl --no-progress-meter -LO "${MYSQL_ODBC_LIB_URL}"
+        tar xzf mysql-connector-odbc-*.tar.gz
+        DRIVER_DIR=$(ls -d mysql-connector-odbc-*/lib/)
+        DRIVER_PATH=$(readlink -f ${DRIVER_DIR}/libmyodbc9w.so)
+        echo "MySQL ODBC driver: ${DRIVER_PATH}"
+        cat > /tmp/mysql-odbc.ini << EOF
+        [MySQL]
+        Description = MySQL ODBC Unicode Driver
+        Driver = ${DRIVER_PATH}
+        EOF
+        sudo odbcinst -i -d -f /tmp/mysql-odbc.ini
+        cat /etc/odbcinst.ini
+
+    - name: Download odbc-crusher
+      run: |
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
+        tar xzf odbc-crusher-linux-x64.tar.gz
+        chmod +x odbc-crusher
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Run odbc-crusher
+      run: |
+        export LD_LIBRARY_PATH=$(ls -d mysql-connector-odbc-*/lib/):$LD_LIBRARY_PATH
+        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
+      continue-on-error: true
+
+    - name: Run odbc-crusher (JSON)
+      run: |
+        export LD_LIBRARY_PATH=$(ls -d mysql-connector-odbc-*/lib/):$LD_LIBRARY_PATH
+        ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
+      continue-on-error: true
+
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: report-mysql
+        path: |
+          crusher-report.txt
+          crusher-report.json
+
+  # ── MSSQL on Linux ──────────────────────────────────────────
+  mssql:
+    name: MSSQL (Linux)
+    runs-on: ubuntu-latest
+    env:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "P@ssword2"
+      ODBC_CONN: "Driver={ODBC Driver 18 for SQL Server};Server=tcp:127.0.0.1,1433;UID=sa;PWD=P@ssword2;TrustServerCertificate=yes;"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install unixODBC
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q unixodbc unixodbc-dev
+
+    - name: Start MSSQL Server
+      env:
+        ACCEPT_EULA: "1"
+        MSSQL_SA_PASSWORD: "P@ssword2"
+        MSSQL_PID: Developer
+      run: |
+        curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+        curl -sSL https://packages.microsoft.com/config/ubuntu/24.04/mssql-server-preview.list | sudo tee /etc/apt/sources.list.d/mssql-server-preview.list
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q mssql-server
+        sudo -E /opt/mssql/bin/mssql-conf -n setup
+        systemctl status mssql-server
+
+    - name: Install MSSQL ODBC driver
+      run: |
+        curl -sSL -O https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+        sudo dpkg -i packages-microsoft-prod.deb
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q msodbcsql18
+        cat /etc/odbcinst.ini
+
+    - name: Wait for MSSQL to be ready
+      run: |
+        for i in $(seq 1 30); do
+          /opt/mssql-tools18/bin/sqlcmd -S 127.0.0.1,1433 -U sa -P "P@ssword2" -C -Q "SELECT 1" && break
+          echo "Waiting for MSSQL... ($i)"
+          sleep 2
+        done
+
+    - name: Download odbc-crusher
+      run: |
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
+        tar xzf odbc-crusher-linux-x64.tar.gz
+        chmod +x odbc-crusher
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Run odbc-crusher
+      run: |
+        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
+      continue-on-error: true
+
+    - name: Run odbc-crusher (JSON)
+      run: ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
+      continue-on-error: true
+
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: report-mssql
+        path: |
+          crusher-report.txt
+          crusher-report.json
+
+  # ── SQLite on Linux ─────────────────────────────────────────
+  sqlite:
+    name: SQLite (Linux)
+    runs-on: ubuntu-latest
+    env:
+      ODBC_CONN: "Driver={SQLite3};Database=/tmp/test.db;"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install unixODBC and SQLite ODBC driver
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q unixodbc unixodbc-dev libsqliteodbc
+        cat /etc/odbcinst.ini
+
+    - name: Download odbc-crusher
+      run: |
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
+        tar xzf odbc-crusher-linux-x64.tar.gz
+        chmod +x odbc-crusher
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Run odbc-crusher
+      run: |
+        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
+      continue-on-error: true
+
+    - name: Run odbc-crusher (JSON)
+      run: ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
+      continue-on-error: true
+
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: report-sqlite
+        path: |
+          crusher-report.txt
+          crusher-report.json
+
+  # ── Firebird on Windows ─────────────────────────────────────
+  firebird:
+    name: Firebird (Windows)
+    runs-on: windows-latest
+    env:
+      ODBC_CONN: "Driver={Firebird/InterBase(r) driver};Database=localhost:C:/tmp/test.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Firebird Server
+      shell: bash
+      run: |
+        choco install firebird --version 5.0.3.1 --no-progress
+        export ISQL_EXE="C:/Program Files/Firebird/Firebird_5_0/isql.exe"
+        echo "CREATE OR ALTER USER SYSDBA PASSWORD 'masterkey' USING PLUGIN Srp; EXIT;" | "${ISQL_EXE}" -b -user SYSDBA security.db
+        mkdir -p "C:/tmp"
+        echo "CREATE DATABASE 'localhost:C:/tmp/test.fdb' user 'SYSDBA' password 'masterkey'; EXIT;" | "${ISQL_EXE}" -b -q
+
+    - name: Install Firebird ODBC driver
+      shell: bash
+      run: |
+        choco install firebird-odbc --version 3.0.1.21 --no-progress
+
+    - name: Download odbc-crusher
+      shell: bash
+      run: |
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-windows-x64.zip" --dir .
+        unzip odbc-crusher-windows-x64.zip
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Run odbc-crusher
+      shell: bash
+      run: |
+        ./odbc-crusher.exe "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt || true
+      continue-on-error: true
+
+    - name: Run odbc-crusher (JSON)
+      shell: bash
+      run: |
+        ./odbc-crusher.exe "${ODBC_CONN}" -o json -f crusher-report.json || true
+      continue-on-error: true
+
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: report-firebird
+        path: |
+          crusher-report.txt
+          crusher-report.json
+
+  # ── Mock Driver on Windows ──────────────────────────────────
+  mock-driver:
+    name: Mock Driver (Windows)
+    runs-on: windows-latest
+    env:
+      ODBC_CONN: "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Build Mock Driver
+      run: |
+        cmake -B mock-driver/build -S mock-driver -DCMAKE_BUILD_TYPE=Release
+        cmake --build mock-driver/build --config Release -j 4
+
+    - name: Register Mock Driver
+      shell: powershell
+      run: |
+        Copy-Item mock-driver\build\Release\mockodbc.dll -Destination C:\Windows\System32\
+        $regContent = @"
+        Windows Registry Editor Version 5.00
+
+        [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers]
+        "Mock ODBC Driver"="Installed"
+
+        [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\Mock ODBC Driver]
+        "Driver"="C:\\Windows\\System32\\mockodbc.dll"
+        "Setup"="C:\\Windows\\System32\\mockodbc.dll"
+        "APILevel"="2"
+        "ConnectFunctions"="YYY"
+        "DriverODBCVer"="03.80"
+        "FileUsage"="0"
+        "SQLLevel"="1"
+        "@
+        $regContent | Out-File -FilePath mock-driver.reg -Encoding ASCII
+        reg import mock-driver.reg
+
+    - name: Download odbc-crusher
+      shell: bash
+      run: |
+        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-windows-x64.zip" --dir .
+        unzip odbc-crusher-windows-x64.zip
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Run odbc-crusher
+      shell: bash
+      run: |
+        ./odbc-crusher.exe "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt || true
+      continue-on-error: true
+
+    - name: Run odbc-crusher (JSON)
+      shell: bash
+      run: |
+        ./odbc-crusher.exe "${ODBC_CONN}" -o json -f crusher-report.json || true
+      continue-on-error: true
+
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: report-mock-driver
+        path: |
+          crusher-report.txt
+          crusher-report.json
