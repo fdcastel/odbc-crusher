@@ -2,80 +2,25 @@
 
 ## 🤖 Welcome, Agent!
 
-You are working on **ODBC Crusher**, a C++ CLI tool for testing and debugging ODBC drivers. This document contains critical instructions for maintaining consistency and quality.
+You are working on **ODBC Crusher**, a C++ CLI tool for testing and debugging ODBC drivers.
+This document contains critical instructions for maintaining consistency and quality.
 
 ---
 
-## 🎓 CRITICAL LEARNINGS - Preserved from Python Version
+## MASTER RULE: Keep working until successful
 
-### Rule #1: DO NOT TRUST ANYTHING THE ODBC DRIVER TELLS YOU
+**RULE #0**: Always ensure the work is complete and verified for all platforms.
 
-Drivers can report false errors. Example from testing:
-- **Firebird ODBC**: Reports "[08004] File Database is not found" even when the database file exists and is accessible
-- **Always verify**: Use independent means when possible
+Whenever you’re asked to do something, follow this process after completing the task:
+- Build the project and run all tests.
+  - If anything fails, fix the issues and repeat until all tests pass.
+- Once all tests are green:
+  - Commit the changes.
+  - Push them to GitHub.
+  - Monitor the workflow run using the `gh` command.
+    - Avoid `gh` commands that require interactive input; provide all required information via CLI flags.
+  - If the workflow fails, fix the issue and repeat this step until the workflow completes successfully.
 
-### Rule #2: Don't Assume Bugs - Ask the Driver First
-
-Before claiming a driver has a bug, use ODBC specification functions to discover capabilities:
-
-| Function | Purpose | What You Learn |
-|----------|---------|----------------|
-| **SQLGetInfo** | Driver/DBMS properties | Driver name/version, ODBC version, SQL conformance level, feature flags (40+ attributes) |
-| **SQLGetTypeInfo** | Supported data types | All types, precision, scale, nullable, searchable, auto-increment |
-| **SQLGetFunctions** | Implemented ODBC functions | Bitmap of 250+ ODBC functions, which are actually implemented |
-
-**BEFORE (Wrong)**:
-```cpp
-// ❌ Guessing based on driver name
-if (driver_name.find("Unicode") != std::string::npos) {
-    has_unicode = true;
-}
-```
-
-**AFTER (Correct)**:
-```cpp
-// ✅ Ask the driver
-SQLUSMALLINT unicode_support;
-SQLGetInfo(hdbc, SQL_ODBC_VER, &unicode_support, sizeof(unicode_support), nullptr);
-// Or check SQL_DRIVER_UNICODE_TYPE
-```
-
-### Rule #3: Database-Specific SQL Syntax
-
-Different databases require different SQL syntax for parameter markers, even though all use `?`:
-
-| Database | Bare `?` | Requires FROM | Requires CAST | Working Example |
-|----------|----------|---------------|---------------|-----------------|
-| **Firebird** | ❌ No | ✅ Yes | ⚠️ Recommended | `SELECT CAST(? AS INTEGER) FROM RDB$DATABASE` |
-| **MySQL** | ✅ Yes | ❌ No | ❌ No | `SELECT ?` |
-| **Oracle** | ❌ No | ✅ Yes (DUAL) | ❌ No | `SELECT ? FROM DUAL` |
-| **SQL Server** | ✅ Yes | ❌ No | ❌ No | `SELECT ?` |
-
-**Best Practice**: Try multiple query patterns in your tests:
-
-```cpp
-const std::vector<std::string> test_patterns = {
-    "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE",  // Firebird
-    "SELECT ?",                                      // MySQL, SQL Server
-    "SELECT ? FROM DUAL"                             // Oracle
-};
-
-for (const auto& query : test_patterns) {
-    SQLRETURN ret = SQLExecDirect(hstmt, (SQLCHAR*)query.c_str(), SQL_NTS);
-    if (SQL_SUCCEEDED(ret)) {
-        // This pattern works for this driver
-        break;
-    }
-}
-```
-
-### Known Driver Bugs
-
-| Driver | Bug | Details |
-|--------|-----|---------|
-| Firebird ODBC | False file not found error | Reports "[08004] File Database is not found" when database file exists and is accessible |
-
----
 
 ## 📋 MANDATORY: Update PROJECT_PLAN.md
 
@@ -120,12 +65,6 @@ for (const auto& query : test_patterns) {
 - [x] OdbcStatement class with basic execution
 ...
 
-## Current Status
-
-**Phase**: Phase 2 - Driver Discovery  
-**Version**: 2.1.0-dev  
-**Last Milestone**: Core ODBC infrastructure complete  
-**Next Milestone**: SQLGetInfo implementation
 ```
 
 ---
@@ -154,16 +93,6 @@ for (const auto& query : test_patterns) {
 ### Why?
 
 The `./tmp/` folder is gitignored to prevent temporary files from polluting commits. **Always create temporary files here** to keep the repository clean.
-
-### Example
-
-```bash
-# ✅ CORRECT - Write test output to tmp
-./build/odbc-crusher "DSN=MyDB" --output json > ./tmp/test_output.json
-
-# ❌ WRONG - Creates file in root
-./build/odbc-crusher "DSN=MyDB" --output json > test_output.json
-```
 
 ---
 
@@ -508,23 +437,6 @@ $env:MYSQL_ODBC_CONNECTION='Driver={MySQL ODBC 9.6 Unicode Driver};Server=SRV-MY
 export MYSQL_ODBC_CONNECTION='Driver={MySQL ODBC 9.6 Unicode Driver};Server=SRV-MYSQL;Database=bpcom_test;UID=root;PWD=masterkey;'
 ```
 
-#### Using in Code
-```cpp
-// Option 1: Environment variable
-const char* conn_str = std::getenv("FIREBIRD_ODBC_CONNECTION");
-if (conn_str) {
-    conn.connect(conn_str);
-}
-
-// Option 2: Configuration file
-Config config;
-config.load("test_config.json");
-conn.connect(config.get_connection_string("firebird"));
-
-// Option 3: Command line
-./build/odbc-crusher --connection "$MYSQL_ODBC_CONNECTION"
-```
-
 ### Testing ODBC Connections
 
 - **Test DSN**: Create a DSN using:
@@ -534,16 +446,6 @@ conn.connect(config.get_connection_string("firebird"));
   - DSN-based: `"DSN=name;UID=user;PWD=pass"`
   - Driver-based: `"DRIVER={SQL Server};SERVER=localhost;DATABASE=test;UID=sa;PWD=pass"`
   - File DSN: `"FILEDSN=c:\\mydb.dsn"`
-
-### Common ODBC Errors
-
-| SQLSTATE | Meaning | Common Causes |
-|----------|---------|---------------|
-| `IM002` | Data source name not found | DSN doesn't exist, check `odbcad32.exe` or `odbcinst -q -s` |
-| `28000` | Invalid authorization | Wrong username/password |
-| `08001` | Unable to connect | Network issue, server down, firewall |
-| `08004` | Connection rejected | Database file not found (but sometimes a lie!) |
-| `HY000` | General error | Check diagnostic message for details |
 
 ### Debugging Tips
 
