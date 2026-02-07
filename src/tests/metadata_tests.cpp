@@ -104,6 +104,7 @@ TestResult MetadataTests::test_columns_catalog() {
         
         for (const auto& [schema, table] : test_tables) {
             try {
+                stmt.recycle();
                 SQLRETURN ret = SQLColumns(
                     stmt.get_handle(),
                     nullptr, 0,                                    // Catalog
@@ -179,6 +180,7 @@ TestResult MetadataTests::test_primary_keys() {
         
         for (const auto& [schema, table] : test_tables) {
             try {
+                stmt.recycle();
                 SQLRETURN ret = SQLPrimaryKeys(
                     stmt.get_handle(),
                     nullptr, 0,
@@ -256,6 +258,7 @@ TestResult MetadataTests::test_statistics() {
         
         for (const auto& [schema, table] : test_tables) {
             try {
+                stmt.recycle();
                 SQLRETURN ret = SQLStatistics(
                     stmt.get_handle(),
                     nullptr, 0,
@@ -333,6 +336,7 @@ TestResult MetadataTests::test_special_columns() {
         
         for (const auto& [schema, table] : test_tables) {
             try {
+                stmt.recycle();
                 SQLRETURN ret = SQLSpecialColumns(
                     stmt.get_handle(),
                     SQL_BEST_ROWID,     // Best row identifier

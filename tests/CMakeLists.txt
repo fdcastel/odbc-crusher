@@ -27,6 +27,7 @@ add_executable(odbc_crusher_tests
     test_diagnostic_depth_tests.cpp
     test_cursor_behavior_tests.cpp
     test_param_binding_tests.cpp
+    test_crash_guard.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE

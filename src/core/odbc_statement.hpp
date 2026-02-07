@@ -24,6 +24,7 @@ public:
     
     bool fetch();
     void close_cursor();
+    void recycle() noexcept;
     
     SQLHSTMT get_handle() const noexcept { return handle_; }
     OdbcConnection& get_connection() const noexcept { return conn_; }

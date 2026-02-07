@@ -5,6 +5,7 @@
 #include "core/odbc_environment.hpp"
 #include "core/odbc_connection.hpp"
 #include "core/odbc_error.hpp"
+#include "core/crash_guard.hpp"
 #include "tests/connection_tests.hpp"
 #include "tests/statement_tests.hpp"
 #include "tests/metadata_tests.hpp"
@@ -56,10 +57,33 @@ void run_test_category(T& test_suite, reporting::Reporter& reporter,
                        size_t& total_tests, size_t& total_passed,
                        size_t& total_failed, size_t& total_skipped,
                        size_t& total_errors) {
-    auto results = test_suite.run();
+    std::vector<tests::TestResult> results;
+    
+    auto guard = core::execute_with_crash_guard([&]() {
+        results = test_suite.run();
+    });
+    
+    if (guard.crashed) {
+        // The test category caused a driver crash (e.g. access violation).
+        // Report it as an error result so the tool keeps running.
+        tests::TestResult crash_result;
+        crash_result.test_name = test_suite.category_name() + " (DRIVER CRASH)";
+        crash_result.function = "N/A";
+        crash_result.status = tests::TestStatus::ERR;
+        crash_result.severity = tests::Severity::CRITICAL;
+        crash_result.conformance = tests::ConformanceLevel::CORE;
+        crash_result.expected = "Test category completes without crashing";
+        crash_result.actual = guard.description;
+        crash_result.diagnostic = "The ODBC driver crashed during this test category. "
+                                  "Some tests may have been lost. This is a driver bug.";
+        crash_result.duration = std::chrono::microseconds(0);
+        results.push_back(crash_result);
+    }
+    
     reporter.report_category(test_suite.category_name(), results);
     tally_results(results, total_tests, total_passed, total_failed,
                   total_skipped, total_errors);
+    std::cout << std::flush;
 }
 
 } // anonymous namespace
