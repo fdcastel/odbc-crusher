@@ -41,7 +41,7 @@ TestResult StatementTests::test_simple_query() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLExecDirect"
+        "ODBC 3.8 SQLExecDirect"
     );
     
     try {
@@ -101,7 +101,7 @@ TestResult StatementTests::test_prepared_statement() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLPrepare, §SQLExecute"
+        "ODBC 3.8 SQLPrepare, SQLExecute"
     );
     
     try {
@@ -156,7 +156,7 @@ TestResult StatementTests::test_parameter_binding() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindParameter"
+        "ODBC 3.8 SQLBindParameter"
     );
     
     try {
@@ -241,7 +241,7 @@ TestResult StatementTests::test_result_fetching() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLFetch"
+        "ODBC 3.8 SQLFetch"
     );
     
     try {
@@ -296,7 +296,7 @@ TestResult StatementTests::test_column_metadata() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLNumResultCols, §SQLDescribeCol"
+        "ODBC 3.8 SQLNumResultCols, SQLDescribeCol"
     );
     
     try {
@@ -370,7 +370,7 @@ TestResult StatementTests::test_statement_reuse() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLCloseCursor"
+        "ODBC 3.8 SQLCloseCursor"
     );
     
     try {
@@ -432,7 +432,7 @@ TestResult StatementTests::test_multiple_result_sets() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLMoreResults"
+        "ODBC 3.8 SQLMoreResults"
     );
     
     try {
@@ -500,7 +500,7 @@ TestResult StatementTests::test_bind_col_integer() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindCol"
+        "ODBC 3.8 SQLBindCol"
     );
     
     try {
@@ -563,7 +563,7 @@ TestResult StatementTests::test_bind_col_string() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindCol"
+        "ODBC 3.8 SQLBindCol"
     );
     
     try {
@@ -622,7 +622,7 @@ TestResult StatementTests::test_fetch_bound_vs_getdata() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindCol, §SQLGetData"
+        "ODBC 3.8 SQLBindCol, SQLGetData"
     );
     
     try {
@@ -692,7 +692,7 @@ TestResult StatementTests::test_free_stmt_unbind() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLFreeStmt"
+        "ODBC 3.8 SQLFreeStmt"
     );
     
     try {
@@ -747,7 +747,7 @@ TestResult StatementTests::test_row_count() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLRowCount"
+        "ODBC 3.8 SQLRowCount"
     );
     
     try {
@@ -802,7 +802,7 @@ TestResult StatementTests::test_num_params() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLNumParams"
+        "ODBC 3.8 SQLNumParams"
     );
     
     try {
@@ -865,7 +865,7 @@ TestResult StatementTests::test_describe_param() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 §SQLDescribeParam"
+        "ODBC 3.8 SQLDescribeParam"
     );
     
     try {
@@ -933,7 +933,7 @@ TestResult StatementTests::test_native_sql() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLNativeSql"
+        "ODBC 3.8 SQLNativeSql"
     );
     
     try {

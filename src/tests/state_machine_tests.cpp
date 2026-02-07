@@ -27,7 +27,7 @@ TestResult StateMachineTests::test_valid_transitions() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLAllocHandle, §Statement Transitions"
+        "ODBC 3.8 SQLAllocHandle, Statement Transitions"
     );
     
     try {
@@ -61,7 +61,7 @@ TestResult StateMachineTests::test_invalid_operation() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLExecute, Appendix B State Transition Tables"
+        "ODBC 3.8 SQLExecute, Appendix B State Transition Tables"
     );
     
     try {
@@ -124,7 +124,7 @@ TestResult StateMachineTests::test_state_reset() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLCloseCursor, §SQLFreeStmt, §Statement Transitions"
+        "ODBC 3.8 SQLCloseCursor, SQLFreeStmt, Statement Transitions"
     );
     
     try {
@@ -186,7 +186,7 @@ TestResult StateMachineTests::test_prepare_execute_cycle() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLPrepare, §SQLExecute, §Statement Transitions"
+        "ODBC 3.8 SQLPrepare, SQLExecute, Statement Transitions"
     );
     
     try {
@@ -247,7 +247,7 @@ TestResult StateMachineTests::test_connection_state() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetConnectAttr, §Connection Transitions"
+        "ODBC 3.8 SQLGetConnectAttr, Connection Transitions"
     );
     
     try {
@@ -292,7 +292,7 @@ TestResult StateMachineTests::test_multiple_statements() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLAllocHandle, §Statement Transitions"
+        "ODBC 3.8 SQLAllocHandle, Statement Transitions"
     );
     
     try {

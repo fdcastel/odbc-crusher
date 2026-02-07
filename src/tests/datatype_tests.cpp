@@ -31,7 +31,7 @@ TestResult DataTypeTests::test_integer_types() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
+        "ODBC 3.8 SQLGetData, Appendix D: Data Types"
     );
     
     try {
@@ -96,7 +96,7 @@ TestResult DataTypeTests::test_decimal_types() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
+        "ODBC 3.8 SQLGetData, Appendix D: Data Types"
     );
     
     try {
@@ -162,7 +162,7 @@ TestResult DataTypeTests::test_float_types() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
+        "ODBC 3.8 SQLGetData, Appendix D: Data Types"
     );
     
     try {
@@ -228,7 +228,7 @@ TestResult DataTypeTests::test_string_types() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
+        "ODBC 3.8 SQLGetData, Appendix D: Data Types"
     );
     
     try {
@@ -301,7 +301,7 @@ TestResult DataTypeTests::test_date_time_types() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
+        "ODBC 3.8 SQLGetData, Appendix D: Data Types"
     );
     
     try {
@@ -372,7 +372,7 @@ TestResult DataTypeTests::test_null_values() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Retrieving Data"
+        "ODBC 3.8 SQLGetData, Retrieving Data"
     );
     
     try {
@@ -438,7 +438,7 @@ TestResult DataTypeTests::test_unicode_types() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Unicode Data"
+        "ODBC 3.8 SQLGetData, Unicode Data"
     );
     
     try {
@@ -517,7 +517,7 @@ TestResult DataTypeTests::test_binary_types() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Appendix D: Data Types"
+        "ODBC 3.8 SQLGetData, Appendix D: Data Types"
     );
     
     try {
@@ -587,7 +587,7 @@ TestResult DataTypeTests::test_guid_type() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §SQL_C_GUID"
+        "ODBC 3.8 SQLGetData, SQL_C_GUID"
     );
     
     try {

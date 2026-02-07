@@ -35,7 +35,7 @@ TestResult CatalogDepthTests::test_tables_search_patterns() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLTables: Special search patterns for catalog enumeration"
+        "ODBC 3.8 SQLTables: Special search patterns for catalog enumeration"
     );
     
     try {
@@ -93,7 +93,7 @@ TestResult CatalogDepthTests::test_columns_result_set_shape() {
         "",
         Severity::WARNING,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLColumns: Result set must have 18 columns"
+        "ODBC 3.8 SQLColumns: Result set must have 18 columns"
     );
     
     try {
@@ -124,7 +124,7 @@ TestResult CatalogDepthTests::test_columns_result_set_shape() {
         if (num_cols < 18) {
             result.status = TestStatus::FAIL;
             result.severity = Severity::WARNING;
-            result.suggestion = "SQLColumns result set must have at least 18 columns per ODBC spec §SQLColumns";
+            result.suggestion = "SQLColumns result set must have at least 18 columns per ODBC spec SQLColumns";
         }
         
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -148,7 +148,7 @@ TestResult CatalogDepthTests::test_statistics_result() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 §SQLStatistics: Returns index and table statistics"
+        "ODBC 3.8 SQLStatistics: Returns index and table statistics"
     );
     
     try {
@@ -209,7 +209,7 @@ TestResult CatalogDepthTests::test_procedures_result() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 §SQLProcedures: Returns procedure catalog even if empty"
+        "ODBC 3.8 SQLProcedures: Returns procedure catalog even if empty"
     );
     
     try {
@@ -273,7 +273,7 @@ TestResult CatalogDepthTests::test_privileges_result() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLTablePrivileges: Returns privilege information"
+        "ODBC 3.8 SQLTablePrivileges: Returns privilege information"
     );
     
     try {
@@ -334,7 +334,7 @@ TestResult CatalogDepthTests::test_catalog_null_parameters() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §Catalog Functions: NULL catalog/schema means 'current'"
+        "ODBC 3.8 Catalog Functions: NULL catalog/schema means 'current'"
     );
     
     try {

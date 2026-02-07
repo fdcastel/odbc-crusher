@@ -33,7 +33,7 @@ TestResult DiagnosticDepthTests::test_diagfield_sqlstate() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagField: SQLSTATE is a 5-character string"
+        "ODBC 3.8 SQLGetDiagField: SQLSTATE is a 5-character string"
     );
     
     try {
@@ -100,7 +100,7 @@ TestResult DiagnosticDepthTests::test_diagfield_record_count() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagField: SQL_DIAG_NUMBER returns count of records"
+        "ODBC 3.8 SQLGetDiagField: SQL_DIAG_NUMBER returns count of records"
     );
     
     try {
@@ -161,7 +161,7 @@ TestResult DiagnosticDepthTests::test_diagfield_row_count() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagField: SQL_DIAG_ROW_COUNT reports affected rows"
+        "ODBC 3.8 SQLGetDiagField: SQL_DIAG_ROW_COUNT reports affected rows"
     );
     
     try {
@@ -223,7 +223,7 @@ TestResult DiagnosticDepthTests::test_multiple_diagnostic_records() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §Diagnostic Records: Multiple records can exist per error"
+        "ODBC 3.8 Diagnostic Records: Multiple records can exist per error"
     );
     
     try {

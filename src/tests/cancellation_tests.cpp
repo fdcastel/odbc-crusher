@@ -20,7 +20,7 @@ TestResult CancellationTests::test_cancel_idle() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLCancel"
+        "ODBC 3.8 SQLCancel"
     );
     
     try {
@@ -62,7 +62,7 @@ TestResult CancellationTests::test_cancel_as_reset() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLCancel"
+        "ODBC 3.8 SQLCancel"
     );
     
     try {

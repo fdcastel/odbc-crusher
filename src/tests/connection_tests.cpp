@@ -27,7 +27,7 @@ TestResult ConnectionTests::test_connection_info() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo"
+        "ODBC 3.8 SQLGetInfo"
     );
     
     try {
@@ -71,7 +71,7 @@ TestResult ConnectionTests::test_connection_string_format() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo"
+        "ODBC 3.8 SQLGetInfo"
     );
     
     try {
@@ -111,7 +111,7 @@ TestResult ConnectionTests::test_multiple_statements() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLAllocHandle"
+        "ODBC 3.8 SQLAllocHandle"
     );
     
     try {
@@ -147,7 +147,7 @@ TestResult ConnectionTests::test_connection_attributes() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetConnectAttr"
+        "ODBC 3.8 SQLGetConnectAttr"
     );
     
     try {
@@ -190,7 +190,7 @@ TestResult ConnectionTests::test_connection_timeout() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetConnectAttr"
+        "ODBC 3.8 SQLGetConnectAttr"
     );
     
     try {
@@ -232,7 +232,7 @@ TestResult ConnectionTests::test_connection_pooling() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetEnvAttr"
+        "ODBC 3.8 SQLGetEnvAttr"
     );
     
     try {

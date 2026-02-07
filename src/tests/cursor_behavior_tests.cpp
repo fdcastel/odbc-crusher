@@ -33,7 +33,7 @@ TestResult CursorBehaviorTests::test_forward_only_past_end() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLFetch: Returns SQL_NO_DATA when no more rows"
+        "ODBC 3.8 SQLFetch: Returns SQL_NO_DATA when no more rows"
     );
     
     try {
@@ -93,7 +93,7 @@ TestResult CursorBehaviorTests::test_fetchscroll_first_forward_only() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 §SQLFetchScroll: Non-NEXT scrolling not supported on forward-only"
+        "ODBC 3.8 SQLFetchScroll: Non-NEXT scrolling not supported on forward-only"
     );
     
     try {
@@ -157,7 +157,7 @@ TestResult CursorBehaviorTests::test_cursor_type_attribute() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetStmtAttr: Cursor type reflects driver capabilities"
+        "ODBC 3.8 SQLGetStmtAttr: Cursor type reflects driver capabilities"
     );
     
     try {
@@ -230,7 +230,7 @@ TestResult CursorBehaviorTests::test_getdata_same_column_twice() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData: Re-reading same column behavior is driver-defined"
+        "ODBC 3.8 SQLGetData: Re-reading same column behavior is driver-defined"
     );
     
     try {

@@ -28,7 +28,7 @@ TestResult MetadataTests::test_tables_catalog() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLTables"
+        "ODBC 3.8 SQLTables"
     );
     
     try {
@@ -83,7 +83,7 @@ TestResult MetadataTests::test_columns_catalog() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLColumns"
+        "ODBC 3.8 SQLColumns"
     );
     
     try {
@@ -161,7 +161,7 @@ TestResult MetadataTests::test_primary_keys() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 §SQLPrimaryKeys"
+        "ODBC 3.8 SQLPrimaryKeys"
     );
     
     try {
@@ -241,7 +241,7 @@ TestResult MetadataTests::test_statistics() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 §SQLStatistics"
+        "ODBC 3.8 SQLStatistics"
     );
     
     try {
@@ -319,7 +319,7 @@ TestResult MetadataTests::test_special_columns() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 §SQLSpecialColumns"
+        "ODBC 3.8 SQLSpecialColumns"
     );
     
     try {
@@ -398,7 +398,7 @@ TestResult MetadataTests::test_foreign_keys() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 §SQLForeignKeys"
+        "ODBC 3.8 SQLForeignKeys"
     );
     
     try {
@@ -454,7 +454,7 @@ TestResult MetadataTests::test_table_privileges() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLTablePrivileges"
+        "ODBC 3.8 SQLTablePrivileges"
     );
     
     try {

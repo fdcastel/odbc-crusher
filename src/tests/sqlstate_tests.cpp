@@ -54,7 +54,7 @@ TestResult SqlstateTests::test_execute_without_prepare() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLExecute, Appendix B: State Transition Tables"
+        "ODBC 3.8 SQLExecute, Appendix B: State Transition Tables"
     );
     
     try {
@@ -99,7 +99,7 @@ TestResult SqlstateTests::test_fetch_no_cursor() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLFetch, Appendix B: Statement Transitions"
+        "ODBC 3.8 SQLFetch, Appendix B: Statement Transitions"
     );
     
     try {
@@ -107,7 +107,7 @@ TestResult SqlstateTests::test_fetch_no_cursor() {
         
         core::OdbcStatement stmt(conn_);
         
-        // SQLFetch without any prior execute — no cursor open
+        // SQLFetch without any prior execute - no cursor open
         SQLRETURN rc = SQLFetch(stmt.get_handle());
         
         if (rc == SQL_ERROR) {
@@ -117,7 +117,7 @@ TestResult SqlstateTests::test_fetch_no_cursor() {
                 result.actual = "SQL_ERROR with 24000 (Invalid cursor state)";
             } else if (state == "HY010") {
                 result.status = TestStatus::PASS;
-                result.actual = "SQL_ERROR with HY010 (Function sequence error) — acceptable alternative";
+                result.actual = "SQL_ERROR with HY010 (Function sequence error) - acceptable alternative";
                 result.suggestion = "ODBC spec prefers 24000 for fetch without active cursor";
             } else {
                 result.status = TestStatus::FAIL;
@@ -149,7 +149,7 @@ TestResult SqlstateTests::test_getdata_col0_no_bookmark() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Descriptor Index"
+        "ODBC 3.8 SQLGetData, Descriptor Index"
     );
     
     try {
@@ -219,7 +219,7 @@ TestResult SqlstateTests::test_getdata_col_out_of_range() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Descriptor Index"
+        "ODBC 3.8 SQLGetData, Descriptor Index"
     );
     
     try {
@@ -287,7 +287,7 @@ TestResult SqlstateTests::test_execdirect_syntax_error() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLExecDirect"
+        "ODBC 3.8 SQLExecDirect"
     );
     
     try {
@@ -308,7 +308,7 @@ TestResult SqlstateTests::test_execdirect_syntax_error() {
                 result.actual = "SQL_ERROR with 42000 (Syntax error or access violation)";
             } else if (state.substr(0, 2) == "42") {
                 result.status = TestStatus::PASS;
-                result.actual = "SQL_ERROR with SQLSTATE=" + state + " (42xxx class — syntax/access error)";
+                result.actual = "SQL_ERROR with SQLSTATE=" + state + " (42xxx class - syntax/access error)";
             } else {
                 result.status = TestStatus::FAIL;
                 result.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 42000)";
@@ -340,7 +340,7 @@ TestResult SqlstateTests::test_bindparam_invalid_ctype() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindParameter"
+        "ODBC 3.8 SQLBindParameter"
     );
     
     try {
@@ -400,7 +400,7 @@ TestResult SqlstateTests::test_getinfo_invalid_type() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo"
+        "ODBC 3.8 SQLGetInfo"
     );
     
     try {
@@ -452,7 +452,7 @@ TestResult SqlstateTests::test_setconnattr_invalid_attr() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLSetConnectAttr"
+        "ODBC 3.8 SQLSetConnectAttr"
     );
     
     try {
@@ -502,7 +502,7 @@ TestResult SqlstateTests::test_closecursor_no_cursor() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLCloseCursor"
+        "ODBC 3.8 SQLCloseCursor"
     );
     
     try {
@@ -510,14 +510,14 @@ TestResult SqlstateTests::test_closecursor_no_cursor() {
         
         core::OdbcStatement stmt(conn_);
         
-        // Close cursor on freshly allocated statement — no cursor open
+        // Close cursor on freshly allocated statement - no cursor open
         SQLRETURN rc = SQLCloseCursor(stmt.get_handle());
         
         if (rc == SQL_ERROR) {
             std::string state = get_stmt_sqlstate(stmt.get_handle());
             if (state == "24000") {
                 result.status = TestStatus::PASS;
-                result.actual = "SQL_ERROR with 24000 (Invalid cursor state) — no cursor open";
+                result.actual = "SQL_ERROR with 24000 (Invalid cursor state) - no cursor open";
             } else {
                 result.status = TestStatus::FAIL;
                 result.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 24000)";
@@ -549,13 +549,13 @@ TestResult SqlstateTests::test_connect_already_connected() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLDriverConnect, §Connection Transitions"
+        "ODBC 3.8 SQLDriverConnect, Connection Transitions"
     );
     
     try {
         auto start = std::chrono::high_resolution_clock::now();
         
-        // The connection is already established — try to connect again
+        // The connection is already established - try to connect again
         SQLRETURN rc = SQLDriverConnect(
             conn_.get_handle(),
             nullptr,
@@ -569,10 +569,10 @@ TestResult SqlstateTests::test_connect_already_connected() {
             std::string state = get_conn_sqlstate(conn_.get_handle());
             if (state == "08002" || state == "HY010") {
                 result.status = TestStatus::PASS;
-                result.actual = "SQL_ERROR with " + state + " — correctly rejected double connect";
+                result.actual = "SQL_ERROR with " + state + " - correctly rejected double connect";
             } else {
                 result.status = TestStatus::PASS;
-                result.actual = "SQL_ERROR with SQLSTATE=" + state + " — rejected double connect";
+                result.actual = "SQL_ERROR with SQLSTATE=" + state + " - rejected double connect";
             }
         } else if (SQL_SUCCEEDED(rc)) {
             result.status = TestStatus::FAIL;

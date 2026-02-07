@@ -34,7 +34,7 @@ TestResult AdvancedTests::test_cursor_types() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_CURSOR_TYPE"
+        "ODBC 3.8 SQLSetStmtAttr, SQL_ATTR_CURSOR_TYPE"
     );
     
     try {
@@ -102,7 +102,7 @@ TestResult AdvancedTests::test_array_binding() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_PARAMSET_SIZE"
+        "ODBC 3.8 SQLSetStmtAttr, SQL_ATTR_PARAMSET_SIZE"
     );
     
     try {
@@ -164,7 +164,7 @@ TestResult AdvancedTests::test_async_capability() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_ASYNC_ENABLE"
+        "ODBC 3.8 SQLSetStmtAttr, SQL_ATTR_ASYNC_ENABLE"
     );
     
     try {
@@ -241,7 +241,7 @@ TestResult AdvancedTests::test_rowset_size() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_ROW_ARRAY_SIZE"
+        "ODBC 3.8 SQLSetStmtAttr, SQL_ATTR_ROW_ARRAY_SIZE"
     );
     
     try {
@@ -303,7 +303,7 @@ TestResult AdvancedTests::test_positioned_operations() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_CONCURRENCY"
+        "ODBC 3.8 SQLSetStmtAttr, SQL_ATTR_CONCURRENCY"
     );
     
     try {
@@ -384,7 +384,7 @@ TestResult AdvancedTests::test_statement_attributes() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetStmtAttr"
+        "ODBC 3.8 SQLGetStmtAttr"
     );
     
     try {
@@ -451,7 +451,7 @@ TestResult AdvancedTests::test_fetch_scroll_next() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLFetchScroll"
+        "ODBC 3.8 SQLFetchScroll"
     );
     
     try {
@@ -510,7 +510,7 @@ TestResult AdvancedTests::test_fetch_scroll_first_last() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLFetchScroll, §SQL_FETCH_FIRST"
+        "ODBC 3.8 SQLFetchScroll, SQL_FETCH_FIRST"
     );
     
     try {
@@ -582,7 +582,7 @@ TestResult AdvancedTests::test_fetch_scroll_absolute() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLFetchScroll, §SQL_FETCH_ABSOLUTE"
+        "ODBC 3.8 SQLFetchScroll, SQL_FETCH_ABSOLUTE"
     );
     
     try {
@@ -646,7 +646,7 @@ TestResult AdvancedTests::test_cursor_scrollable_attr() {
         "",
         Severity::INFO,
         ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 §SQLSetStmtAttr, §SQL_ATTR_CURSOR_SCROLLABLE"
+        "ODBC 3.8 SQLSetStmtAttr, SQL_ATTR_CURSOR_SCROLLABLE"
     );
     
     try {

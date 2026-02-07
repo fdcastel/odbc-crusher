@@ -24,7 +24,7 @@ TestResult BoundaryTests::test_getinfo_zero_buffer() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
+        "ODBC 3.8 SQLGetInfo, Buffer Length"
     );
     
     try {
@@ -32,7 +32,7 @@ TestResult BoundaryTests::test_getinfo_zero_buffer() {
         
         SQLSMALLINT required_len = 0;
         
-        // Pass NULL buffer and 0 size — should return the required length
+        // Pass NULL buffer and 0 size - should return the required length
         SQLRETURN rc = SQLGetInfo(
             conn_.get_handle(),
             SQL_DRIVER_NAME,
@@ -77,7 +77,7 @@ TestResult BoundaryTests::test_getdata_zero_buffer() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Buffer Length"
+        "ODBC 3.8 SQLGetData, Buffer Length"
     );
     
     try {
@@ -94,7 +94,7 @@ TestResult BoundaryTests::test_getdata_zero_buffer() {
                 if (stmt.fetch()) {
                     SQLLEN indicator = 0;
                     
-                    // Pass NULL buffer, 0 size — should return data length in indicator
+                    // Pass NULL buffer, 0 size - should return data length in indicator
                     SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
                                              nullptr, 0, &indicator);
                     
@@ -148,7 +148,7 @@ TestResult BoundaryTests::test_bindparam_null_value_with_null_indicator() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindParameter, §SQL_NULL_DATA"
+        "ODBC 3.8 SQLBindParameter, SQL_NULL_DATA"
     );
     
     try {
@@ -171,7 +171,7 @@ TestResult BoundaryTests::test_bindparam_null_value_with_null_indicator() {
             &indicator            // indicator = SQL_NULL_DATA
         );
         
-        // Per ODBC spec, this should succeed — it represents binding a NULL parameter value
+        // Per ODBC spec, this should succeed - it represents binding a NULL parameter value
         // Note: passing nullptr as value pointer when indicator is SQL_NULL_DATA is valid
         // and is the standard way to pass NULL values to parameterized queries.
         // However, some drivers may unbind when value is nullptr.
@@ -202,7 +202,7 @@ TestResult BoundaryTests::test_execdirect_empty_sql() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLExecDirect"
+        "ODBC 3.8 SQLExecDirect"
     );
     
     try {
@@ -214,7 +214,7 @@ TestResult BoundaryTests::test_execdirect_empty_sql() {
         
         if (rc == SQL_ERROR) {
             result.status = TestStatus::PASS;
-            result.actual = "SQL_ERROR for empty SQL string — expected behavior";
+            result.actual = "SQL_ERROR for empty SQL string - expected behavior";
         } else if (SQL_SUCCEEDED(rc)) {
             result.status = TestStatus::PASS;
             result.actual = "Driver accepted empty SQL string (implementation-defined behavior)";
@@ -242,7 +242,7 @@ TestResult BoundaryTests::test_describecol_col0() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLDescribeCol"
+        "ODBC 3.8 SQLDescribeCol"
     );
     
     try {

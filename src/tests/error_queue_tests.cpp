@@ -28,7 +28,7 @@ TestResult ErrorQueueTests::test_single_error() {
         "Test requires error generation capability",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagRec"
+        "ODBC 3.8 SQLGetDiagRec"
     );
     
     try {
@@ -86,7 +86,7 @@ TestResult ErrorQueueTests::test_multiple_errors() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagRec"
+        "ODBC 3.8 SQLGetDiagRec"
     );
     
     try {
@@ -168,7 +168,7 @@ TestResult ErrorQueueTests::test_error_clearing() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagRec"
+        "ODBC 3.8 SQLGetDiagRec"
     );
     
     try {
@@ -276,7 +276,7 @@ TestResult ErrorQueueTests::test_hierarchy() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagRec"
+        "ODBC 3.8 SQLGetDiagRec"
     );
     
     try {
@@ -329,7 +329,7 @@ TestResult ErrorQueueTests::test_field_extraction() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagField"
+        "ODBC 3.8 SQLGetDiagField"
     );
     
     try {
@@ -422,7 +422,7 @@ TestResult ErrorQueueTests::test_iteration() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetDiagRec"
+        "ODBC 3.8 SQLGetDiagRec"
     );
     
     try {

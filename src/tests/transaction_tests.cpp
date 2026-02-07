@@ -67,7 +67,7 @@ TestResult TransactionTests::test_autocommit_on() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetConnectAttr"
+        "ODBC 3.8 SQLGetConnectAttr"
     );
     
     try {
@@ -117,7 +117,7 @@ TestResult TransactionTests::test_autocommit_off() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLSetConnectAttr"
+        "ODBC 3.8 SQLSetConnectAttr"
     );
     
     try {
@@ -194,7 +194,7 @@ TestResult TransactionTests::test_manual_commit() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLEndTran"
+        "ODBC 3.8 SQLEndTran"
     );
     
     try {
@@ -289,7 +289,7 @@ TestResult TransactionTests::test_manual_rollback() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLEndTran"
+        "ODBC 3.8 SQLEndTran"
     );
     
     try {
@@ -386,7 +386,7 @@ TestResult TransactionTests::test_transaction_isolation_levels() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLSetConnectAttr, §SQL_ATTR_TXN_ISOLATION"
+        "ODBC 3.8 SQLSetConnectAttr, SQL_ATTR_TXN_ISOLATION"
     );
     
     try {

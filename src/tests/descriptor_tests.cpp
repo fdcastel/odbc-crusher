@@ -24,7 +24,7 @@ TestResult DescriptorTests::test_implicit_descriptors() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetStmtAttr, §Descriptor Handles"
+        "ODBC 3.8 SQLGetStmtAttr, Descriptor Handles"
     );
     
     try {
@@ -71,7 +71,7 @@ TestResult DescriptorTests::test_implicit_descriptors() {
         } else {
             result.status = TestStatus::SKIP_UNSUPPORTED;
             result.actual = "No implicit descriptor handles available";
-            result.suggestion = "Implicit descriptor handles (APD/ARD/IPD/IRD) are Core conformance per ODBC 3.x §Descriptor Handles";
+            result.suggestion = "Implicit descriptor handles (APD/ARD/IPD/IRD) are Core conformance per ODBC 3.x Descriptor Handles";
         }
         
         auto end = std::chrono::high_resolution_clock::now();
@@ -95,7 +95,7 @@ TestResult DescriptorTests::test_ird_after_prepare() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLPrepare, §IRD Auto-Population"
+        "ODBC 3.8 SQLPrepare, IRD Auto-Population"
     );
     
     try {
@@ -164,7 +164,7 @@ TestResult DescriptorTests::test_apd_fields() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLSetDescField, §APD"
+        "ODBC 3.8 SQLSetDescField, APD"
     );
     
     try {
@@ -233,7 +233,7 @@ TestResult DescriptorTests::test_copy_desc() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLCopyDesc"
+        "ODBC 3.8 SQLCopyDesc"
     );
     
     try {
@@ -261,7 +261,7 @@ TestResult DescriptorTests::test_copy_desc() {
                 result.status = TestStatus::FAIL;
                 result.actual = "SQLCopyDesc failed";
                 result.severity = Severity::WARNING;
-                result.suggestion = "SQLCopyDesc is a Core conformance function per ODBC 3.x §SQLCopyDesc";
+                result.suggestion = "SQLCopyDesc is a Core conformance function per ODBC 3.x SQLCopyDesc";
             }
         } else {
             result.status = TestStatus::SKIP_UNSUPPORTED;
@@ -289,7 +289,7 @@ TestResult DescriptorTests::test_auto_populate_after_exec() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLExecDirect, §IRD Auto-Population"
+        "ODBC 3.8 SQLExecDirect, IRD Auto-Population"
     );
     
     try {

@@ -27,7 +27,7 @@ TestResult BufferValidationTests::test_null_termination() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
+        "ODBC 3.8 SQLGetInfo, Buffer Length"
     );
     
     try {
@@ -97,7 +97,7 @@ TestResult BufferValidationTests::test_buffer_overflow_protection() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
+        "ODBC 3.8 SQLGetInfo, Buffer Length"
     );
     
     try {
@@ -167,7 +167,7 @@ TestResult BufferValidationTests::test_truncation_indicators() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo, §String Truncation"
+        "ODBC 3.8 SQLGetInfo, String Truncation"
     );
     
     try {
@@ -230,7 +230,7 @@ TestResult BufferValidationTests::test_undersized_buffer() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
+        "ODBC 3.8 SQLGetInfo, Buffer Length"
     );
     
     try {
@@ -287,7 +287,7 @@ TestResult BufferValidationTests::test_sentinel_values() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo, §Buffer Length"
+        "ODBC 3.8 SQLGetInfo, Buffer Length"
     );
     
     try {

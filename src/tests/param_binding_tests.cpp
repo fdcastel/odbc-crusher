@@ -32,7 +32,7 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindParameter: SQL_C_WCHAR for Unicode parameter data"
+        "ODBC 3.8 SQLBindParameter: SQL_C_WCHAR for Unicode parameter data"
     );
     
     try {
@@ -100,7 +100,7 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindParameter: SQL_NULL_DATA in StrLen_or_IndPtr for NULL"
+        "ODBC 3.8 SQLBindParameter: SQL_NULL_DATA in StrLen_or_IndPtr for NULL"
     );
     
     try {
@@ -161,7 +161,7 @@ TestResult ParameterBindingTests::test_param_rebind_execute() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLBindParameter: Parameters persist across executions"
+        "ODBC 3.8 SQLBindParameter: Parameters persist across executions"
     );
     
     try {

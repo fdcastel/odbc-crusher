@@ -135,7 +135,7 @@ std::string FunctionInfo::format_summary() const {
     oss << "Supported Functions:\n";
     for (const auto& func : functions_) {
         if (func.supported) {
-            oss << "  ✓ " << func.function_name << "\n";
+            oss << "  [OK] " << func.function_name << "\n";
         }
     }
     
@@ -143,7 +143,7 @@ std::string FunctionInfo::format_summary() const {
         oss << "\nUnsupported Functions:\n";
         for (const auto& func : functions_) {
             if (!func.supported) {
-                oss << "  ✗ " << func.function_name << "\n";
+                oss << "  [NO] " << func.function_name << "\n";
             }
         }
     }

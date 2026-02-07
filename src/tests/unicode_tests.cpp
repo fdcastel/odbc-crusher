@@ -35,7 +35,7 @@ TestResult UnicodeTests::test_getinfo_wchar_strings() {
         "",
         Severity::WARNING,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetInfo: String info types return character data"
+        "ODBC 3.8 SQLGetInfo: String info types return character data"
     );
     
     try {
@@ -111,7 +111,7 @@ TestResult UnicodeTests::test_describecol_wchar_names() {
         "",
         Severity::WARNING,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLDescribeCol: Column names returned in driver charset"
+        "ODBC 3.8 SQLDescribeCol: Column names returned in driver charset"
     );
     
     try {
@@ -187,7 +187,7 @@ TestResult UnicodeTests::test_getdata_sql_c_wchar() {
         "",
         Severity::WARNING,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData: SQL_C_WCHAR returns UTF-16 data with byte-length"
+        "ODBC 3.8 SQLGetData: SQL_C_WCHAR returns UTF-16 data with byte-length"
     );
     
     try {
@@ -263,7 +263,7 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLColumns: Accepts search patterns for catalog metadata"
+        "ODBC 3.8 SQLColumns: Accepts search patterns for catalog metadata"
     );
     
     try {
@@ -322,7 +322,7 @@ TestResult UnicodeTests::test_string_truncation_wchar() {
         "",
         Severity::WARNING,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §String Truncation: 01004 with byte-based length for Unicode"
+        "ODBC 3.8 String Truncation: 01004 with byte-based length for Unicode"
     );
     
     try {

@@ -30,7 +30,7 @@ TestResult DataTypeEdgeCaseTests::test_integer_zero() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Integer Types"
+        "ODBC 3.8 SQLGetData, Integer Types"
     );
     
     try {
@@ -92,7 +92,7 @@ TestResult DataTypeEdgeCaseTests::test_integer_max() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Integer Types"
+        "ODBC 3.8 SQLGetData, Integer Types"
     );
     
     try {
@@ -154,7 +154,7 @@ TestResult DataTypeEdgeCaseTests::test_integer_min() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Integer Types"
+        "ODBC 3.8 SQLGetData, Integer Types"
     );
     
     try {
@@ -216,7 +216,7 @@ TestResult DataTypeEdgeCaseTests::test_varchar_empty() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Character Types"
+        "ODBC 3.8 SQLGetData, Character Types"
     );
     
     try {
@@ -279,7 +279,7 @@ TestResult DataTypeEdgeCaseTests::test_varchar_special_chars() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Character Types"
+        "ODBC 3.8 SQLGetData, Character Types"
     );
     
     try {
@@ -341,7 +341,7 @@ TestResult DataTypeEdgeCaseTests::test_null_integer() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §NULL Data"
+        "ODBC 3.8 SQLGetData, NULL Data"
     );
     
     try {
@@ -407,7 +407,7 @@ TestResult DataTypeEdgeCaseTests::test_null_varchar() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §NULL Data"
+        "ODBC 3.8 SQLGetData, NULL Data"
     );
     
     try {
@@ -474,7 +474,7 @@ TestResult DataTypeEdgeCaseTests::test_integer_as_string() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Type Conversion"
+        "ODBC 3.8 SQLGetData, Type Conversion"
     );
     
     try {
@@ -540,7 +540,7 @@ TestResult DataTypeEdgeCaseTests::test_string_as_integer() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Type Conversion"
+        "ODBC 3.8 SQLGetData, Type Conversion"
     );
     
     try {
@@ -610,7 +610,7 @@ TestResult DataTypeEdgeCaseTests::test_decimal_values() {
         "",
         Severity::INFO,
         ConformanceLevel::CORE,
-        "ODBC 3.8 §SQLGetData, §Numeric Types"
+        "ODBC 3.8 SQLGetData, Numeric Types"
     );
     
     try {
