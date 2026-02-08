@@ -145,19 +145,127 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
     
     const auto& config = BehaviorController::instance().config();
     if (config.should_fail("SQLExecute")) {
+        // For array params, fill status array with errors
+        if (stmt->paramset_size_ > 1 && stmt->param_status_ptr_) {
+            for (SQLULEN i = 0; i < stmt->paramset_size_; ++i) {
+                stmt->param_status_ptr_[i] = SQL_PARAM_ERROR;
+            }
+        }
+        if (stmt->params_processed_ptr_) {
+            *stmt->params_processed_ptr_ = stmt->paramset_size_;
+        }
         stmt->add_diagnostic(config.error_code, 0, "Simulated execute failure");
         return SQL_ERROR;
     }
     
     config.apply_latency();
     
-    // Execute prepared statement
+    // Parse SQL once
     auto parsed = parse_sql(stmt->sql_);
+    
+    // --- Array parameter execution ---
+    if (stmt->paramset_size_ > 1) {
+        SQLULEN success_count = 0;
+        SQLULEN error_count = 0;
+        SQLULEN processed = 0;
+        SQLLEN total_affected = 0;
+        
+        // Accumulate result data from all parameter sets
+        std::vector<std::string> result_col_names;
+        std::vector<SQLSMALLINT> result_col_types;
+        std::vector<std::vector<std::variant<std::monostate, long long, double, std::string>>> all_result_data;
+        
+        for (SQLULEN i = 0; i < stmt->paramset_size_; ++i) {
+            processed = i + 1;
+            
+            // Check operation array for SQL_PARAM_IGNORE
+            if (stmt->param_operation_ptr_ && 
+                stmt->param_operation_ptr_[i] == SQL_PARAM_IGNORE) {
+                if (stmt->param_status_ptr_) {
+                    stmt->param_status_ptr_[i] = SQL_PARAM_UNUSED;
+                }
+                continue;
+            }
+            
+            // Execute with current parameter set
+            // The mock driver doesn't actually use bound parameter values in query execution,
+            // but it simulates the array execution loop correctly for testing purposes.
+            auto result = execute_query(parsed, config.result_set_size);
+            
+            if (result.success) {
+                if (stmt->param_status_ptr_) {
+                    stmt->param_status_ptr_[i] = SQL_PARAM_SUCCESS;
+                }
+                success_count++;
+                total_affected += result.affected_rows > 0 ? result.affected_rows : 
+                                  static_cast<SQLLEN>(result.data.size());
+                
+                // Capture column metadata from first successful execution
+                if (result_col_names.empty() && !result.column_names.empty()) {
+                    result_col_names = result.column_names;
+                    for (auto t : result.column_types) {
+                        result_col_types.push_back(t);
+                    }
+                }
+                
+                // Accumulate result data
+                for (const auto& row : result.data) {
+                    std::vector<std::variant<std::monostate, long long, double, std::string>> converted_row;
+                    for (const auto& cell : row) {
+                        converted_row.push_back(cell);
+                    }
+                    all_result_data.push_back(std::move(converted_row));
+                }
+            } else {
+                if (stmt->param_status_ptr_) {
+                    stmt->param_status_ptr_[i] = SQL_PARAM_ERROR;
+                }
+                error_count++;
+                stmt->add_diagnostic(result.error_sqlstate, 0, 
+                    "Parameter set " + std::to_string(i + 1) + ": " + result.error_message);
+            }
+        }
+        
+        // Set params processed count
+        if (stmt->params_processed_ptr_) {
+            *stmt->params_processed_ptr_ = processed;
+        }
+        
+        // Set statement state
+        stmt->executed_ = true;
+        stmt->cursor_open_ = !all_result_data.empty();
+        stmt->current_row_ = -1;
+        stmt->row_count_ = total_affected;
+        stmt->num_result_cols_ = static_cast<SQLSMALLINT>(result_col_names.size());
+        stmt->column_names_ = std::move(result_col_names);
+        stmt->column_types_ = std::move(result_col_types);
+        stmt->result_data_ = std::move(all_result_data);
+        
+        // Determine return code based on success/error counts
+        if (error_count == 0) {
+            return SQL_SUCCESS;
+        } else if (success_count == 0) {
+            return SQL_ERROR;
+        } else {
+            // Mixed results - some succeeded, some failed
+            return SQL_SUCCESS_WITH_INFO;
+        }
+    }
+    
+    // --- Single parameter set execution (original path) ---
     auto result = execute_query(parsed, config.result_set_size);
     
     if (!result.success) {
         stmt->add_diagnostic(result.error_sqlstate, 0, result.error_message);
         return SQL_ERROR;
+    }
+    
+    // Set params processed for single execution too
+    if (stmt->params_processed_ptr_) {
+        *stmt->params_processed_ptr_ = 1;
+    }
+    if (stmt->param_status_ptr_) {
+        stmt->param_status_ptr_[0] = SQL_PARAM_SUCCESS;
     }
     
     stmt->executed_ = true;
@@ -761,6 +869,32 @@ SQLRETURN SQL_API SQLGetStmtAttr(
             if (pcbValue) *pcbValue = sizeof(SQLULEN);
             break;
 
+        // Array parameter attributes
+        case SQL_ATTR_PARAM_STATUS_PTR:
+            if (rgbValue) *static_cast<SQLUSMALLINT**>(rgbValue) = stmt->param_status_ptr_;
+            if (pcbValue) *pcbValue = sizeof(SQLUSMALLINT*);
+            break;
+            
+        case SQL_ATTR_PARAMS_PROCESSED_PTR:
+            if (rgbValue) *static_cast<SQLULEN**>(rgbValue) = stmt->params_processed_ptr_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN*);
+            break;
+            
+        case SQL_ATTR_PARAM_BIND_TYPE:
+            if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->param_bind_type_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN);
+            break;
+            
+        case SQL_ATTR_PARAM_BIND_OFFSET_PTR:
+            if (rgbValue) *static_cast<SQLULEN**>(rgbValue) = stmt->param_bind_offset_ptr_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN*);
+            break;
+            
+        case SQL_ATTR_PARAM_OPERATION_PTR:
+            if (rgbValue) *static_cast<SQLUSMALLINT**>(rgbValue) = stmt->param_operation_ptr_;
+            if (pcbValue) *pcbValue = sizeof(SQLUSMALLINT*);
+            break;
+
         // Implicit descriptor handles — the DM queries these right after
         // SQLAllocHandle(SQL_HANDLE_STMT) to set up its internal dispatch.
         // Returning NULL causes a DM crash (ODBC32.dll access violation).
@@ -828,6 +962,27 @@ SQLRETURN SQL_API SQLSetStmtAttr(
             
         case SQL_ATTR_ASYNC_ENABLE:
             stmt->async_enable_ = value;
+            break;
+            
+        // Array parameter attributes
+        case SQL_ATTR_PARAM_STATUS_PTR:
+            stmt->param_status_ptr_ = static_cast<SQLUSMALLINT*>(rgbValue);
+            break;
+            
+        case SQL_ATTR_PARAMS_PROCESSED_PTR:
+            stmt->params_processed_ptr_ = static_cast<SQLULEN*>(rgbValue);
+            break;
+            
+        case SQL_ATTR_PARAM_BIND_TYPE:
+            stmt->param_bind_type_ = value;
+            break;
+            
+        case SQL_ATTR_PARAM_BIND_OFFSET_PTR:
+            stmt->param_bind_offset_ptr_ = static_cast<SQLULEN*>(rgbValue);
+            break;
+            
+        case SQL_ATTR_PARAM_OPERATION_PTR:
+            stmt->param_operation_ptr_ = static_cast<SQLUSMALLINT*>(rgbValue);
             break;
             
         default:

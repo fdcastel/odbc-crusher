@@ -20,6 +20,7 @@ add_library(odbc_crusher_tests_lib
     diagnostic_depth_tests.cpp
     cursor_behavior_tests.cpp
     param_binding_tests.cpp
+    array_param_tests.cpp
 )
 
 target_include_directories(odbc_crusher_tests_lib

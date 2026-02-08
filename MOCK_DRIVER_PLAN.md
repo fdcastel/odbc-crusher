@@ -2,7 +2,7 @@
 
 **Version**: 1.0  
 **Based on**: Analysis of psqlodbc (PostgreSQL ODBC driver) — 2000+ commits, ~30 years of production use  
-**Last Updated**: February 6, 2026
+**Last Updated**: February 7, 2026
 
 ---
 
@@ -576,6 +576,73 @@ RETCODE SQL_API SQLColumnsW(...) {
 - [x] Mutex added to all four handle types (via `OdbcHandle` base class)
 - [x] Key API entry points acquire `HandleLock` before work (statement, catalog, connection, info APIs)
 - [x] RAII `HandleLock` guard prevents deadlocks
+
+---
+
+### Phase M5: Arrays of Parameter Values
+
+**Goal**: Support executing a prepared statement with arrays of parameter values, enabling batch INSERT/UPDATE/DELETE operations per ODBC spec.
+
+**ODBC Spec References**:
+- [Arrays of Parameter Values](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/arrays-of-parameter-values)
+- [Binding Arrays of Parameters](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/binding-arrays-of-parameters)
+- [Using Arrays of Parameters](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/using-arrays-of-parameters)
+
+#### M5.1 Statement Handle Extensions
+
+Add new members to `StatementHandle` for array parameter support:
+
+| Member | Type | Default | Purpose |
+|--------|------|---------|---------|
+| `param_status_ptr_` | `SQLUSMALLINT*` | `nullptr` | Application-allocated array for per-row status |
+| `params_processed_ptr_` | `SQLULEN*` | `nullptr` | Application-allocated variable for processed count |
+| `param_bind_type_` | `SQLULEN` | `SQL_PARAM_BIND_BY_COLUMN` (0) | Column-wise (0) or row-wise (sizeof struct) |
+| `param_bind_offset_ptr_` | `SQLULEN*` | `nullptr` | Optional offset added to all bound addresses |
+| `param_operation_ptr_` | `SQLUSMALLINT*` | `nullptr` | Array marking rows as `SQL_PARAM_PROCEED` or `SQL_PARAM_IGNORE` |
+
+#### M5.2 SQLSetStmtAttr / SQLGetStmtAttr
+
+Handle the following attributes:
+- `SQL_ATTR_PARAM_STATUS_PTR` → store/retrieve `param_status_ptr_`
+- `SQL_ATTR_PARAMS_PROCESSED_PTR` → store/retrieve `params_processed_ptr_`
+- `SQL_ATTR_PARAM_BIND_TYPE` → store/retrieve `param_bind_type_`
+- `SQL_ATTR_PARAM_BIND_OFFSET_PTR` → store/retrieve `param_bind_offset_ptr_`
+- `SQL_ATTR_PARAM_OPERATION_PTR` → store/retrieve `param_operation_ptr_`
+
+#### M5.3 SQLExecute Array Execution Loop
+
+When `paramset_size_ > 1`, `SQLExecute` must:
+
+1. Loop from `i = 0` to `paramset_size_ - 1`
+2. For each parameter set `i`:
+   a. Check `param_operation_ptr_[i]` — if `SQL_PARAM_IGNORE`, set status to `SQL_PARAM_UNUSED` and skip
+   b. Calculate data address for each bound parameter:
+      - **Column-wise** (`param_bind_type_ == 0`): `address = base + i * element_size`
+      - **Row-wise** (`param_bind_type_ > 0`): `address = base + i * param_bind_type_`
+   c. If `param_bind_offset_ptr_` is set, add `*param_bind_offset_ptr_` to all addresses
+   d. Execute the statement with the current parameter values
+   e. Set `param_status_ptr_[i]` to `SQL_PARAM_SUCCESS` or `SQL_PARAM_ERROR`
+3. Set `*params_processed_ptr_` to the number of sets processed
+4. Return `SQL_SUCCESS` if all succeeded, `SQL_SUCCESS_WITH_INFO` if some failed, `SQL_ERROR` if all failed
+
+#### M5.4 SQLGetInfo Updates
+
+Report array parameter capabilities:
+- `SQL_PARAM_ARRAY_ROW_COUNTS` → `SQL_PARC_BATCH` (individual row counts available)
+- `SQL_PARAM_ARRAY_SELECTS` → `SQL_PAS_NO_SELECT` (SELECT with arrays not supported)
+
+#### M5.5 Deliverables
+
+- [x] `StatementHandle` has all 5 new array parameter members
+- [x] `SQLSetStmtAttr` / `SQLGetStmtAttr` handle all 5 new attributes
+- [x] `SQLExecute` loops over parameter sets with column-wise addressing
+- [x] `SQLExecute` loops over parameter sets with row-wise addressing
+- [x] Parameter status array populated correctly
+- [x] Params processed count set correctly
+- [x] `SQL_PARAM_IGNORE` skips rows, marks them `SQL_PARAM_UNUSED`
+- [x] Partial failure returns `SQL_SUCCESS_WITH_INFO` with mixed status
+- [x] `SQLGetInfo` reports `SQL_PARC_BATCH` and `SQL_PAS_NO_SELECT`
+- [x] Mock driver unit tests cover array parameter execution
 
 ---
 

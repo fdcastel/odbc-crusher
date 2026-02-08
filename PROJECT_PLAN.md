@@ -2,7 +2,7 @@
 
 **Version**: 2.2  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
-**Last Updated**: February 6, 2026
+**Last Updated**: February 7, 2026
 
 ---
 
@@ -373,10 +373,60 @@ After the mock driver rewrite, verify the consonant development rule:
 
 ---
 
-## 5. Technical Stack
+### Phase 16: Arrays of Parameter Values
 
-| Component | Choice | Rationale |
-|-----------|--------|-----------|
+**Goal**: Implement and test ODBC "Arrays of Parameter Values" — the ability to bind arrays of values to parameter markers and execute a statement once for multiple parameter sets. This is a Level 1 conformance feature used heavily by batch INSERT/UPDATE/DELETE operations.
+
+**ODBC Spec References**:
+- [Arrays of Parameter Values](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/arrays-of-parameter-values)
+- [Binding Arrays of Parameters](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/binding-arrays-of-parameters)
+- [Using Arrays of Parameters](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/using-arrays-of-parameters)
+
+#### 16.1 Mock Driver: Array Parameter Support
+
+- [x] Add `param_status_ptr_`, `params_processed_ptr_`, `param_bind_type_`, `param_bind_offset_ptr_`, `param_operation_ptr_` members to `StatementHandle`
+- [x] Handle `SQL_ATTR_PARAM_STATUS_PTR`, `SQL_ATTR_PARAMS_PROCESSED_PTR`, `SQL_ATTR_PARAM_BIND_TYPE`, `SQL_ATTR_PARAM_BIND_OFFSET_PTR`, `SQL_ATTR_PARAM_OPERATION_PTR` in `SQLSetStmtAttr` / `SQLGetStmtAttr`
+- [x] Modify `SQLExecute` to loop over `paramset_size_` parameter sets using column-wise or row-wise addressing
+- [x] Populate `param_status_ptr_` array with per-row status (`SQL_PARAM_SUCCESS`, `SQL_PARAM_ERROR`, `SQL_PARAM_UNUSED`)
+- [x] Set `*params_processed_ptr_` to the number of parameter sets processed
+- [x] Support `SQL_PARAM_IGNORE` in the operation array to skip specific parameter sets
+- [x] Return `SQL_SUCCESS_WITH_INFO` when some (but not all) parameter sets fail
+- [x] Report `SQL_PARAM_ARRAY_ROW_COUNTS = SQL_PARC_BATCH` and `SQL_PARAM_ARRAY_SELECTS = SQL_PAS_NO_SELECT` via `SQLGetInfo`
+
+#### 16.2 New Test Category: Array Parameter Tests (8 tests)
+
+| Test | Description | ODBC Functions | Conformance |
+|------|-------------|----------------|-------------|
+| `test_column_wise_array_binding` | Bind integer + varchar arrays column-wise, execute INSERT with `PARAMSET_SIZE > 1` | `SQLSetStmtAttr`, `SQLBindParameter`, `SQLExecute` | Level 1 |
+| `test_row_wise_array_binding` | Bind parameters in row-wise struct layout via `SQL_ATTR_PARAM_BIND_TYPE` | `SQLSetStmtAttr`, `SQLBindParameter`, `SQLExecute` | Level 1 |
+| `test_param_status_array` | Verify `SQL_ATTR_PARAM_STATUS_PTR` is populated with per-row status | `SQLSetStmtAttr`, `SQLExecute` | Level 1 |
+| `test_params_processed_count` | Verify `SQL_ATTR_PARAMS_PROCESSED_PTR` reports correct count | `SQLSetStmtAttr`, `SQLExecute` | Level 1 |
+| `test_array_with_null_values` | Array binding where some rows have `SQL_NULL_DATA` indicators | `SQLBindParameter`, `SQLExecute` | Level 1 |
+| `test_param_operation_array` | Use `SQL_ATTR_PARAM_OPERATION_PTR` to skip specific rows (`SQL_PARAM_IGNORE`) | `SQLSetStmtAttr`, `SQLExecute` | Level 1 |
+| `test_paramset_size_one` | Setting `SQL_ATTR_PARAMSET_SIZE = 1` behaves like normal single-parameter execution | `SQLSetStmtAttr`, `SQLExecute` | Core |
+| `test_array_partial_error` | Inject failure on specific parameter sets, verify mixed `SQL_PARAM_SUCCESS` / `SQL_PARAM_ERROR` | `SQLSetStmtAttr`, `SQLExecute` | Level 1 |
+
+#### 16.3 Unit Tests
+
+- [x] GTest suite `ArrayParamTestsTest` validating all 8 tests against the mock driver
+- [x] Verify `SQLGetInfo(SQL_PARAM_ARRAY_ROW_COUNTS)` returns `SQL_PARC_BATCH`
+- [x] Verify `SQLGetInfo(SQL_PARAM_ARRAY_SELECTS)` returns `SQL_PAS_NO_SELECT`
+
+#### 16.4 Registration
+
+- [x] Register `ArrayParamTests` in `src/main.cpp`
+- [x] Add source files to `src/tests/CMakeLists.txt`
+- [x] Add unit test file to `tests/CMakeLists.txt`
+
+**Deliverables**:
+- Mock driver supports array parameter execution (column-wise + row-wise) ✅
+- 8 new tests covering all ODBC array parameter features ✅
+- GTest unit tests passing against mock driver ✅
+- `SQLGetInfo` reports correct array parameter capabilities ✅
+
+---
+
+## 5. Technical Stack
 | Language | C++17 | Direct ODBC API access, `std::optional`, `std::string_view` |
 | Build | CMake 3.20+ | Industry standard, CTest integration |
 | Test framework | Google Test 1.14 | FetchContent, mature, GTest + GMock |

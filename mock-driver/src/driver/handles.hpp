@@ -125,6 +125,13 @@ public:
     SQLULEN max_length_ = 0;
     SQLULEN retrieve_data_ = SQL_RD_ON;
     
+    // Array parameter attributes (ODBC Arrays of Parameter Values)
+    SQLUSMALLINT* param_status_ptr_ = nullptr;       // SQL_ATTR_PARAM_STATUS_PTR
+    SQLULEN* params_processed_ptr_ = nullptr;         // SQL_ATTR_PARAMS_PROCESSED_PTR
+    SQLULEN param_bind_type_ = SQL_PARAM_BIND_BY_COLUMN; // SQL_ATTR_PARAM_BIND_TYPE (0 = column-wise)
+    SQLULEN* param_bind_offset_ptr_ = nullptr;        // SQL_ATTR_PARAM_BIND_OFFSET_PTR
+    SQLUSMALLINT* param_operation_ptr_ = nullptr;     // SQL_ATTR_PARAM_OPERATION_PTR
+    
     // Bound columns (column number -> binding info)
     struct ColumnBinding {
         SQLSMALLINT target_type;
