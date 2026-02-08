@@ -909,6 +909,112 @@ The following failures are **correct** — the SQLite ODBC driver has genuine co
 
 ---
 
+### Phase 22: Real-Driver Validation Bugs — Round 5 (PostgreSQL / psqlodbc Analysis)
+
+**Goal**: Fix odbc-crusher bugs discovered by running v0.4.1 against the PostgreSQL ODBC driver (psqlodbcw.so v16.00.0000 / ODBC 3.51 / PostgreSQL 16.0.11) and cross-referencing each non-passing result against the driver's C source code (`tmp/external/psqlodbc/`).
+
+**Discovery Date**: February 8, 2026  
+**Analysis Method**: Ran odbc-crusher against psqlodbc on Linux, then read the driver's full C source code to verify each failure/skip. Documented genuine driver issues in `postgresql_ODBC_RECOMMENDATIONS.md`.
+
+**Summary**: 125/131 passed (95.4%), 0 failed, 6 skipped. Of these 6 non-passing results:
+- **1 is a minor driver conformance gap** (`SQL_ATTR_CURSOR_SCROLLABLE` setter rejected while `SQL_ATTR_CURSOR_TYPE` works)
+- **1 is a correctly-reported optional feature** (async execution, Level 2)
+- **4 are odbc-crusher bugs** (test lacks PostgreSQL-compatible queries/tables/parameters)
+
+Additionally, 2 passed tests have minor SQLSTATE mapping issues (documented in `postgresql_ODBC_RECOMMENDATIONS.md`):
+- `test_getinfo_invalid_type`: returns `HYC00` instead of spec-required `HY096`
+- `test_setconnattr_invalid_attr`: returns `HY000` instead of spec-required `HY092`
+
+#### 22.1 SQLSpecialColumns — Hardcoded Table Names (1 test)
+
+**Root Cause**: `test_special_columns` in `metadata_tests.cpp` hardcodes only two table names:
+1. `RDB$DATABASE` — Firebird-specific, does not exist in PostgreSQL
+2. `information_schema.TABLES` — exists in PostgreSQL but is a **view**, not a base table; `SQLSpecialColumns` queries `pg_catalog.pg_class` for OIDs/primary keys which are only meaningful for base tables
+
+The psqlodbc driver **fully implements** `SQLSpecialColumns` (via `PGAPI_SpecialColumns` in `info.c`, exported via `odbcapi.c` and `odbcapi30w.c`). The function works correctly when given a real PostgreSQL base table (e.g., `pg_catalog.pg_class`). The test does **not** dynamically discover tables via `SQLTables` before calling `SQLSpecialColumns`.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B22-01 | `test_special_columns` | `metadata_tests.cpp` | Hardcoded table names; needs dynamic discovery via `SQLTables` and PostgreSQL tables like `pg_catalog.pg_class` |
+
+**Fix Strategy**:
+- [ ] Add dynamic table discovery via `SQLTables` (capture catalog, schema, table name) before calling `SQLSpecialColumns`
+- [ ] Add PostgreSQL-compatible static fallback tables: `{"pg_catalog", "pg_class"}`, `{"pg_catalog", "pg_type"}`
+- [ ] Prefer user tables (`TABLE` type) over system views
+
+#### 22.2 Binary Types — No PostgreSQL Syntax (1 test)
+
+**Root Cause**: `test_binary_types` in `datatype_tests.cpp` tries 4 binary literal patterns:
+1. `SELECT CAST(0x48656C6C6F AS VARBINARY(10))` — SQL Server syntax
+2. `SELECT CAST('Binary' AS BLOB SUB_TYPE 0) FROM RDB$DATABASE` — Firebird syntax
+3. `SELECT CAST('test' AS BINARY(10))` — no `BINARY` type in PostgreSQL
+4. `SELECT X'48656C6C6F'` — PostgreSQL interprets `X'...'` as bit string, not `bytea`
+
+PostgreSQL uses `bytea` for binary data. None of these syntaxes produce a `bytea` column. The driver fully supports `SQL_C_BINARY` data retrieval for `bytea` columns.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B22-02 | `test_binary_types` | `datatype_tests.cpp` | No PostgreSQL-compatible binary literal syntax |
+
+**Fix Strategy**:
+- [ ] Add PostgreSQL binary query: `"SELECT decode('48656C6C6F', 'hex')::bytea"`
+- [ ] Alternative: `"SELECT E'\\\\x48656C6C6F'::bytea"`
+- [ ] Retrieve as `SQL_C_BINARY` and validate byte content
+
+#### 22.3 SQLColumnsW for information_schema Views (1 test)
+
+**Root Cause**: `test_columns_unicode_patterns` in `unicode_tests.cpp` discovers a table via `SQLTablesW`. When there are no user tables, strategy 3 (any type) returns `information_schema` views like `_pg_foreign_data_wrappers`. The test correctly propagates catalog and schema to `SQLColumnsW` (Phase 20 fix), but `SQLColumns` legitimately returns 0 columns for `information_schema` views because they are dynamically-defined views without entries in `pg_attribute`.
+
+This is not strictly an odbc-crusher propagation bug — the test should prefer discovering real base tables or `pg_catalog` system tables.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B22-03 | `test_columns_unicode_patterns` | `unicode_tests.cpp` | Test should prefer base tables or `pg_catalog` tables over `information_schema` views |
+
+**Fix Strategy**:
+- [ ] Prefer `TABLE` type in discovery; add `SYSTEM TABLE` as second preference before falling back to any type
+- [ ] Filter out `information_schema` tables during discovery (these are views that may not expose columns via `SQLColumns`)
+- [ ] Add `pg_catalog.pg_class` as a static fallback
+
+#### 22.4 SQLTables SQL_ALL_TABLE_TYPES Enumeration (1 test)
+
+**Root Cause**: `test_tables_search_patterns` in `catalog_depth_tests.cpp` calls `SQLTablesW` with `nullptr` for catalog, schema, and table name instead of empty strings (`L""`). Per the ODBC specification, the `SQL_ALL_TABLE_TYPES` enumeration mode requires **empty strings** (not nullptrs) for catalog, schema, and table name with `%` as the table type.
+
+The psqlodbc driver's `PGAPI_Tables` implementation checks `escCatName && escSchemaName` for the special enumeration mode — `nullptr` values cause this check to fail, so the driver falls through to a regular query which returns 0 rows if there are no user tables.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B22-04 | `test_tables_search_patterns` | `catalog_depth_tests.cpp` | Passes `nullptr` instead of `L""` for SQL_ALL_TABLE_TYPES enumeration |
+
+**Fix Strategy**:
+- [ ] Pass `SqlWcharBuf("").ptr()` with length 0 for catalog, schema, and table name
+- [ ] Keep `SqlWcharBuf("%").ptr()` with `SQL_NTS` for the table type parameter
+- [ ] Verify the result set contains at least one table type entry (e.g., `TABLE`, `VIEW`, `SYSTEM TABLE`)
+
+#### 22.5 Correctly Identified Driver Gaps (No odbc-crusher bug)
+
+| Test | Status | Driver Issue | Details |
+|------|--------|-------------|---------|
+| `test_cursor_scrollable_attr` | SKIP | `SQL_ATTR_CURSOR_SCROLLABLE` settable as getter only; setter rejected with `HYC00` | Minor — driver supports scrolling via `SQL_ATTR_CURSOR_TYPE` |
+| `test_async_capability` | SKIP | Level 2 optional; driver silently accepts set but never enables async | Acceptable for synchronous driver |
+
+#### 22.6 Correctly Skipped / Passed Tests (No bug)
+
+All 125 passed tests were verified as correct by reviewing the driver source code. Notable positive findings:
+- Complete descriptor API (`SQLCopyDesc`, `SQLGetDescField`, `SQLSetDescField`)
+- Full array parameter support with status, operation, and processed count
+- Proper SQLSTATE differentiation (`42601` for syntax errors, `HY010` for sequence errors)
+- Correct buffer validation (sentinel preservation, truncation reporting with `01004`)
+
+**Deliverables**:
+- [x] `postgresql_ODBC_RECOMMENDATIONS.md` documents 3 minor driver improvements
+- [ ] B22-01: Add dynamic table discovery to `test_special_columns`
+- [ ] B22-02: Add PostgreSQL binary syntax to `test_binary_types`
+- [ ] B22-03: Prefer base tables in `test_columns_unicode_patterns` discovery
+- [ ] B22-04: Use empty strings for `SQL_ALL_TABLE_TYPES` in `test_tables_search_patterns`
+
+---
+
 ## 5. Technical Stack
 | Language | C++17 | Direct ODBC API access, `std::optional`, `std::string_view` |
 | Build | CMake 3.20+ | Industry standard, CTest integration |
