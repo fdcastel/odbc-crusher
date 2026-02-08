@@ -44,15 +44,25 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
         // Prepare a parameterized query — try multiple patterns
         std::vector<std::string> queries = {
             "SELECT CAST(? AS VARCHAR(50))",
-            "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE",
-            "SELECT * FROM CUSTOMERS WHERE NAME = ?"
+            "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE"
         };
         SQLRETURN ret = SQL_ERROR;
+        // Strategy 1: Try W-function (SQLPrepareW)
         for (const auto& q : queries) {
             ret = SQLPrepareW(stmt.get_handle(),
                 SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
             if (SQL_SUCCEEDED(ret)) break;
             SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+        }
+        // Strategy 2: Fall back to ANSI SQLPrepare if W-function fails
+        // (some drivers export W-functions but have broken W→A conversion)
+        if (!SQL_SUCCEEDED(ret)) {
+            for (const auto& q : queries) {
+                ret = SQLPrepare(stmt.get_handle(),
+                    (SQLCHAR*)q.c_str(), SQL_NTS);
+                if (SQL_SUCCEEDED(ret)) break;
+                SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+            }
         }
         
         if (!SQL_SUCCEEDED(ret)) {
@@ -121,15 +131,24 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
         
         std::vector<std::string> queries = {
             "SELECT CAST(? AS VARCHAR(50))",
-            "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE",
-            "SELECT * FROM CUSTOMERS WHERE NAME = ?"
+            "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE"
         };
         SQLRETURN ret = SQL_ERROR;
+        // Strategy 1: Try W-function (SQLPrepareW)
         for (const auto& q : queries) {
             ret = SQLPrepareW(stmt.get_handle(),
                 SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
             if (SQL_SUCCEEDED(ret)) break;
             SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+        }
+        // Strategy 2: Fall back to ANSI SQLPrepare if W-function fails
+        if (!SQL_SUCCEEDED(ret)) {
+            for (const auto& q : queries) {
+                ret = SQLPrepare(stmt.get_handle(),
+                    (SQLCHAR*)q.c_str(), SQL_NTS);
+                if (SQL_SUCCEEDED(ret)) break;
+                SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+            }
         }
         
         if (!SQL_SUCCEEDED(ret)) {
@@ -192,15 +211,24 @@ TestResult ParameterBindingTests::test_param_rebind_execute() {
         
         std::vector<std::string> queries = {
             "SELECT CAST(? AS INTEGER)",
-            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE",
-            "SELECT * FROM CUSTOMERS WHERE CUSTOMER_ID = ?"
+            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE"
         };
         SQLRETURN ret = SQL_ERROR;
+        // Strategy 1: Try W-function (SQLPrepareW)
         for (const auto& q : queries) {
             ret = SQLPrepareW(stmt.get_handle(),
                 SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
             if (SQL_SUCCEEDED(ret)) break;
             SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+        }
+        // Strategy 2: Fall back to ANSI SQLPrepare if W-function fails
+        if (!SQL_SUCCEEDED(ret)) {
+            for (const auto& q : queries) {
+                ret = SQLPrepare(stmt.get_handle(),
+                    (SQLCHAR*)q.c_str(), SQL_NTS);
+                if (SQL_SUCCEEDED(ret)) break;
+                SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+            }
         }
         
         if (!SQL_SUCCEEDED(ret)) {

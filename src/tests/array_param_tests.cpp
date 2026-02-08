@@ -24,18 +24,48 @@ bool ArrayParamTests::create_test_table() {
         SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                           (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
 
-        core::OdbcStatement stmt(conn_);
-
-        // Drop if exists (ignore errors)
-        try { stmt.execute("DROP TABLE ODBC_TEST_ARRAY"); } catch (...) {}
-
-        // Create the table
+        // Strategy: CREATE first.  If it fails with "table already exists",
+        // DROP + rollback + retry CREATE.  This avoids corrupting the
+        // connection-level transaction state on Firebird when DROP fails for
+        // a table that doesn't exist.
         std::vector<std::string> ddl = {
             "CREATE TABLE ODBC_TEST_ARRAY (ID INTEGER, NAME VARCHAR(50))",
             "CREATE TABLE ODBC_TEST_ARRAY (ID INT, NAME VARCHAR(50))"
         };
+
+        // Attempt 1: try CREATE directly
         for (const auto& sql : ddl) {
-            try { stmt.execute(sql); return true; } catch (...) { continue; }
+            try {
+                core::OdbcStatement stmt(conn_);
+                stmt.execute(sql);
+                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                  (SQLPOINTER)(intptr_t)old_ac, 0);
+                return true;
+            } catch (...) {
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+                continue;
+            }
+        }
+
+        // Attempt 2: table probably exists — DROP then re-CREATE
+        try {
+            core::OdbcStatement drop_stmt(conn_);
+            drop_stmt.execute("DROP TABLE ODBC_TEST_ARRAY");
+        } catch (...) {
+            SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+        }
+
+        for (const auto& sql : ddl) {
+            try {
+                core::OdbcStatement stmt(conn_);
+                stmt.execute(sql);
+                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                  (SQLPOINTER)(intptr_t)old_ac, 0);
+                return true;
+            } catch (...) {
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+                continue;
+            }
         }
 
         // Restore autocommit setting
@@ -54,7 +84,10 @@ void ArrayParamTests::drop_test_table() {
                           (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
         core::OdbcStatement stmt(conn_);
         stmt.execute("DROP TABLE ODBC_TEST_ARRAY");
-    } catch (...) {}
+    } catch (...) {
+        // Rollback to clean up connection state after failed DDL
+        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+    }
 }
 
 // ── run() ────────────────────────────────────────────────────────────────────

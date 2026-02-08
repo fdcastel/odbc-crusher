@@ -414,8 +414,34 @@ TestResult MetadataTests::test_foreign_keys() {
         bool callable = false;
         int fk_count = 0;
         
-        // Strategy 1: Try known FK tables (mock driver)
-        std::vector<std::string> fk_tables = {"ORDERS", "ORDER_ITEMS"};
+        // Discover actual user tables from the database
+        std::vector<std::string> user_tables;
+        try {
+            core::OdbcStatement tbl_stmt(conn_);
+            SQLRETURN tbl_ret = SQLTables(tbl_stmt.get_handle(),
+                nullptr, 0, nullptr, 0, nullptr, 0,
+                (SQLCHAR*)"TABLE", SQL_NTS);
+            if (SQL_SUCCEEDED(tbl_ret)) {
+                char name_buf[128] = {0};
+                SQLLEN ind = 0;
+                while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                       && user_tables.size() < 20) {
+                    if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3,
+                            SQL_C_CHAR, name_buf, sizeof(name_buf), &ind))
+                        && ind > 0) {
+                        user_tables.emplace_back(name_buf);
+                    }
+                }
+            }
+        } catch (...) {}
+        
+        // Build table list: discovered tables first, then well-known names
+        std::vector<std::string> fk_tables;
+        for (const auto& t : user_tables) fk_tables.push_back(t);
+        fk_tables.push_back("ORDERS");
+        fk_tables.push_back("ORDER_ITEMS");
+        
+        // Strategy 1: Try each table as FK table
         for (const auto& fk_tbl : fk_tables) {
             try {
                 stmt.recycle();

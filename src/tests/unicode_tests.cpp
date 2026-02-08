@@ -122,16 +122,27 @@ TestResult UnicodeTests::test_describecol_wchar_names() {
         // Execute a query to get a result set with known column names
         // Try multiple queries for cross-database compatibility
         std::vector<std::string> queries = {
-            "SELECT * FROM CUSTOMERS",
+            "SELECT 1 AS COL1, 'hello' AS COL2",
             "SELECT * FROM RDB$DATABASE",
-            "SELECT 1 AS COL1, 'hello' AS COL2"
+            "SELECT * FROM CUSTOMERS"
         };
         SQLRETURN ret = SQL_ERROR;
+        // Strategy 1: Try W-function (SQLExecDirectW)
         for (const auto& q : queries) {
             ret = SQLExecDirectW(stmt.get_handle(),
                 SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
             if (SQL_SUCCEEDED(ret)) break;
             SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+        }
+        // Strategy 2: Fall back to ANSI SQLExecDirect if W-function fails
+        // (some drivers export W-functions but have broken W→A conversion)
+        if (!SQL_SUCCEEDED(ret)) {
+            for (const auto& q : queries) {
+                ret = SQLExecDirect(stmt.get_handle(),
+                    (SQLCHAR*)q.c_str(), SQL_NTS);
+                if (SQL_SUCCEEDED(ret)) break;
+                SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+            }
         }
         
         if (!SQL_SUCCEEDED(ret)) {
@@ -210,14 +221,24 @@ TestResult UnicodeTests::test_getdata_sql_c_wchar() {
         std::vector<std::string> queries = {
             "SELECT CAST('Hello' AS VARCHAR(50))",
             "SELECT CAST('Hello' AS VARCHAR(50)) FROM RDB$DATABASE",
-            "SELECT * FROM CUSTOMERS"
+            "SELECT 'Hello'"
         };
         SQLRETURN ret = SQL_ERROR;
+        // Strategy 1: Try W-function (SQLExecDirectW)
         for (const auto& q : queries) {
             ret = SQLExecDirectW(stmt.get_handle(),
                 SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
             if (SQL_SUCCEEDED(ret)) break;
             SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+        }
+        // Strategy 2: Fall back to ANSI SQLExecDirect if W-function fails
+        if (!SQL_SUCCEEDED(ret)) {
+            for (const auto& q : queries) {
+                ret = SQLExecDirect(stmt.get_handle(),
+                    (SQLCHAR*)q.c_str(), SQL_NTS);
+                if (SQL_SUCCEEDED(ret)) break;
+                SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+            }
         }
         
         if (!SQL_SUCCEEDED(ret)) {
@@ -293,11 +314,12 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
         
         core::OdbcStatement stmt(conn_);
         
-        // Discover a user table from the database via SQLTables
+        // Discover a table from the database via SQLTables
         // then use that table name for SQLColumnsW
-        std::string table_name = "CUSTOMERS";  // default fallback
+        std::string table_name;
         {
             core::OdbcStatement tbl_stmt(conn_);
+            // Strategy 1: Look for user tables (type = 'TABLE')
             SQLRETURN tbl_ret = SQLTablesW(tbl_stmt.get_handle(),
                 nullptr, 0, nullptr, 0, nullptr, 0,
                 SqlWcharBuf("TABLE").ptr(), SQL_NTS);
@@ -311,6 +333,48 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
                     }
                 }
             }
+            // Strategy 2: Look for system tables if no user tables found
+            if (table_name.empty()) {
+                SQLFreeStmt(tbl_stmt.get_handle(), SQL_CLOSE);
+                tbl_ret = SQLTablesW(tbl_stmt.get_handle(),
+                    nullptr, 0, nullptr, 0, nullptr, 0,
+                    SqlWcharBuf("SYSTEM TABLE").ptr(), SQL_NTS);
+                if (SQL_SUCCEEDED(tbl_ret)) {
+                    if (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS) {
+                        char name_buf[128] = {0};
+                        SQLLEN ind = 0;
+                        if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR,
+                                                     name_buf, sizeof(name_buf), &ind))) {
+                            if (ind > 0) table_name = name_buf;
+                        }
+                    }
+                }
+            }
+            // Strategy 3: Look for any table type
+            if (table_name.empty()) {
+                SQLFreeStmt(tbl_stmt.get_handle(), SQL_CLOSE);
+                tbl_ret = SQLTablesW(tbl_stmt.get_handle(),
+                    nullptr, 0, nullptr, 0, nullptr, 0,
+                    nullptr, 0);
+                if (SQL_SUCCEEDED(tbl_ret)) {
+                    if (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS) {
+                        char name_buf[128] = {0};
+                        SQLLEN ind = 0;
+                        if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR,
+                                                     name_buf, sizeof(name_buf), &ind))) {
+                            if (ind > 0) table_name = name_buf;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (table_name.empty()) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "No tables found in catalog for SQLColumnsW test";
+            auto end_time = std::chrono::high_resolution_clock::now();
+            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+            return result;
         }
         
         // Call SQLColumnsW with the discovered table name

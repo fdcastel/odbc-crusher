@@ -20,41 +20,56 @@ std::vector<TestResult> TransactionTests::run() {
 bool TransactionTests::create_test_table() {
     try {
         // DDL must run with autocommit ON so it commits immediately.
-        // This avoids Firebird's "failed DDL invalidates transaction" problem.
         SQLUINTEGER old_ac = 0;
         SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
         SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                           (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
 
-        // Drop if exists (ignore errors) — use a separate statement
-        // so any error state doesn't affect the CREATE TABLE statement.
+        // Strategy: CREATE first.  If it fails with "table already exists",
+        // DROP + rollback + retry CREATE.  This avoids corrupting the
+        // connection-level transaction state on Firebird when DROP fails for
+        // a table that doesn't exist.
+        std::vector<std::string> create_queries = {
+            "CREATE TABLE ODBC_TEST_TXN (ID INTEGER, VAL VARCHAR(50))",
+            "CREATE TABLE ODBC_TEST_TXN (ID INT, VAL VARCHAR(50))"
+        };
+        
+        // Attempt 1: try CREATE directly
+        for (const auto& query : create_queries) {
+            try {
+                core::OdbcStatement create_stmt(conn_);
+                create_stmt.execute(query);
+                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                  (SQLPOINTER)(intptr_t)old_ac, 0);
+                return true;
+            } catch (const core::OdbcError&) {
+                // Rollback to clean up connection state after failed DDL
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+                continue;
+            }
+        }
+        
+        // Attempt 2: table probably exists — DROP then re-CREATE
         try {
             core::OdbcStatement drop_stmt(conn_);
             drop_stmt.execute("DROP TABLE ODBC_TEST_TXN");
         } catch (...) {
-            // Ignore - table may not exist
+            SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
         }
-        
-        // Create table - try different syntaxes with a fresh statement
-        std::vector<std::string> create_queries = {
-            "CREATE TABLE ODBC_TEST_TXN (ID INTEGER, VAL VARCHAR(50))",  // Standard
-            "CREATE TABLE ODBC_TEST_TXN (ID INT, VAL VARCHAR(50))"        // Alternative
-        };
         
         for (const auto& query : create_queries) {
             try {
                 core::OdbcStatement create_stmt(conn_);
                 create_stmt.execute(query);
-                // Restore previous autocommit setting
                 SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                                   (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
             } catch (const core::OdbcError&) {
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
                 continue;
             }
         }
         
-        // Restore previous autocommit setting
         SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                           (SQLPOINTER)(intptr_t)old_ac, 0);
         return false;
@@ -71,7 +86,8 @@ void TransactionTests::drop_test_table() {
         core::OdbcStatement stmt(conn_);
         stmt.execute("DROP TABLE ODBC_TEST_TXN");
     } catch (...) {
-        // Ignore cleanup errors
+        // Rollback to clean up connection state after failed DDL
+        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
     }
 }
 

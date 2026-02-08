@@ -474,20 +474,40 @@ TestResult DataTypeTests::test_unicode_types() {
                         success = true;
                         break;
                     }
-                    
-                    // Also try as regular char and verify it works
-                    char str_buffer[256];
-                    ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                   str_buffer, sizeof(str_buffer), &indicator);
-                    
-                    if (SQL_SUCCEEDED(ret)) {
-                        result.actual = "Successfully retrieved Unicode-compatible string";
-                        success = true;
-                        break;
-                    }
                 }
             } catch (const core::OdbcError&) {
                 continue;
+            }
+        }
+        
+        // If SQL_C_WCHAR failed on all queries, try retrieving as SQL_C_CHAR.
+        // Some drivers (e.g. Firebird ANSI with CHARSET=UTF8) don't support
+        // SQL_C_WCHAR retrieval via the ANSI entry point but the column data
+        // is still valid.  This is a genuine driver limitation, not a test bug.
+        if (!success) {
+            for (const auto& sql : test_queries) {
+                try {
+                    stmt.execute(sql);
+                    
+                    if (stmt.fetch()) {
+                        char str_buffer[256] = {0};
+                        SQLLEN indicator = 0;
+                        
+                        SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
+                                                    str_buffer, sizeof(str_buffer), &indicator);
+                        
+                        if (SQL_SUCCEEDED(ret) && indicator > 0 && indicator != SQL_NULL_DATA) {
+                            result.actual = std::string("SQL_C_WCHAR not supported; retrieved as SQL_C_CHAR: '")
+                                          + str_buffer + "'";
+                            result.suggestion = "Driver does not support SQL_C_WCHAR retrieval; "
+                                                "consider implementing wide character conversion in SQLGetData";
+                            success = true;
+                            break;
+                        }
+                    }
+                } catch (const core::OdbcError&) {
+                    continue;
+                }
             }
         }
         
