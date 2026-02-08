@@ -2,7 +2,7 @@
 
 **Version**: 2.3  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
-**Last Updated**: February 7, 2026
+**Last Updated**: February 8, 2026
 
 ---
 
@@ -467,7 +467,7 @@ After the mock driver rewrite, verify the consonant development rule:
 - [x] `odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;"` exits with code 0 (all tests pass) ✅
 - [x] Mock driver unit tests: 48/48 pass (100%) ✅
 - [x] odbc-crusher unit tests: 60/60 pass (100%) ✅
-- [ ] CI workflow passes on all platforms
+- [x] CI workflow passes on all platforms (Ubuntu ✅ Windows ✅ macOS ✅)
 
 #### 17.5 README Update
 
