@@ -6,6 +6,9 @@ on:
 jobs:
 
   # ── PostgreSQL on Linux ─────────────────────────────────────
+  # Driver: psqlodbc 16.00.0000 (Ubuntu 24.04 apt package)
+  # Source: https://github.com/postgresql-interfaces/psqlodbc
+  # Tag:    REL-16_00_0000
   postgresql:
     name: PostgreSQL (Linux)
     runs-on: ubuntu-latest
@@ -26,6 +29,7 @@ jobs:
     - name: Install PostgreSQL ODBC driver
       run: |
         sudo apt-get install -y -q odbc-postgresql
+        dpkg -s odbc-postgresql | grep Version
         cat /etc/odbcinst.ini
 
     - name: Download odbc-crusher
@@ -56,6 +60,9 @@ jobs:
           crusher-report.json
 
   # ── MariaDB on Linux ────────────────────────────────────────
+  # Driver: MariaDB Connector/ODBC 3.1.15 (Ubuntu 24.04 apt package)
+  # Source: https://github.com/mariadb-corporation/mariadb-connector-odbc
+  # Tag:    3.1.15
   mariadb:
     name: MariaDB (Linux)
     runs-on: ubuntu-latest
@@ -77,6 +84,7 @@ jobs:
     - name: Install MariaDB ODBC driver
       run: |
         sudo apt-get install -y -q odbc-mariadb
+        dpkg -s odbc-mariadb | grep Version
         cat /etc/odbcinst.ini
 
     - name: Download odbc-crusher
@@ -106,11 +114,15 @@ jobs:
           crusher-report.json
 
   # ── MySQL on Linux ──────────────────────────────────────────
+  # Driver: MySQL Connector/ODBC 9.2.0 (binary download)
+  # Source: https://github.com/mysql/mysql-connector-odbc
+  # Tag:    9.2.0
   mysql:
     name: MySQL (Linux)
     runs-on: ubuntu-latest
     env:
       ODBC_CONN: "Driver={MySQL};Server=127.0.0.1;Port=3306;User=crusher;Password=crusher;"
+      MYSQL_ODBC_VERSION: "9.2.0"
       MYSQL_ODBC_LIB_URL: https://dev.mysql.com/get/Downloads/Connector-ODBC/9.2/mysql-connector-odbc-9.2.0-linux-glibc2.28-x86-64bit.tar.gz
     steps:
     - name: Install unixODBC
@@ -132,7 +144,7 @@ jobs:
         tar xzf mysql-connector-odbc-*.tar.gz
         DRIVER_DIR=$(ls -d mysql-connector-odbc-*/lib/)
         DRIVER_PATH=$(readlink -f ${DRIVER_DIR}/libmyodbc9w.so)
-        echo "MySQL ODBC driver: ${DRIVER_PATH}"
+        echo "MySQL ODBC driver ${MYSQL_ODBC_VERSION}: ${DRIVER_PATH}"
         echo "[MySQL]" | sudo tee -a /etc/odbcinst.ini
         echo "Description = MySQL ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
         echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
@@ -167,82 +179,17 @@ jobs:
           crusher-report.txt
           crusher-report.json
 
-  # ── MSSQL on Linux ──────────────────────────────────────────
-  mssql:
-    name: MSSQL (Linux)
-    runs-on: ubuntu-latest
-    env:
-      ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "P@ssword2"
-      ODBC_CONN: "Driver={ODBC Driver 18 for SQL Server};Server=tcp:127.0.0.1,1433;UID=sa;PWD=P@ssword2;TrustServerCertificate=yes;"
-    steps:
-    - name: Install unixODBC
-      run: |
-        sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev
-
-    - name: Start MSSQL Server
-      env:
-        ACCEPT_EULA: "1"
-        MSSQL_SA_PASSWORD: "P@ssword2"
-        MSSQL_PID: Developer
-      run: |
-        curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
-        curl -sSL https://packages.microsoft.com/config/ubuntu/24.04/mssql-server-preview.list | sudo tee /etc/apt/sources.list.d/mssql-server-preview.list
-        sudo apt-get update -y -q
-        sudo apt-get install -y -q mssql-server
-        sudo -E /opt/mssql/bin/mssql-conf -n setup
-        systemctl status mssql-server
-
-    - name: Install MSSQL ODBC driver
-      run: |
-        curl -sSL -O https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
-        sudo dpkg -i packages-microsoft-prod.deb
-        sudo apt-get update -y -q
-        sudo apt-get install -y -q msodbcsql18
-        cat /etc/odbcinst.ini
-
-    - name: Wait for MSSQL to be ready
-      run: |
-        for i in $(seq 1 30); do
-          /opt/mssql-tools18/bin/sqlcmd -S 127.0.0.1,1433 -U sa -P "P@ssword2" -C -Q "SELECT 1" && break
-          echo "Waiting for MSSQL... ($i)"
-          sleep 2
-        done
-
-    - name: Download odbc-crusher
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
-        tar xzf odbc-crusher-linux-x64.tar.gz
-        chmod +x odbc-crusher
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      run: |
-        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      run: ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: report-mssql
-        path: |
-          crusher-report.txt
-          crusher-report.json
-
   # ── DuckDB on Linux ─────────────────────────────────────────
+  # Driver: DuckDB ODBC 1.4.4.0 (binary download)
+  # Source: https://github.com/duckdb/duckdb-odbc
+  # Tag:    v1.4.4.0
   duckdb:
     name: DuckDB (Linux)
     runs-on: ubuntu-latest
     env:
       ODBC_CONN: "Driver={DuckDB Driver};"
-      DUCKDB_ODBC_URL: https://github.com/duckdb/duckdb-odbc/releases/latest/download/duckdb_odbc-linux-amd64.zip
+      DUCKDB_ODBC_VERSION: "1.4.4.0"
+      DUCKDB_ODBC_URL: https://github.com/duckdb/duckdb-odbc/releases/download/v1.4.4.0/duckdb_odbc-linux-amd64.zip
     steps:
     - name: Install unixODBC
       run: |
@@ -256,7 +203,7 @@ jobs:
         curl --no-progress-meter -LO "${DUCKDB_ODBC_URL}"
         unzip -q duckdb_odbc-linux-amd64.zip
         DRIVER_PATH=$(readlink -f libduckdb_odbc.so)
-        echo "DuckDB ODBC driver: ${DRIVER_PATH}"
+        echo "DuckDB ODBC driver ${DUCKDB_ODBC_VERSION}: ${DRIVER_PATH}"
         cd ..
         echo "[DuckDB Driver]" | sudo tee -a /etc/odbcinst.ini
         echo "Description = DuckDB ODBC Driver" | sudo tee -a /etc/odbcinst.ini
@@ -292,175 +239,18 @@ jobs:
           crusher-report.txt
           crusher-report.json
 
-  # ── Oracle on Linux ─────────────────────────────────────────
-  oracle:
-    name: Oracle (Linux)
-    runs-on: ubuntu-latest
-    env:
-      ODBC_CONN: "Driver={Oracle};DBQ=//127.0.0.1:1521/XE;UID=system;PWD=tiger;"
-      ORACLE_ODBC_LIB_URL1: https://download.oracle.com/otn_software/linux/instantclient/2326000/instantclient-basiclite-linux.x64-23.26.0.0.0.zip
-      ORACLE_ODBC_LIB_URL2: https://download.oracle.com/otn_software/linux/instantclient/2326000/instantclient-odbc-linux.x64-23.26.0.0.0.zip
-      ORACLE_ODBC_LIB_PATH: instantclient_23_26/libsqora.so.23.1
-    steps:
-    - name: Install unixODBC
-      run: |
-        sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev libaio1t64
-
-    - name: Start Oracle (Docker)
-      run: |
-        docker run -id \
-          --name oracle \
-          -p 1521:1521 \
-          -e ORACLE_PWD=tiger \
-          container-registry.oracle.com/database/express
-
-    - name: Install Oracle ODBC driver
-      run: |
-        curl --no-progress-meter -LO "${ORACLE_ODBC_LIB_URL1}"
-        unzip instantclient-basiclite-linux.x64-23.26.0.0.0.zip
-        curl --no-progress-meter -LO "${ORACLE_ODBC_LIB_URL2}"
-        unzip -o instantclient-odbc-linux.x64-23.26.0.0.0.zip
-        # Fix libaio symlink for Oracle
-        pushd instantclient_23_26
-        ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64.0.2 libaio.so.1
-        popd
-        DRIVER_PATH=$(readlink -f "${ORACLE_ODBC_LIB_PATH}")
-        echo "Oracle ODBC driver: ${DRIVER_PATH}"
-        echo "[Oracle]" | sudo tee -a /etc/odbcinst.ini
-        echo "Description = Oracle ODBC Driver" | sudo tee -a /etc/odbcinst.ini
-        echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
-        cat /etc/odbcinst.ini
-
-    - name: Wait for Oracle to be ready
-      run: |
-        echo "Waiting for Oracle XE to start (this can take 2-5 minutes)..."
-        for i in $(seq 1 120); do
-          if docker exec oracle sqlplus -s system/tiger@//localhost:1521/XE <<< "SELECT 1 FROM DUAL; EXIT;" 2>/dev/null | grep -q "1"; then
-            echo "Oracle is ready!"
-            break
-          fi
-          echo "Waiting for Oracle... ($i)"
-          sleep 5
-        done
-
-    - name: Download odbc-crusher
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
-        tar xzf odbc-crusher-linux-x64.tar.gz
-        chmod +x odbc-crusher
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      run: |
-        export LD_LIBRARY_PATH=$(readlink -f instantclient_23_26):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      run: |
-        export LD_LIBRARY_PATH=$(readlink -f instantclient_23_26):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: report-oracle
-        path: |
-          crusher-report.txt
-          crusher-report.json
-
-  # ── DB2 on Linux ────────────────────────────────────────────
-  db2:
-    name: DB2 (Linux)
-    runs-on: ubuntu-latest
-    env:
-      ODBC_CONN: "Driver={DB2};HostName=127.0.0.1;Port=50000;Database=testdb;UID=db2inst1;PWD=testpwd;"
-      DB2_ODBC_LIB_URL: https://github.com/staticlibs/odbclibs_tmp/releases/download/tmp1/v12.1.2_linuxx64_odbc_cli.tar.gz
-    steps:
-    - name: Install unixODBC
-      run: |
-        sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev
-
-    - name: Start DB2 (Docker)
-      run: |
-        mkdir db2_data
-        docker run -id \
-          --privileged=true \
-          --name db2 \
-          -p 50000:50000 \
-          -e LICENSE=accept \
-          -e DB2INST1_PASSWORD=testpwd \
-          -e DBNAME=testdb \
-          -v $(pwd)/db2_data/:/database \
-          icr.io/db2_community/db2
-
-    - name: Install DB2 ODBC driver
-      run: |
-        curl --no-progress-meter -LO "${DB2_ODBC_LIB_URL}"
-        tar xzf v12.1.2_linuxx64_odbc_cli.tar.gz
-        DRIVER_PATH=$(readlink -f odbc_cli/clidriver/lib/libdb2o.so)
-        echo "DB2 ODBC driver: ${DRIVER_PATH}"
-        echo "[DB2]" | sudo tee -a /etc/odbcinst.ini
-        echo "Description = IBM DB2 ODBC Driver" | sudo tee -a /etc/odbcinst.ini
-        echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
-        cat /etc/odbcinst.ini
-
-    - name: Wait for DB2 to be ready
-      run: |
-        echo "Waiting for DB2 to start (this can take 3-8 minutes)..."
-        for i in $(seq 1 120); do
-          if docker exec db2 su - db2inst1 -c "db2 connect to testdb" 2>/dev/null | grep -qi "completed"; then
-            echo "DB2 is ready!"
-            break
-          fi
-          echo "Waiting for DB2... ($i)"
-          sleep 5
-        done
-        # Double check after a short delay (DB2 restarts the instance after init)
-        sleep 15
-        docker exec db2 su - db2inst1 -c "db2 connect to testdb" || true
-
-    - name: Download odbc-crusher
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
-        tar xzf odbc-crusher-linux-x64.tar.gz
-        chmod +x odbc-crusher
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      run: |
-        export LD_LIBRARY_PATH=$(readlink -f odbc_cli/clidriver/lib):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      run: |
-        export LD_LIBRARY_PATH=$(readlink -f odbc_cli/clidriver/lib):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: report-db2
-        path: |
-          crusher-report.txt
-          crusher-report.json
-
   # ── ClickHouse on Linux ─────────────────────────────────────
+  # Driver: ClickHouse ODBC 1.5.0.20251127 (binary download)
+  # Source: https://github.com/ClickHouse/clickhouse-odbc
+  # Tag:    v1.5.0.20251127
   clickhouse:
     name: ClickHouse (Linux)
     runs-on: ubuntu-latest
     env:
       ODBC_CONN: "Driver={ClickHouse};Server=127.0.0.1;Port=8123;"
-      CLICKHOUSE_ODBC_LIB_URL: https://github.com/ClickHouse/clickhouse-odbc/releases/download/1.4.3.20250807/clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
+      CLICKHOUSE_ODBC_VERSION: "1.5.0"
+      CLICKHOUSE_ODBC_TAG: "v1.5.0.20251127"
+      CLICKHOUSE_ODBC_LIB_URL: https://github.com/ClickHouse/clickhouse-odbc/releases/download/v1.5.0.20251127/clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
     steps:
     - name: Install unixODBC
       run: |
@@ -481,9 +271,9 @@ jobs:
       run: |
         curl --no-progress-meter -LO "${CLICKHOUSE_ODBC_LIB_URL}"
         unzip clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
-        tar xJf clickhouse-odbc-1.4.3-Linux.tar.xz
-        DRIVER_PATH=$(readlink -f clickhouse-odbc-1.4.3-Linux/lib/libclickhouseodbcw.so)
-        echo "ClickHouse ODBC driver: ${DRIVER_PATH}"
+        tar xJf clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux.tar.xz
+        DRIVER_PATH=$(readlink -f clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib/libclickhouseodbcw.so)
+        echo "ClickHouse ODBC driver ${CLICKHOUSE_ODBC_VERSION}: ${DRIVER_PATH}"
         echo "[ClickHouse]" | sudo tee -a /etc/odbcinst.ini
         echo "Description = ClickHouse ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
         echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
@@ -499,13 +289,13 @@ jobs:
 
     - name: Run odbc-crusher
       run: |
-        export LD_LIBRARY_PATH=$(readlink -f clickhouse-odbc-1.4.3-Linux/lib):$LD_LIBRARY_PATH
+        export LD_LIBRARY_PATH=$(readlink -f clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib):$LD_LIBRARY_PATH
         ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
       continue-on-error: true
 
     - name: Run odbc-crusher (JSON)
       run: |
-        export LD_LIBRARY_PATH=$(readlink -f clickhouse-odbc-1.4.3-Linux/lib):$LD_LIBRARY_PATH
+        export LD_LIBRARY_PATH=$(readlink -f clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib):$LD_LIBRARY_PATH
         ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
       continue-on-error: true
 
@@ -514,58 +304,6 @@ jobs:
       if: always()
       with:
         name: report-clickhouse
-        path: |
-          crusher-report.txt
-          crusher-report.json
-
-  # ── Firebird on Windows ─────────────────────────────────────
-  firebird:
-    name: Firebird (Windows)
-    runs-on: windows-latest
-    env:
-      ODBC_CONN: "Driver={Firebird ODBC Driver};Database=localhost:C:/tmp/test.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;"
-    steps:
-    - name: Install Firebird Server
-      shell: bash
-      run: |
-        choco install firebird --version 5.0.3.1 --no-progress
-        export ISQL_EXE="C:/Program Files/Firebird/Firebird_5_0/isql.exe"
-        echo "CREATE OR ALTER USER SYSDBA PASSWORD 'masterkey' USING PLUGIN Srp; EXIT;" | "${ISQL_EXE}" -b -user SYSDBA security.db
-        mkdir -p "C:/tmp"
-        echo "CREATE DATABASE 'localhost:C:/tmp/test.fdb' user 'SYSDBA' password 'masterkey'; EXIT;" | "${ISQL_EXE}" -b -q
-
-    - name: Install Firebird ODBC driver
-      shell: bash
-      run: |
-        choco install firebird-odbc --version 3.0.1.21 --pre --no-progress
-        # List registered ODBC drivers
-        powershell.exe -Command "Get-OdbcDriver | Format-Table Name, Platform"
-
-    - name: Download odbc-crusher
-      shell: bash
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-windows-x64.zip" --dir .
-        unzip odbc-crusher-windows-x64.zip
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      shell: bash
-      run: |
-        ./odbc-crusher.exe "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt || true
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      shell: bash
-      run: |
-        ./odbc-crusher.exe "${ODBC_CONN}" -o json -f crusher-report.json || true
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: report-firebird
         path: |
           crusher-report.txt
           crusher-report.json

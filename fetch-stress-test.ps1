@@ -5,67 +5,63 @@
 
 .DESCRIPTION
     - Identifies the last run of .github/workflows/stress-test.yml
-    - For each analyzed ODBC driver (excluding MSSQL and mock driver):
+    - For each analyzed ODBC driver (excluding mock driver):
       - Clones (or pulls) the official GitHub repository into ./tmp/external/<REPO_NAME>
+      - Checks out the exact tag matching the tested binary version
       - Downloads the workflow artifacts (crusher-report.txt / .json)
-      - Writes an LLM analysis prompt into ./tmp/external/<DRIVER>-ODBC-CRUSHER-PROMPT.md
+      - Writes an LLM analysis prompt into ./recommendations/prompts/<DRIVER>-ODBC-CRUSHER-PROMPT.md
 
     The script is idempotent: safe to run multiple times.
     Must be run from the project root directory.
+
+.NOTES
+    Binary versions tested in CI must match exactly the source tags checked out here.
+    See .github/workflows/stress-test.yml for the pinned versions.
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Configuration ──────────────────────────────────────────────
-# Each entry maps a workflow job / artifact name to its official GitHub repo.
+# Each entry maps a workflow job / artifact name to its official GitHub repo
+# and the exact tag matching the binary version tested in CI.
 $Drivers = [ordered]@{
     postgresql = @{
         RepoUrl  = 'https://github.com/postgresql-interfaces/psqlodbc.git'
         RepoName = 'psqlodbc'
+        Tag      = 'REL-16_00_0000'       # Ubuntu 24.04 apt: odbc-postgresql 16.00.0000
         Artifact = 'report-postgresql'
     }
     mariadb = @{
         RepoUrl  = 'https://github.com/mariadb-corporation/mariadb-connector-odbc.git'
         RepoName = 'mariadb-connector-odbc'
+        Tag      = '3.1.15'               # Ubuntu 24.04 apt: odbc-mariadb 3.1.15
         Artifact = 'report-mariadb'
     }
     mysql = @{
         RepoUrl  = 'https://github.com/mysql/mysql-connector-odbc.git'
         RepoName = 'mysql-connector-odbc'
+        Tag      = '9.2.0'                # Binary download: 9.2.0
         Artifact = 'report-mysql'
     }
     duckdb = @{
         RepoUrl  = 'https://github.com/duckdb/duckdb-odbc.git'
         RepoName = 'duckdb-odbc'
+        Tag      = 'v1.4.4.0'             # Binary download: 1.4.4.0
         Artifact = 'report-duckdb'
-    }
-    oracle = @{
-        # Oracle Instant Client ODBC is closed-source; link to docs instead
-        RepoUrl  = 'https://github.com/oracle/odpi.git'
-        RepoName = 'odpi'
-        Artifact = 'report-oracle'
-    }
-    db2 = @{
-        # IBM DB2 CLI/ODBC is closed-source; link to community samples
-        RepoUrl  = 'https://github.com/ibmdb/db2drivers.git'
-        RepoName = 'db2drivers'
-        Artifact = 'report-db2'
     }
     clickhouse = @{
         RepoUrl  = 'https://github.com/ClickHouse/clickhouse-odbc.git'
         RepoName = 'clickhouse-odbc'
+        Tag      = 'v1.5.0.20251127'      # Binary download: 1.5.0.20251127
         Artifact = 'report-clickhouse'
-    }
-    firebird = @{
-        RepoUrl  = 'https://github.com/FirebirdSQL/firebird-odbc-driver.git'
-        RepoName = 'firebird-odbc-driver'
-        Artifact = 'report-firebird'
     }
 }
 
 $ProjectRoot   = $PSScriptRoot
 $ExternalDir   = Join-Path $ProjectRoot 'tmp' 'external'
+$RecommDir     = Join-Path $ProjectRoot 'recommendations'
+$PromptsDir    = Join-Path $RecommDir   'prompts'
 $WorkflowFile  = '.github/workflows/stress-test.yml'
 
 # ── Helpers ────────────────────────────────────────────────────
@@ -95,34 +91,25 @@ function Get-LastWorkflowRunId {
     return $run.databaseId
 }
 
-function Clone-OrPull([string]$RepoUrl, [string]$DestPath) {
+function Clone-OrFetch([string]$RepoUrl, [string]$DestPath) {
     if (Test-Path (Join-Path $DestPath '.git')) {
-        Write-Host "  Repository exists – fetching and pulling latest..."
-        # Fetch all remotes first
-        git -C $DestPath fetch --all 2>&1 | ForEach-Object { Write-Host "    $_" }
-        # Determine default branch (main or master)
-        $defaultBranch = git -C $DestPath symbolic-ref refs/remotes/origin/HEAD 2>$null
-        if ($defaultBranch) {
-            $defaultBranch = $defaultBranch -replace '^refs/remotes/origin/', ''
-        } else {
-            # Fallback: try common branch names
-            $branches = git -C $DestPath branch -r 2>$null
-            if ($branches -match 'origin/main') { $defaultBranch = 'main' }
-            elseif ($branches -match 'origin/master') { $defaultBranch = 'master' }
-            else { $defaultBranch = 'main' }
-        }
-        Write-Host "    Default branch: $defaultBranch"
-        # Checkout default branch (in case of detached HEAD) and pull
-        git -C $DestPath checkout $defaultBranch 2>&1 | ForEach-Object { Write-Host "    $_" }
-        git -C $DestPath pull --ff-only 2>&1 | ForEach-Object { Write-Host "    $_" }
+        Write-Host "  Repository exists – fetching..."
+        git -C $DestPath fetch --all --tags 2>&1 | ForEach-Object { Write-Host "    $_" }
     } else {
         Write-Host "  Cloning $RepoUrl ..."
         Ensure-Directory $DestPath
-        # Clone into existing (possibly empty) directory
         git clone $RepoUrl $DestPath 2>&1 | ForEach-Object { Write-Host "    $_" }
     }
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Git operation returned exit code $LASTEXITCODE for $RepoUrl"
+    }
+}
+
+function Checkout-Tag([string]$DestPath, [string]$Tag) {
+    Write-Host "  Checking out tag: $Tag"
+    git -C $DestPath checkout $Tag 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to checkout tag '$Tag' (exit code $LASTEXITCODE)"
     }
 }
 
@@ -143,7 +130,7 @@ function Download-Artifact([string]$RunId, [string]$ArtifactName, [string]$DestD
     }
 }
 
-function Write-AnalysisPrompt([string]$DriverName, [string]$RepoName, [string]$PromptPath) {
+function Write-AnalysisPrompt([string]$DriverName, [string]$RepoName, [string]$Tag, [string]$PromptPath) {
     $repoRelPath   = "tmp/external/$RepoName"
     $reportTxt     = "$repoRelPath/crusher-report.txt"
     $reportJson    = "$repoRelPath/crusher-report.json"
@@ -151,25 +138,25 @@ function Write-AnalysisPrompt([string]$DriverName, [string]$RepoName, [string]$P
     $prompt = @"
 # ODBC Crusher Analysis Prompt – $DriverName
 
-The source code for the ``$DriverName`` ODBC driver is at ``$repoRelPath``.
-
-The odbc-crusher reports for the ``$DriverName`` driver are at:
+**Driver version**: ``$Tag``
+**Source code**: ``$repoRelPath`` (checked out at tag ``$Tag``)
+**Reports**:
 - ``$reportTxt``
 - ``$reportJson``
 
 ## Instructions
 
-Do a critical analysis of what ``odbc-crusher`` says about the driver and review its source code to see what the driver actually implements.
+Do a critical analysis of what ``odbc-crusher`` says about the ``$DriverName`` driver and review its source code (at exactly this version) to see what the driver actually implements.
 
 ### GOAL
 
 For each **failed** or **skipped** test, investigate its result against the real ``$DriverName`` sources:
 
 1. **If the odbc-crusher report is CORRECT** (the driver really has the deficiency):
-   Write a recommendation in ``${DriverName}_ODBC_RECOMMENDATIONS.md`` explaining what the ``$DriverName`` developers should do to fix it.
+   Write a recommendation in ``recommendations/${DriverName}_ODBC_RECOMMENDATIONS.md`` explaining what the ``$DriverName`` developers should do to fix it.
 
 2. **If the odbc-crusher report is WRONG** (the driver is fine, odbc-crusher misjudged it):
-   Record it as a bug in ``PROJECT_PLAN.md`` for future fix (aggregate all these bugs in a new **Phase 20**).
+   Record it as a bug in ``PROJECT_PLAN.md`` for future fix.
 "@
 
     Set-Content -Path $PromptPath -Value $prompt -Encoding UTF8 -Force
@@ -182,8 +169,9 @@ Write-Host "`n╔═════════════════════
 Write-Host   "║   fetch-stress-test.ps1 – ODBC Crusher       ║" -ForegroundColor Green
 Write-Host   "╚══════════════════════════════════════════════╝`n" -ForegroundColor Green
 
-# Ensure tmp/external exists
+# Ensure output directories exist
 Ensure-Directory $ExternalDir
+Ensure-Directory $PromptsDir
 
 # Step 1 – Find the last workflow run
 $runId = Get-LastWorkflowRunId
@@ -195,15 +183,21 @@ foreach ($driverName in $Drivers.Keys) {
 
     Write-Host "`n--- $($driverName.ToUpper()) ---" -ForegroundColor Yellow
 
-    # 2a – Clone or pull the driver source
-    Clone-OrPull -RepoUrl $info.RepoUrl -DestPath $repoDir
+    # 2a – Clone or fetch the driver source
+    Clone-OrFetch -RepoUrl $info.RepoUrl -DestPath $repoDir
 
-    # 2b – Download artifacts into the repo directory
+    # 2b – Checkout the exact tag matching the tested binary
+    Checkout-Tag -DestPath $repoDir -Tag $info.Tag
+
+    # 2c – Download artifacts into the repo directory
     Download-Artifact -RunId $runId -ArtifactName $info.Artifact -DestDir $repoDir
 
-    # 2c – Write analysis prompt
-    $promptFile = Join-Path $ExternalDir "$driverName-ODBC-CRUSHER-PROMPT.md"
-    Write-AnalysisPrompt -DriverName $driverName -RepoName $info.RepoName -PromptPath $promptFile
+    # 2d – Write analysis prompt
+    $promptFile = Join-Path $PromptsDir "$driverName-ODBC-CRUSHER-PROMPT.md"
+    Write-AnalysisPrompt -DriverName $driverName -RepoName $info.RepoName -Tag $info.Tag -PromptPath $promptFile
 }
 
-Write-Host "`n✅ Done. All driver repositories and reports are in: $ExternalDir`n" -ForegroundColor Green
+Write-Host "`n✅ Done." -ForegroundColor Green
+Write-Host "   Driver sources : $ExternalDir" -ForegroundColor Green
+Write-Host "   Prompts        : $PromptsDir" -ForegroundColor Green
+Write-Host "   Recommendations: $RecommDir`n" -ForegroundColor Green
