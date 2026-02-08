@@ -341,7 +341,6 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
         auto start_time = std::chrono::high_resolution_clock::now();
         
         core::OdbcStatement stmt(conn_);
-        constexpr SQLULEN ARRAY_SIZE = 3;
         
         // Define row structure
         struct ParamRow {
@@ -374,71 +373,201 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
             return result;
         }
         
-        // Set paramset size
-        ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
-            reinterpret_cast<SQLPOINTER>(ARRAY_SIZE), 0);
-        if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "Driver does not support SQL_ATTR_PARAMSET_SIZE > 1";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+        // ── Safety probe ──
+        // Some drivers (e.g. DuckDB) accept SQL_ATTR_PARAM_BIND_TYPE but
+        // do not implement row-wise pointer arithmetic correctly.  Using
+        // PARAMSET_SIZE > 1 with such a driver causes the driver to read
+        // data from wrong offsets, corrupting memory and crashing the
+        // process with a __fastfail (uncatchable by SEH).
+        //
+        // Strategy: first execute with PARAMSET_SIZE=1 (safe — offset 0
+        // is always correct) using only a single integer parameter.
+        // Then verify the inserted value.  If the single-row probe passes,
+        // try PARAMSET_SIZE=2 with integer-only parameters (no strings,
+        // since string offset errors cause buffer overruns).  Finally,
+        // verify both rows.
+        
+        // Probe step 1: Single-row execute with row-wise binding
+        {
+            core::OdbcStatement probe_stmt(conn_);
+            SQLPrepareW(probe_stmt.get_handle(),
+                SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
+            SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(sizeof(ParamRow))), 0);
+            SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+            
+            ParamRow single = {9990, 0, "", 0};
+            SQLBindParameter(probe_stmt.get_handle(), 1,
+                SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER,
+                0, 0, &single.id, 0, &single.id_ind);
+            
+            SQLRETURN probe_ret = SQLExecute(probe_stmt.get_handle());
+            
+            // Reset immediately
+            SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+            SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
+                reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
+            
+            if (!SQL_SUCCEEDED(probe_ret)) {
+                result.status = TestStatus::FAIL;
+                result.actual = "Row-wise binding with PARAMSET_SIZE=1 failed (ret="
+                    + std::to_string(probe_ret) + ")";
+                result.suggestion = "Even with PARAMSET_SIZE=1, row-wise binding "
+                    "should work identically to column-wise";
+                auto end_time = std::chrono::high_resolution_clock::now();
+                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_time - start_time);
+                return result;
+            }
         }
         
-        // Populate row array
-        ParamRow rows[ARRAY_SIZE];
-        rows[0] = {400, 0, "Dave", SQL_NTS};
-        rows[1] = {500, 0, "Eve", SQL_NTS};
-        rows[2] = {600, 0, "Frank", SQL_NTS};
-        
-        // Bind parameter 1 (ID) from first element of struct array
-        ret = SQLBindParameter(stmt.get_handle(), 1,
-            SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER,
-            0, 0, &rows[0].id, 0, &rows[0].id_ind);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not bind row-wise integer parameter";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+        // Probe step 2: Two-row execute with integer-only (no strings)
+        // to verify the driver correctly offsets by struct size.
+        {
+            core::OdbcStatement probe_stmt(conn_);
+            SQLPrepareW(probe_stmt.get_handle(),
+                SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
+            SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(sizeof(ParamRow))), 0);
+            SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(2)), 0);
+            
+            ParamRow two_rows[2] = {{9991, 0, "", 0}, {9992, 0, "", 0}};
+            SQLBindParameter(probe_stmt.get_handle(), 1,
+                SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER,
+                0, 0, &two_rows[0].id, 0, &two_rows[0].id_ind);
+            
+            SQLRETURN probe_ret = SQLExecute(probe_stmt.get_handle());
+            
+            // Reset immediately
+            SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+            SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
+                reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
+            
+            if (!SQL_SUCCEEDED(probe_ret)) {
+                result.status = TestStatus::FAIL;
+                result.actual = "Row-wise binding with PARAMSET_SIZE=2 (integer-only) failed";
+                result.suggestion = "Row-wise binding should offset each row by "
+                    "SQL_ATTR_PARAM_BIND_TYPE bytes. The driver may ignore the bind type.";
+                auto end_time = std::chrono::high_resolution_clock::now();
+                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_time - start_time);
+                return result;
+            }
+            
+            // Verify: the driver should have inserted 9991 and 9992.
+            // If it inserted 9991 twice, row-wise arithmetic is broken.
+            core::OdbcStatement verify(conn_);
+            verify.execute("SELECT ID FROM ODBC_TEST_ARRAY WHERE ID IN (9991, 9992) ORDER BY ID");
+            
+            std::vector<SQLINTEGER> ids;
+            SQLINTEGER id_buf = 0;
+            SQLLEN id_ind = 0;
+            SQLBindCol(verify.get_handle(), 1, SQL_C_SLONG, &id_buf, 0, &id_ind);
+            while (SQL_SUCCEEDED(SQLFetch(verify.get_handle()))) {
+                ids.push_back(id_buf);
+            }
+            
+            if (ids.size() != 2 || ids[0] != 9991 || ids[1] != 9992) {
+                result.status = TestStatus::FAIL;
+                std::ostringstream actual;
+                actual << "Row-wise binding inserts wrong data: got {";
+                for (size_t i = 0; i < ids.size(); ++i) {
+                    if (i > 0) actual << ", ";
+                    actual << ids[i];
+                }
+                actual << "} instead of {9991, 9992}. Driver stores "
+                       "SQL_ATTR_PARAM_BIND_TYPE but does not use it for "
+                       "pointer arithmetic.";
+                result.actual = actual.str();
+                result.suggestion = "The driver's parameter value reader must offset "
+                    "by SQL_ATTR_PARAM_BIND_TYPE bytes per row, not by column size. "
+                    "Executing with string parameters in this state would cause "
+                    "memory corruption and a process crash.";
+                auto end_time = std::chrono::high_resolution_clock::now();
+                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_time - start_time);
+                return result;
+            }
         }
         
-        // Bind parameter 2 (NAME) from first element of struct array
-        ret = SQLBindParameter(stmt.get_handle(), 2,
-            SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR,
-            50, 0, rows[0].name, sizeof(rows[0].name), &rows[0].name_ind);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not bind row-wise string parameter";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+        // Full test: now that we've verified integer row-wise works, test
+        // with both integer and string parameters (PARAMSET_SIZE=3).
+        {
+            constexpr SQLULEN ARRAY_SIZE_FULL = 3;
+            
+            // Set paramset size
+            ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(ARRAY_SIZE_FULL), 0);
+            if (!SQL_SUCCEEDED(ret)) {
+                result.status = TestStatus::SKIP_UNSUPPORTED;
+                result.actual = "Driver does not support SQL_ATTR_PARAMSET_SIZE > 1";
+                auto end_time = std::chrono::high_resolution_clock::now();
+                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_time - start_time);
+                return result;
+            }
+            
+            // Populate row array
+            ParamRow rows[ARRAY_SIZE_FULL];
+            rows[0] = {400, 0, "Dave", SQL_NTS};
+            rows[1] = {500, 0, "Eve", SQL_NTS};
+            rows[2] = {600, 0, "Frank", SQL_NTS};
+            
+            // Bind parameter 1 (ID)
+            ret = SQLBindParameter(stmt.get_handle(), 1,
+                SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER,
+                0, 0, &rows[0].id, 0, &rows[0].id_ind);
+            
+            if (!SQL_SUCCEEDED(ret)) {
+                result.status = TestStatus::SKIP_INCONCLUSIVE;
+                result.actual = "Could not bind row-wise integer parameter";
+                auto end_time = std::chrono::high_resolution_clock::now();
+                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_time - start_time);
+                return result;
+            }
+            
+            // Bind parameter 2 (NAME)
+            ret = SQLBindParameter(stmt.get_handle(), 2,
+                SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR,
+                50, 0, rows[0].name, sizeof(rows[0].name), &rows[0].name_ind);
+            
+            if (!SQL_SUCCEEDED(ret)) {
+                result.status = TestStatus::SKIP_INCONCLUSIVE;
+                result.actual = "Could not bind row-wise string parameter";
+                auto end_time = std::chrono::high_resolution_clock::now();
+                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_time - start_time);
+                return result;
+            }
+            
+            // Execute with array parameters
+            SQLRETURN exec_ret = SQLExecute(stmt.get_handle());
+            
+            std::ostringstream actual;
+            if (SQL_SUCCEEDED(exec_ret)) {
+                actual << "Row-wise array execution with PARAMSET_SIZE="
+                       << ARRAY_SIZE_FULL << " succeeded (ret=" << exec_ret << ")";
+            } else {
+                actual << "Row-wise array execution returned " << exec_ret;
+                result.status = TestStatus::FAIL;
+                result.suggestion = "Driver should support row-wise parameter binding via "
+                                   "SQL_ATTR_PARAM_BIND_TYPE = sizeof(struct). The driver "
+                                   "calculates each row's address as: "
+                                   "base + row_number * struct_size.";
+            }
+            result.actual = actual.str();
+            
+            // Reset
+            SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+            SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
+                reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
         }
-        
-        // Execute with array parameters
-        SQLRETURN exec_ret = SQLExecute(stmt.get_handle());
-        
-        std::ostringstream actual;
-        if (SQL_SUCCEEDED(exec_ret)) {
-            actual << "Row-wise array execution with PARAMSET_SIZE=" << ARRAY_SIZE 
-                   << " succeeded (ret=" << exec_ret << ")";
-        } else {
-            actual << "Row-wise array execution returned " << exec_ret;
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Driver should support row-wise parameter binding via "
-                               "SQL_ATTR_PARAM_BIND_TYPE = sizeof(struct). The driver "
-                               "calculates each row's address as: "
-                               "base + row_number * struct_size.";
-        }
-        result.actual = actual.str();
-        
-        // Reset
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
-            reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
-            reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
         
         auto end_time = std::chrono::high_resolution_clock::now();
         result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);

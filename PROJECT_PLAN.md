@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.9  
+**Version**: 2.10  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 8, 2026
 
@@ -946,6 +946,67 @@ All 125 passed tests were verified as correct by reviewing the driver source cod
 - [x] B22-02: `datatype_tests.cpp`: `test_binary_types()` adds `SELECT decode('48656C6C6F', 'hex')::bytea` (PostgreSQL native `bytea` syntax)
 - [x] B22-03: `unicode_tests.cpp`: `test_columns_unicode_patterns()` discovery lambda now iterates through `SQLTables` results and skips `information_schema` tables (synthetic views whose columns are not enumerable via `SQLColumns`)
 - [x] B22-04: `catalog_depth_tests.cpp`: `test_tables_search_patterns()` passes `SqlWcharBuf("").ptr()` with length 0 (empty strings) instead of `nullptr` for catalog/schema/table, per ODBC spec's `SQL_ALL_TABLE_TYPES` enumeration mode
+- [x] Mock driver: 131/131 (100%) — unchanged
+- [x] Unit tests: 60/60 (100%) — pass on all platforms
+
+---
+
+### Phase 23: Real-Driver Validation Bugs — Round 6 (DuckDB Analysis) ✅
+
+**Goal**: Fix crash-severity bugs in odbc-crusher discovered by running against the DuckDB ODBC driver (v03.51.0000 / ODBC 3.51) and produce a detailed recommendations document for DuckDB ODBC driver developers.
+
+**Discovery Date**: February 8, 2026
+**Analysis Method**: Ran odbc-crusher against DuckDB ODBC driver on Windows. The tool crashed with uncatchable `__fastfail` / access violation exit codes. Analyzed the DuckDB ODBC driver source code (`tmp/duckdb-odbc/src/`) to identify root causes and implemented crash-avoidance strategies.
+
+**Summary**: 131 tests, 113 passed (86.3%), 9 failed, 8 skipped, 1 error. Two crash-severity bugs in the DuckDB ODBC driver were identified that terminate the host process with no possibility of recovery via SEH or signal handlers. Both were worked around in odbc-crusher.
+
+#### 23.1 Crash Fix: SQLDescribeParam on unresolved parameters (1 test)
+
+**Root Cause**: `test_describe_param` and `test_num_params` used `"SELECT ?"` as the first query variant. DuckDB's `SQLPrepare` on `"SELECT ?"` returns `SQL_SUCCESS_WITH_INFO` (parameters not fully bound), but `SQLDescribeParam` then accesses `hstmt->stmt->data->GetType()` on an empty `types` vector → access violation (`0xC0000005`).
+
+| Bug ID | Test | File | Fix |
+|--------|------|------|-----|
+| B23-01 | `test_describe_param` | `statement_tests.cpp` | Try `"SELECT CAST(? AS INTEGER)"` before `"SELECT ?"` so DuckDB can resolve the parameter type from the explicit cast |
+| B23-02 | `test_num_params` | `statement_tests.cpp` | Same — prefer `CAST(? AS INTEGER)` pattern |
+| B23-03 | `test_parameter_binding` | `statement_tests.cpp` | Same — prefer `CAST(? AS INTEGER)` pattern |
+
+#### 23.2 Crash Fix: Row-wise array binding corrupts memory (1 test)
+
+**Root Cause**: DuckDB's `ParameterDescriptor::SetValue()` stores `SQL_ATTR_PARAM_BIND_TYPE` in `apd->header.sql_desc_bind_type` but **never uses it** for pointer arithmetic. For integers, it always reads from the base pointer (no offset). For strings, it uses `val_idx * column_size` instead of `val_idx * struct_size`. With row-wise binding (`PARAMSET_SIZE > 1`), this causes out-of-bounds memory reads → Windows `/GS` stack cookie detection → `__fastfail(STATUS_STACK_BUFFER_OVERRUN)` (`0xC0000409`), which is **uncatchable** by SEH, VEH, or signal handlers.
+
+| Bug ID | Test | File | Fix |
+|--------|------|------|-----|
+| B23-04 | `test_row_wise_array_binding` | `array_param_tests.cpp` | Added safety probe: first execute with `PARAMSET_SIZE=1` (safe, offset=0), then `PARAMSET_SIZE=2` with integer-only parameters to detect wrong arithmetic without crashing. If probe detects wrong data (`{9991, 9991}` instead of `{9991, 9992}`), report as FAIL with detailed explanation instead of proceeding to string parameters that would crash the process |
+
+#### 23.3 File corruption fix
+
+| Bug ID | Test | File | Fix |
+|--------|------|------|-----|
+| B23-05 | `test_param_status_array` | `array_param_tests.cpp` | Previous edit accidentally consumed the function header for `test_param_status_array()` during the `test_row_wise_array_binding()` rewrite. Restored the missing function header and `make_result` initialization block |
+
+#### 23.4 DuckDB ODBC Driver Recommendations
+
+A comprehensive recommendations document was written to `tmp/DUCKDB_ODBC_RECOMMENDATIONS.md` covering:
+- 2 crash-severity bugs (SQLDescribeParam + row-wise binding)
+- 8 non-crash spec violations (SQLGetInfo, SQLSetConnectAttr, SQLCloseCursor, SQLGetDiagField, SQLGetData, SQLEndTran, SQL_ATTR_PARAM_OPERATION_PTR, buffer length handling)
+- Prioritized fix recommendations with exact source file locations and code fixes
+
+#### 23.5 Lessons Learned
+
+25. **Row-wise array binding must be probed before execution.** Some drivers (DuckDB) accept `SQL_ATTR_PARAM_BIND_TYPE` via `SQLSetStmtAttr` and even store the value correctly in the APD, but never use it for pointer arithmetic. The only safe way to detect this is a trial execution with integer-only parameters at `PARAMSET_SIZE=2` — verifying the second row's data matches expectations before attempting string parameters that would cause memory corruption.
+
+26. **Windows `/GS` stack cookie failures are uncatchable.** When a buggy driver corrupts the stack (e.g., reading past buffer bounds during row-wise binding), MSVC's `/GS` security mitigation calls `__fastfail()` which raises `STATUS_STACK_BUFFER_OVERRUN` (`0xC0000409`). This exception bypasses all user-mode exception handling — SEH `__try/__except`, VEH (`AddVectoredExceptionHandler`), `SetUnhandledExceptionFilter`, and C++ `catch(...)` all fail to catch it. The only defense is to avoid triggering the corruption in the first place.
+
+27. **`SQLSetStmtAttr` default cases that return SQL_SUCCESS are dangerous.** DuckDB's `SQLSetStmtAttr` returns `SQL_SUCCESS_WITH_INFO` (with `01S02`) for ALL unrecognized attributes. This means odbc-crusher cannot distinguish "attribute accepted and implemented" from "attribute silently ignored." Read-back verification via `SQLGetStmtAttr` is insufficient because DuckDB may store the value without implementing the behavior. The ODBC spec requires `SQL_ERROR` with `HY092` for unrecognized attributes.
+
+28. **Prefer `CAST(? AS type)` over bare `?` in parameter queries.** Some drivers (DuckDB) cannot infer parameter types from bare `SELECT ?` and may crash on subsequent `SQLDescribeParam` calls. `SELECT CAST(? AS INTEGER)` is more portable and gives the driver explicit type information.
+
+**Deliverables**:
+- [x] B23-01/02/03: `statement_tests.cpp`: Query fallback chains prefer `CAST(? AS INTEGER)` over bare `SELECT ?`
+- [x] B23-04: `array_param_tests.cpp`: `test_row_wise_array_binding()` uses integer-only safety probe before string parameters
+- [x] B23-05: `array_param_tests.cpp`: Restored missing `test_param_status_array()` function header
+- [x] `tmp/DUCKDB_ODBC_RECOMMENDATIONS.md`: Comprehensive driver analysis with root cause and fix for each issue
+- [x] DuckDB: 113/131 passed (86.3%), 9 failed, 8 skipped, 1 error — **0 crashes**
 - [x] Mock driver: 131/131 (100%) — unchanged
 - [x] Unit tests: 60/60 (100%) — pass on all platforms
 

@@ -54,6 +54,7 @@ struct ParsedQuery {
 
     // For INSERT: parsed values
     std::vector<CellValue> insert_values;
+    std::vector<bool> insert_param_markers;  // true for each insert_value that was a '?' marker
     std::vector<std::string> insert_columns;
 
     // Parameter count

@@ -302,14 +302,19 @@ ParsedQuery::LiteralExpr parse_literal_expression(const std::string& expr_str) {
 }
 
 // Parse INSERT VALUES clause
-std::vector<CellValue> parse_insert_values(const std::string& values_str) {
-    std::vector<CellValue> result;
+struct InsertValuesResult {
+    std::vector<CellValue> values;
+    std::vector<bool> param_markers;  // parallel: true when the value was '?'
+};
+
+InsertValuesResult parse_insert_values(const std::string& values_str) {
+    InsertValuesResult result;
     auto exprs = split_expressions(values_str);
     for (const auto& expr : exprs) {
         std::string trimmed = trim(expr);
         std::string upper = to_upper(trimmed);
-        if (upper == "NULL") { result.push_back(std::monostate{}); }
-        else if (trimmed == "?") { result.push_back(std::monostate{}); }
+        if (upper == "NULL") { result.values.push_back(std::monostate{}); result.param_markers.push_back(false); }
+        else if (trimmed == "?") { result.values.push_back(std::monostate{}); result.param_markers.push_back(true); }
         else if (trimmed.front() == '\'' && trimmed.back() == '\'') {
             std::string val = trimmed.substr(1, trimmed.length() - 2);
             std::string unescaped;
@@ -317,12 +322,12 @@ std::vector<CellValue> parse_insert_values(const std::string& values_str) {
                 if (val[i] == '\'' && i + 1 < val.length() && val[i + 1] == '\'') { unescaped += '\''; ++i; }
                 else { unescaped += val[i]; }
             }
-            result.push_back(unescaped);
+            result.values.push_back(unescaped); result.param_markers.push_back(false);
         } else {
             try {
-                if (trimmed.find('.') != std::string::npos) result.push_back(std::stod(trimmed));
-                else result.push_back(static_cast<long long>(std::stoll(trimmed)));
-            } catch (...) { result.push_back(trimmed); }
+                if (trimmed.find('.') != std::string::npos) { result.values.push_back(std::stod(trimmed)); result.param_markers.push_back(false); }
+                else { result.values.push_back(static_cast<long long>(std::stoll(trimmed))); result.param_markers.push_back(false); }
+            } catch (...) { result.values.push_back(trimmed); result.param_markers.push_back(false); }
         }
     }
     return result;
@@ -635,7 +640,9 @@ ParsedQuery parse_sql(const std::string& sql) {
                 auto val_open = trimmed.find('(', values_pos);
                 auto val_close = trimmed.rfind(')');
                 if (val_open != std::string::npos && val_close != std::string::npos && val_close > val_open) {
-                    result.insert_values = parse_insert_values(trimmed.substr(val_open + 1, val_close - val_open - 1));
+                    auto ivr = parse_insert_values(trimmed.substr(val_open + 1, val_close - val_open - 1));
+                    result.insert_values = std::move(ivr.values);
+                    result.insert_param_markers = std::move(ivr.param_markers);
                 }
             }
             
@@ -821,6 +828,143 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             } else {
                 result.data = generate_mock_data(*table, result_set_size);
             }
+            
+            // ── Basic WHERE filtering ──
+            // Supports: "column IN (v1, v2, ...)" and "column = value"
+            if (!query.where_clause.empty() && !result.data.empty()) {
+                std::string wc = trim(query.where_clause);
+                std::string wcu = to_upper(wc);
+                
+                // Find the target column index
+                auto in_pos = wcu.find(" IN ");
+                auto eq_pos = wcu.find(" = ");
+                auto eq2_pos = wcu.find("=");
+                
+                std::string filter_col;
+                std::vector<CellValue> filter_values;
+                
+                if (in_pos != std::string::npos) {
+                    // "COLUMN IN (v1, v2, ...)"
+                    filter_col = to_upper(trim(wc.substr(0, in_pos)));
+                    auto paren_open = wc.find('(', in_pos);
+                    auto paren_close = wc.find(')', paren_open);
+                    if (paren_open != std::string::npos && paren_close != std::string::npos) {
+                        auto val_list = split_expressions(
+                            wc.substr(paren_open + 1, paren_close - paren_open - 1));
+                        for (auto& v : val_list) {
+                            std::string tv = trim(v);
+                            if (tv.empty()) continue;
+                            if (tv.front() == '\'' && tv.back() == '\'') {
+                                filter_values.push_back(tv.substr(1, tv.size() - 2));
+                            } else {
+                                try { filter_values.push_back(static_cast<long long>(std::stoll(tv))); }
+                                catch (...) { filter_values.push_back(tv); }
+                            }
+                        }
+                    }
+                } else if (eq_pos != std::string::npos || eq2_pos != std::string::npos) {
+                    // "COLUMN = value"
+                    auto pos = (eq_pos != std::string::npos) ? eq_pos : eq2_pos;
+                    filter_col = to_upper(trim(wc.substr(0, pos)));
+                    std::string val = trim(wc.substr(pos + ((eq_pos != std::string::npos) ? 3 : 1)));
+                    if (val.front() == '\'' && val.back() == '\'') {
+                        filter_values.push_back(val.substr(1, val.size() - 2));
+                    } else {
+                        try { filter_values.push_back(static_cast<long long>(std::stoll(val))); }
+                        catch (...) { filter_values.push_back(val); }
+                    }
+                }
+                
+                if (!filter_col.empty() && !filter_values.empty()) {
+                    // Find column index in table
+                    int col_idx = -1;
+                    for (size_t ci = 0; ci < table->columns.size(); ++ci) {
+                        if (to_upper(table->columns[ci].name) == filter_col) {
+                            col_idx = static_cast<int>(ci);
+                            break;
+                        }
+                    }
+                    if (col_idx >= 0) {
+                        std::vector<MockRow> filtered;
+                        for (const auto& row : result.data) {
+                            if (col_idx < static_cast<int>(row.size())) {
+                                for (const auto& fv : filter_values) {
+                                    if (row[col_idx] == fv) {
+                                        filtered.push_back(row);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        result.data = std::move(filtered);
+                    }
+                }
+            }
+            
+            // ── Basic ORDER BY ──
+            // Supports: "ORDER BY column [ASC|DESC]"
+            {
+                std::string wcu = to_upper(query.where_clause.empty()
+                    ? "" : query.where_clause);
+                // Also check original SQL for ORDER BY after WHERE
+                std::string full_upper = to_upper(query.table_name); // check sql later
+                // Parse ORDER BY from where_clause tail or from sql
+                auto order_pos = wcu.find("ORDER BY");
+                if (order_pos != std::string::npos) {
+                    std::string order_spec = trim(
+                        query.where_clause.substr(order_pos + 8));
+                    bool desc = (to_upper(order_spec).find("DESC") != std::string::npos);
+                    // Extract column name
+                    auto space = order_spec.find(' ');
+                    std::string order_col = to_upper(
+                        space != std::string::npos ? order_spec.substr(0, space) : order_spec);
+                    
+                    int col_idx = -1;
+                    for (size_t ci = 0; ci < table->columns.size(); ++ci) {
+                        if (to_upper(table->columns[ci].name) == order_col) {
+                            col_idx = static_cast<int>(ci);
+                            break;
+                        }
+                    }
+                    if (col_idx >= 0 && result.data.size() > 1) {
+                        std::sort(result.data.begin(), result.data.end(),
+                            [col_idx, desc](const MockRow& a, const MockRow& b) {
+                                if (col_idx >= static_cast<int>(a.size())) return !desc;
+                                if (col_idx >= static_cast<int>(b.size())) return desc;
+                                // Compare variants
+                                return desc ? (b[col_idx] < a[col_idx])
+                                            : (a[col_idx] < b[col_idx]);
+                            });
+                    }
+                }
+            }
+            
+            // If specific columns were requested, project only those columns
+            if (!all_columns && !result.data.empty()) {
+                std::vector<int> col_indices;
+                for (const auto& col_name : query.columns) {
+                    for (size_t j = 0; j < table->columns.size(); ++j) {
+                        if (to_upper(table->columns[j].name) == to_upper(col_name)) {
+                            col_indices.push_back(static_cast<int>(j));
+                            break;
+                        }
+                    }
+                }
+                std::vector<MockRow> projected;
+                for (const auto& row : result.data) {
+                    MockRow proj_row;
+                    for (int idx : col_indices) {
+                        if (idx < static_cast<int>(row.size())) {
+                            proj_row.push_back(row[idx]);
+                        } else {
+                            proj_row.push_back(std::monostate{});
+                        }
+                    }
+                    projected.push_back(std::move(proj_row));
+                }
+                result.data = std::move(projected);
+            }
+            
             break;
         }
         

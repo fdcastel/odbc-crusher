@@ -165,10 +165,14 @@ TestResult StatementTests::test_parameter_binding() {
         core::OdbcStatement stmt(conn_);
         
         // Try parametrized queries
+        // NOTE: "SELECT CAST(? AS INTEGER)" is preferred over "SELECT ?" because
+        // some drivers (e.g. DuckDB) crash on SQLDescribeParam when the parameter
+        // type cannot be inferred from a bare "SELECT ?".
         std::vector<std::string> test_queries = {
             "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE",  // Firebird
-            "SELECT ?",                                      // MySQL, SQL Server
-            "SELECT ? FROM DUAL"                             // Oracle
+            "SELECT CAST(? AS INTEGER)",                     // DuckDB, PostgreSQL, MySQL, SQL Server
+            "SELECT CAST(? AS INTEGER) FROM DUAL",           // Oracle
+            "SELECT ?"                                        // Fallback
         };
         
         bool success = false;
@@ -811,8 +815,9 @@ TestResult StatementTests::test_num_params() {
         core::OdbcStatement stmt(conn_);
         
         std::vector<std::string> queries = {
-            "SELECT ?",
-            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE"
+            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE",
+            "SELECT CAST(? AS INTEGER)",
+            "SELECT ?"
         };
         bool success = false;
         
@@ -874,8 +879,9 @@ TestResult StatementTests::test_describe_param() {
         core::OdbcStatement stmt(conn_);
         
         std::vector<std::string> queries = {
-            "SELECT ?",
-            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE"
+            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE",
+            "SELECT CAST(? AS INTEGER)",
+            "SELECT ?"
         };
         bool success = false;
         

@@ -9,6 +9,154 @@
 
 using namespace mock_odbc;
 
+namespace {
+
+// Get the size of the C data element for column-wise offset computation
+static SQLLEN c_type_element_size(SQLSMALLINT value_type, SQLLEN buffer_length) {
+    switch (value_type) {
+        case SQL_C_SLONG:
+        case SQL_C_LONG:
+            return static_cast<SQLLEN>(sizeof(SQLINTEGER));
+        case SQL_C_SBIGINT:
+            return static_cast<SQLLEN>(sizeof(SQLBIGINT));
+        case SQL_C_SSHORT:
+            return static_cast<SQLLEN>(sizeof(SQLSMALLINT));
+        case SQL_C_DOUBLE:
+            return static_cast<SQLLEN>(sizeof(SQLDOUBLE));
+        case SQL_C_FLOAT:
+            return static_cast<SQLLEN>(sizeof(SQLREAL));
+        case SQL_C_CHAR:
+        default:
+            return buffer_length > 0 ? buffer_length : 1;
+    }
+}
+
+// Read a CellValue from a parameter binding for parameter-set index 'row'.
+// When param_bind_type == SQL_PARAM_BIND_BY_COLUMN (0), column-wise:
+//   data_ptr  = base_data_ptr  + row * element_size
+//   ind_ptr   = base_ind_ptr   + row
+// When param_bind_type != 0 (row-wise):
+//   data_ptr  = (char*)base_data_ptr + row * param_bind_type
+//   ind_ptr   = (SQLLEN*)((char*)base_ind_ptr + row * param_bind_type)
+static CellValue read_param_value(
+    const StatementHandle::ParameterBinding& pb,
+    SQLULEN row,
+    SQLULEN param_bind_type)
+{
+    if (!pb.param_value) return std::monostate{};
+
+    const char* base_data = static_cast<const char*>(pb.param_value);
+    const SQLLEN* base_ind = pb.str_len_or_ind;
+
+    const char* data_ptr;
+    const SQLLEN* ind_ptr;
+
+    if (param_bind_type == SQL_PARAM_BIND_BY_COLUMN) {
+        // Column-wise: stride by element size for data, by sizeof(SQLLEN) for indicator
+        SQLLEN elem_size = c_type_element_size(pb.value_type, pb.buffer_length);
+        data_ptr = base_data + row * elem_size;
+        ind_ptr  = base_ind ? (base_ind + row) : nullptr;
+    } else {
+        // Row-wise: stride by the struct size (param_bind_type) for both
+        data_ptr = base_data + row * param_bind_type;
+        ind_ptr  = base_ind
+            ? reinterpret_cast<const SQLLEN*>(
+                  reinterpret_cast<const char*>(base_ind) + row * param_bind_type)
+            : nullptr;
+    }
+
+    // Check for SQL_NULL_DATA
+    if (ind_ptr && *ind_ptr == SQL_NULL_DATA) {
+        return std::monostate{};
+    }
+
+    switch (pb.value_type) {
+        case SQL_C_SLONG:
+        case SQL_C_LONG:
+            return static_cast<long long>(*reinterpret_cast<const SQLINTEGER*>(data_ptr));
+        case SQL_C_SBIGINT:
+            return static_cast<long long>(*reinterpret_cast<const SQLBIGINT*>(data_ptr));
+        case SQL_C_SSHORT:
+            return static_cast<long long>(*reinterpret_cast<const SQLSMALLINT*>(data_ptr));
+        case SQL_C_DOUBLE:
+            return static_cast<double>(*reinterpret_cast<const SQLDOUBLE*>(data_ptr));
+        case SQL_C_FLOAT:
+            return static_cast<double>(*reinterpret_cast<const SQLREAL*>(data_ptr));
+        case SQL_C_CHAR:
+        default: {
+            SQLLEN len = pb.buffer_length;
+            if (ind_ptr && *ind_ptr != SQL_NTS) {
+                len = *ind_ptr;
+            }
+            if (len == SQL_NTS || len < 0) {
+                return std::string(data_ptr);
+            } else {
+                return std::string(data_ptr, static_cast<size_t>(len));
+            }
+        }
+    }
+}
+
+// Substitute bound parameter values into a ParsedQuery for param-set 'row'.
+// Handles both INSERT (insert_values) and literal SELECT (literal_exprs).
+static void substitute_params(
+    ParsedQuery& parsed,
+    const std::unordered_map<SQLUSMALLINT, StatementHandle::ParameterBinding>& bindings,
+    SQLULEN row,
+    SQLULEN param_bind_type)
+{
+    if (bindings.empty() || parsed.param_count == 0) return;
+
+    // INSERT parameter substitution — only substitute for '?' markers
+    if (parsed.query_type == ParsedQuery::QueryType::Insert) {
+        SQLUSMALLINT param_idx = 0;
+        for (size_t vi = 0; vi < parsed.insert_values.size(); ++vi) {
+            bool is_marker = vi < parsed.insert_param_markers.size()
+                             && parsed.insert_param_markers[vi];
+            if (is_marker) {
+                param_idx++;
+                auto it = bindings.find(param_idx);
+                if (it != bindings.end()) {
+                    parsed.insert_values[vi] = read_param_value(it->second, row, param_bind_type);
+                }
+            }
+        }
+        return;
+    }
+
+    // Literal SELECT parameter substitution
+    if (parsed.is_literal_select) {
+        SQLUSMALLINT param_idx = 0;
+        for (auto& lit : parsed.literal_exprs) {
+            param_idx++;
+            if (lit.is_parameter_marker) {
+                auto it = bindings.find(param_idx);
+                if (it != bindings.end()) {
+                    CellValue cv = read_param_value(it->second, row, param_bind_type);
+                    if (std::holds_alternative<std::monostate>(cv)) {
+                        lit.value = std::monostate{};
+                        lit.sql_type = SQL_VARCHAR;
+                    } else if (std::holds_alternative<long long>(cv)) {
+                        lit.value = std::get<long long>(cv);
+                        lit.sql_type = SQL_INTEGER;
+                        lit.column_size = 10;
+                    } else if (std::holds_alternative<double>(cv)) {
+                        lit.value = std::get<double>(cv);
+                        lit.sql_type = SQL_DOUBLE;
+                        lit.column_size = 15;
+                    } else {
+                        lit.value = std::get<std::string>(cv);
+                        lit.sql_type = SQL_VARCHAR;
+                        lit.column_size = 255;
+                    }
+                }
+            }
+        }
+    }
+}
+
+} // anonymous namespace
+
 extern "C" {
 
 SQLRETURN SQL_API SQLExecDirect(
@@ -187,10 +335,10 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
                 continue;
             }
             
-            // Execute with current parameter set
-            // The mock driver doesn't actually use bound parameter values in query execution,
-            // but it simulates the array execution loop correctly for testing purposes.
-            auto result = execute_query(parsed, config.result_set_size);
+            // Execute with current parameter set — substitute bound param values
+            ParsedQuery row_parsed = parsed;
+            substitute_params(row_parsed, stmt->parameter_bindings_, i, stmt->param_bind_type_);
+            auto result = execute_query(row_parsed, config.result_set_size);
             
             if (result.success) {
                 if (stmt->param_status_ptr_) {
@@ -254,67 +402,8 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
     
     // --- Single parameter set execution (original path) ---
     
-    // Substitute bound parameter values into the parsed query for literal SELECTs
-    if (parsed.is_literal_select && parsed.param_count > 0 && !stmt->parameter_bindings_.empty()) {
-        int param_idx = 0;
-        for (auto& lit : parsed.literal_exprs) {
-            param_idx++;
-            if (lit.is_parameter_marker) {
-                auto it = stmt->parameter_bindings_.find(static_cast<SQLUSMALLINT>(param_idx));
-                if (it != stmt->parameter_bindings_.end()) {
-                    const auto& pb = it->second;
-                    if (pb.str_len_or_ind && *pb.str_len_or_ind == SQL_NULL_DATA) {
-                        lit.value = std::monostate{};
-                        lit.sql_type = SQL_VARCHAR;
-                    } else if (pb.param_value) {
-                        switch (pb.value_type) {
-                            case SQL_C_SLONG:
-                            case SQL_C_LONG:
-                                lit.value = static_cast<long long>(*static_cast<SQLINTEGER*>(pb.param_value));
-                                lit.sql_type = SQL_INTEGER;
-                                lit.column_size = 10;
-                                break;
-                            case SQL_C_SBIGINT:
-                                lit.value = static_cast<long long>(*static_cast<SQLBIGINT*>(pb.param_value));
-                                lit.sql_type = SQL_BIGINT;
-                                lit.column_size = 19;
-                                break;
-                            case SQL_C_SSHORT:
-                                lit.value = static_cast<long long>(*static_cast<SQLSMALLINT*>(pb.param_value));
-                                lit.sql_type = SQL_SMALLINT;
-                                lit.column_size = 5;
-                                break;
-                            case SQL_C_DOUBLE:
-                                lit.value = *static_cast<SQLDOUBLE*>(pb.param_value);
-                                lit.sql_type = SQL_DOUBLE;
-                                lit.column_size = 15;
-                                break;
-                            case SQL_C_FLOAT:
-                                lit.value = static_cast<double>(*static_cast<SQLREAL*>(pb.param_value));
-                                lit.sql_type = SQL_FLOAT;
-                                lit.column_size = 15;
-                                break;
-                            case SQL_C_CHAR:
-                            default: {
-                                SQLLEN len = pb.buffer_length;
-                                if (pb.str_len_or_ind && *pb.str_len_or_ind != SQL_NTS) {
-                                    len = *pb.str_len_or_ind;
-                                }
-                                if (len == SQL_NTS || len < 0) {
-                                    lit.value = std::string(static_cast<const char*>(pb.param_value));
-                                } else {
-                                    lit.value = std::string(static_cast<const char*>(pb.param_value), static_cast<size_t>(len));
-                                }
-                                lit.sql_type = SQL_VARCHAR;
-                                lit.column_size = 255;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Substitute bound parameter values into the parsed query (INSERT and literal SELECT)
+    substitute_params(parsed, stmt->parameter_bindings_, 0, stmt->param_bind_type_);
     
     auto result = execute_query(parsed, config.result_set_size);
     
