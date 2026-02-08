@@ -1005,7 +1005,7 @@ A comprehensive recommendations document was written to `tmp/DUCKDB_ODBC_RECOMME
 - [x] B23-01/02/03: `statement_tests.cpp`: Query fallback chains prefer `CAST(? AS INTEGER)` over bare `SELECT ?`
 - [x] B23-04: `array_param_tests.cpp`: `test_row_wise_array_binding()` uses integer-only safety probe before string parameters
 - [x] B23-05: `array_param_tests.cpp`: Restored missing `test_param_status_array()` function header
-- [x] `tmp/DUCKDB_ODBC_RECOMMENDATIONS.md`: Comprehensive driver analysis with root cause and fix for each issue
+- [x] `recommendations/duckdb_ODBC_RECOMMENDATIONS.md`: Comprehensive driver analysis with root cause and fix for each issue
 - [x] DuckDB: 113/131 passed (86.3%), 9 failed, 8 skipped, 1 error — **0 crashes**
 - [x] Mock driver: 131/131 (100%) — unchanged
 - [x] Unit tests: 60/60 (100%) — pass on all platforms

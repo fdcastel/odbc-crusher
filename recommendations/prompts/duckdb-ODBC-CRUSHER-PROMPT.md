@@ -18,4 +18,4 @@ For each **failed** or **skipped** test, investigate its result against the real
    Write a recommendation in `recommendations/duckdb_ODBC_RECOMMENDATIONS.md` explaining what the `duckdb` developers should do to fix it.
 
 2. **If the odbc-crusher report is WRONG** (the driver is fine, odbc-crusher misjudged it):
-   Record it as a bug in `PROJECT_PLAN.md` for future fix.
+   Record it as a bug in `PROJECT_PLAN.md` for future fix. (there is already a phase for it, do not create a new phase)

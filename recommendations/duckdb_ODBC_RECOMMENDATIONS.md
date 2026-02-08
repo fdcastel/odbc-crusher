@@ -168,7 +168,7 @@ explanation and **skips the string-parameter test** to avoid crashing.
 
 ## Non-Crash Failures
 
-### 3. `SQLEndTran(SQL_ROLLBACK)` fails in autocommit mode
+### 3. `SQLEndTran(SQL_ROLLBACK)` fails — asymmetric autocommit guard + state desync
 
 | Field | Value |
 |-------|-------|
@@ -176,14 +176,33 @@ explanation and **skips the string-parameter test** to avoid crashing.
 | **Severity** | INFO |
 | **SQLSTATE** | HY115 |
 
-**Root Cause:**
+**Root Cause (two bugs):**
 
-`SQLEndTran` with `SQL_ROLLBACK` calls `dbc->conn->Rollback()` which
-throws if no transaction is active.  The `SQL_COMMIT` branch already
+**Bug A — Missing autocommit guard on ROLLBACK path:**
+In `src/connect/connection.cpp` → `SQLEndTran`, the `SQL_COMMIT` branch
 checks `dbc->conn->IsAutoCommit()` and returns `SQL_SUCCESS` (no-op),
-but the `SQL_ROLLBACK` branch does not.
+but the `SQL_ROLLBACK` branch does not — it unconditionally calls
+`dbc->conn->Rollback()`, which throws `"cannot rollback - no
+transaction is active"` when no transaction exists.
 
-**Fix:** Add the same autocommit guard:
+**Bug B — Engine resets autocommit after every Commit/Rollback:**
+In `src/duckdb/src/transaction/transaction_context.cpp`, `Commit()`
+resets `auto_commit = true` and sets the context back to idle.
+This means after a successful `COMMIT`, the DuckDB engine silently
+reverts to autocommit mode **even if the ODBC layer has
+`SQL_ATTR_AUTOCOMMIT = SQL_AUTOCOMMIT_OFF`**.  The ODBC handle's
+`autocommit` flag still says `false`, but the underlying DuckDB
+connection has reverted.  The next SQL statement runs in autocommit
+mode (auto-begins and auto-commits immediately).  When the test
+then calls `SQLEndTran(SQL_ROLLBACK)`, there is no active
+transaction → throws → `SQL_ERROR`.
+
+Per the [ODBC specification](https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlendtran-function),
+`SQLEndTran(SQL_ROLLBACK)` when autocommit is enabled should be a
+no-op (same as `SQL_COMMIT`).  DuckDB violates this for the ROLLBACK
+case.
+
+**Fix (immediate):** Add the same autocommit guard:
 
 ```cpp
 case SQL_ROLLBACK:
@@ -192,6 +211,11 @@ case SQL_ROLLBACK:
     }
     // ... existing rollback code
 ```
+
+**Fix (comprehensive):** After every `Commit()` or `Rollback()` on the
+engine side, re-apply `SetAutoCommit(false)` if the ODBC-level
+`SQL_ATTR_AUTOCOMMIT` is `SQL_AUTOCOMMIT_OFF`, to keep the engine
+and ODBC states synchronized.
 
 ---
 
@@ -405,13 +429,20 @@ never checks the operation array to skip rows marked `SQL_PARAM_IGNORE`.
 | **Test** | `test_array_partial_error` |
 | **Severity** | WARNING |
 
-This test attempts to insert rows that should partially fail (e.g.,
-duplicate primary keys).  DuckDB executes all rows successfully because
-the table has no unique constraint enforcement in the ODBC path, or
-all rows happen to succeed.
+This test uses `SQL_ATTR_PARAM_OPERATION_PTR` to mark the middle row
+of a 3-row array INSERT as `SQL_PARAM_IGNORE`, expecting rows 0 and 2
+to have status `SQL_PARAM_SUCCESS` and row 1 to have `SQL_PARAM_UNUSED`.
 
-This is a consequence of issue #10 — without `SQL_ATTR_PARAM_OPERATION_PTR`
-support, the mixed-status scenario cannot be properly tested.
+DuckDB processes all 3 rows as SUCCESS because
+`SQL_ATTR_PARAM_OPERATION_PTR` is unimplemented (issue #10).  The
+driver's `default:` case in `SQLSetStmtAttr` silently accepts the
+pointer with `SQL_SUCCESS_WITH_INFO` but never stores or consults it.
+
+Additionally, even if `SQL_ATTR_PARAM_OPERATION_PTR` were implemented,
+the batch execution loop in `src/statement/statement.cpp` aborts
+immediately on the first per-row error instead of continuing to
+process remaining parameter sets and reporting `SQL_SUCCESS_WITH_INFO`
+with a mixed status array — a separate but related spec violation.
 
 ---
 
