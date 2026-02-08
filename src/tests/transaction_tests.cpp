@@ -19,35 +19,44 @@ std::vector<TestResult> TransactionTests::run() {
 
 bool TransactionTests::create_test_table() {
     try {
-        core::OdbcStatement stmt(conn_);
-        
-        // Try to drop first (ignore errors)
+        // DDL must run with autocommit ON so it commits immediately.
+        // This avoids Firebird's "failed DDL invalidates transaction" problem.
+        SQLUINTEGER old_ac = 0;
+        SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+
+        // Drop if exists (ignore errors) — use a separate statement
+        // so any error state doesn't affect the CREATE TABLE statement.
         try {
-            stmt.execute("DROP TABLE ODBC_TEST_TXN");
+            core::OdbcStatement drop_stmt(conn_);
+            drop_stmt.execute("DROP TABLE ODBC_TEST_TXN");
         } catch (...) {
             // Ignore - table may not exist
         }
         
-        // Some databases (e.g. Firebird) invalidate the current transaction
-        // after a failed DDL statement.  Rollback to clean up, then start
-        // a fresh transaction so the subsequent CREATE TABLE can succeed.
-        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-        
-        // Create table - try different syntaxes
+        // Create table - try different syntaxes with a fresh statement
         std::vector<std::string> create_queries = {
-            "CREATE TABLE ODBC_TEST_TXN (ID INTEGER, VALUE VARCHAR(50))",  // Standard
-            "CREATE TABLE ODBC_TEST_TXN (ID INT, VALUE VARCHAR(50))"        // Alternative
+            "CREATE TABLE ODBC_TEST_TXN (ID INTEGER, VAL VARCHAR(50))",  // Standard
+            "CREATE TABLE ODBC_TEST_TXN (ID INT, VAL VARCHAR(50))"        // Alternative
         };
         
         for (const auto& query : create_queries) {
             try {
-                stmt.execute(query);
+                core::OdbcStatement create_stmt(conn_);
+                create_stmt.execute(query);
+                // Restore previous autocommit setting
+                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                  (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
             } catch (const core::OdbcError&) {
                 continue;
             }
         }
         
+        // Restore previous autocommit setting
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)(intptr_t)old_ac, 0);
         return false;
     } catch (...) {
         return false;
@@ -56,6 +65,9 @@ bool TransactionTests::create_test_table() {
 
 void TransactionTests::drop_test_table() {
     try {
+        // DDL cleanup with autocommit ON
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
         core::OdbcStatement stmt(conn_);
         stmt.execute("DROP TABLE ODBC_TEST_TXN");
     } catch (...) {
@@ -230,7 +242,7 @@ TestResult TransactionTests::test_manual_commit() {
             } else {
                 // Insert data
                 core::OdbcStatement stmt(conn_);
-                stmt.execute("INSERT INTO ODBC_TEST_TXN VALUES (1, 'test')");
+                stmt.execute("INSERT INTO ODBC_TEST_TXN (ID, VAL) VALUES (1, 'test')");
                 
                 // Commit
                 ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
@@ -327,7 +339,7 @@ TestResult TransactionTests::test_manual_rollback() {
                 
                 // Insert data
                 core::OdbcStatement stmt(conn_);
-                stmt.execute("INSERT INTO ODBC_TEST_TXN VALUES (1, 'should_rollback')");
+                stmt.execute("INSERT INTO ODBC_TEST_TXN (ID, VAL) VALUES (1, 'should_rollback')");
                 
                 // Rollback
                 ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);

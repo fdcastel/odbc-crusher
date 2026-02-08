@@ -2,6 +2,7 @@
 #include "core/odbc_error.hpp"
 #include <cstring>
 #include <algorithm>
+#include <vector>
 
 namespace odbc_crusher::tests {
 
@@ -173,39 +174,96 @@ TestResult BufferValidationTests::test_truncation_indicators() {
     try {
         auto start = std::chrono::high_resolution_clock::now();
         
-        // Use a buffer smaller than typical driver name
-        const SQLSMALLINT small_buffer_size = 5;
-        char buffer[small_buffer_size];
+        // Step 1: Get the actual driver name length with a full-size buffer
+        char full_buf[256] = {0};
+        SQLSMALLINT full_length = 0;
+        SQLRETURN probe_rc = SQLGetInfo(
+            conn_.get_handle(),
+            SQL_DRIVER_NAME,
+            full_buf,
+            sizeof(full_buf),
+            &full_length
+        );
+        
+        if (!SQL_SUCCEEDED(probe_rc) || full_length < 2) {
+            // Can't determine driver name length — try SQL_DBMS_NAME instead
+            full_length = 0;
+            probe_rc = SQLGetInfo(
+                conn_.get_handle(),
+                SQL_DBMS_NAME,
+                full_buf,
+                sizeof(full_buf),
+                &full_length
+            );
+        }
+        
+        if (!SQL_SUCCEEDED(probe_rc) || full_length < 2) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not determine string length for truncation test";
+            auto end = std::chrono::high_resolution_clock::now();
+            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+            return result;
+        }
+        
+        // Step 2: Use a buffer smaller than the actual string
+        SQLUSMALLINT info_type = (full_length >= 2) ? SQL_DRIVER_NAME : SQL_DBMS_NAME;
+        // Re-probe to make sure we use the right info type
+        if (info_type == SQL_DRIVER_NAME) {
+            SQLGetInfo(conn_.get_handle(), SQL_DRIVER_NAME, full_buf, sizeof(full_buf), &full_length);
+        }
+        
+        // If the name is too short (1 char), can't force truncation
+        if (full_length < 2) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "String value too short to test truncation (length=" + std::to_string(full_length) + ")";
+            auto end = std::chrono::high_resolution_clock::now();
+            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+            return result;
+        }
+        
+        // Use a buffer that's definitely too small — half the actual length
+        SQLSMALLINT small_buffer_size = std::max((SQLSMALLINT)2, (SQLSMALLINT)(full_length / 2));
+        std::vector<char> small_buf(small_buffer_size, 0);
         SQLSMALLINT buffer_length = 0;
         
         SQLRETURN rc = SQLGetInfo(
             conn_.get_handle(),
-            SQL_DRIVER_NAME,
-            buffer,
+            info_type,
+            small_buf.data(),
             small_buffer_size,
             &buffer_length
         );
         
         // Should return SQL_SUCCESS_WITH_INFO when truncated
         if (rc == SQL_SUCCESS_WITH_INFO) {
-            // Verify buffer_length indicates the actual length needed
-            if (buffer_length >= small_buffer_size) {
+            // buffer_length should report the full length, not the truncated length
+            if (buffer_length >= full_length) {
                 result.status = TestStatus::PASS;
-                result.actual = "SQL_SUCCESS_WITH_INFO with length = " + std::to_string(buffer_length);
+                result.actual = "SQL_SUCCESS_WITH_INFO with full length = " + std::to_string(buffer_length) +
+                               " (buffer was " + std::to_string(small_buffer_size) + " bytes)";
+            } else if (buffer_length >= small_buffer_size) {
+                // Some drivers/DMs report truncated length — note it but don't fail
+                result.status = TestStatus::PASS;
+                result.actual = "SQL_SUCCESS_WITH_INFO with length = " + std::to_string(buffer_length) +
+                               " (full=" + std::to_string(full_length) + 
+                               ", buffer=" + std::to_string(small_buffer_size) + ")";
             } else {
                 result.status = TestStatus::FAIL;
-                result.actual = "Length < buffer size despite truncation";
-                result.suggestion = "Buffer length should indicate required space";
+                result.actual = "Length (" + std::to_string(buffer_length) +
+                               ") < buffer size (" + std::to_string(small_buffer_size) +
+                               ") despite truncation";
+                result.suggestion = "After truncation, pcbInfoValue should report the full "
+                                   "string length (excluding NUL), not the truncated length. "
+                                   "Per ODBC 3.x spec §SQLGetInfo.";
                 result.severity = Severity::WARNING;
             }
         } else if (rc == SQL_SUCCESS) {
-            // Small driver name fit in buffer
+            // Data fit in the small buffer — shouldn't happen
             result.status = TestStatus::PASS;
-            result.actual = "SQL_SUCCESS (data fit)";
-            result.suggestion = "Driver name fits in small buffer";
+            result.actual = "SQL_SUCCESS (data fit in " + std::to_string(small_buffer_size) + " byte buffer)";
         } else {
             result.status = TestStatus::FAIL;
-            result.actual = "Unexpected return code";
+            result.actual = "Unexpected return code " + std::to_string(rc);
             result.severity = Severity::ERR;
         }
         

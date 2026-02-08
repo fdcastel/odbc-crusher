@@ -4,6 +4,7 @@
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -40,9 +41,19 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
         
         core::OdbcStatement stmt(conn_);
         
-        // Prepare a statement with a parameter marker
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS WHERE NAME = ?").ptr(), SQL_NTS);
+        // Prepare a parameterized query — try multiple patterns
+        std::vector<std::string> queries = {
+            "SELECT CAST(? AS VARCHAR(50))",
+            "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE",
+            "SELECT * FROM CUSTOMERS WHERE NAME = ?"
+        };
+        SQLRETURN ret = SQL_ERROR;
+        for (const auto& q : queries) {
+            ret = SQLPrepareW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(ret)) break;
+            SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+        }
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -108,8 +119,18 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
         
         core::OdbcStatement stmt(conn_);
         
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS WHERE NAME = ?").ptr(), SQL_NTS);
+        std::vector<std::string> queries = {
+            "SELECT CAST(? AS VARCHAR(50))",
+            "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE",
+            "SELECT * FROM CUSTOMERS WHERE NAME = ?"
+        };
+        SQLRETURN ret = SQL_ERROR;
+        for (const auto& q : queries) {
+            ret = SQLPrepareW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(ret)) break;
+            SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+        }
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -169,8 +190,18 @@ TestResult ParameterBindingTests::test_param_rebind_execute() {
         
         core::OdbcStatement stmt(conn_);
         
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS WHERE CUSTOMER_ID = ?").ptr(), SQL_NTS);
+        std::vector<std::string> queries = {
+            "SELECT CAST(? AS INTEGER)",
+            "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE",
+            "SELECT * FROM CUSTOMERS WHERE CUSTOMER_ID = ?"
+        };
+        SQLRETURN ret = SQL_ERROR;
+        for (const auto& q : queries) {
+            ret = SQLPrepareW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(ret)) break;
+            SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+        }
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;

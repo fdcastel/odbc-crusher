@@ -120,8 +120,19 @@ TestResult UnicodeTests::test_describecol_wchar_names() {
         core::OdbcStatement stmt(conn_);
         
         // Execute a query to get a result set with known column names
-        SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
+        // Try multiple queries for cross-database compatibility
+        std::vector<std::string> queries = {
+            "SELECT * FROM CUSTOMERS",
+            "SELECT * FROM RDB$DATABASE",
+            "SELECT 1 AS COL1, 'hello' AS COL2"
+        };
+        SQLRETURN ret = SQL_ERROR;
+        for (const auto& q : queries) {
+            ret = SQLExecDirectW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(ret)) break;
+            SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+        }
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -195,8 +206,19 @@ TestResult UnicodeTests::test_getdata_sql_c_wchar() {
         
         core::OdbcStatement stmt(conn_);
         
-        SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
+        // Execute a query that returns a string column
+        std::vector<std::string> queries = {
+            "SELECT CAST('Hello' AS VARCHAR(50))",
+            "SELECT CAST('Hello' AS VARCHAR(50)) FROM RDB$DATABASE",
+            "SELECT * FROM CUSTOMERS"
+        };
+        SQLRETURN ret = SQL_ERROR;
+        for (const auto& q : queries) {
+            ret = SQLExecDirectW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(ret)) break;
+            SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+        }
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -217,10 +239,10 @@ TestResult UnicodeTests::test_getdata_sql_c_wchar() {
         }
         
         // Try to get a string column as SQL_C_WCHAR
-        // Column 2 is typically NAME (varchar)
+        // Column 1 — first column of the result set
         SQLWCHAR wbuf[256] = {0};
         SQLLEN cb_value = 0;
-        ret = SQLGetData(stmt.get_handle(), 2, SQL_C_WCHAR,
+        ret = SQLGetData(stmt.get_handle(), 1, SQL_C_WCHAR,
                          wbuf, sizeof(wbuf), &cb_value);
         
         if (SQL_SUCCEEDED(ret)) {
@@ -271,12 +293,32 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
         
         core::OdbcStatement stmt(conn_);
         
-        // Call SQLColumnsW with a Unicode table name pattern
+        // Discover a user table from the database via SQLTables
+        // then use that table name for SQLColumnsW
+        std::string table_name = "CUSTOMERS";  // default fallback
+        {
+            core::OdbcStatement tbl_stmt(conn_);
+            SQLRETURN tbl_ret = SQLTablesW(tbl_stmt.get_handle(),
+                nullptr, 0, nullptr, 0, nullptr, 0,
+                SqlWcharBuf("TABLE").ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(tbl_ret)) {
+                if (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS) {
+                    char name_buf[128] = {0};
+                    SQLLEN ind = 0;
+                    if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR,
+                                                 name_buf, sizeof(name_buf), &ind))) {
+                        if (ind > 0) table_name = name_buf;
+                    }
+                }
+            }
+        }
+        
+        // Call SQLColumnsW with the discovered table name
         SQLRETURN ret = SQLColumnsW(stmt.get_handle(),
             nullptr, 0,       // Catalog
             nullptr, 0,       // Schema
-            SqlWcharBuf("CUSTOMERS").ptr(), SQL_NTS,  // Table name
-            SqlWcharBuf("%").ptr(), SQL_NTS);         // Column name pattern
+            SqlWcharBuf(table_name.c_str()).ptr(), SQL_NTS,  // Table name
+            SqlWcharBuf("%").ptr(), SQL_NTS);               // Column name pattern
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -293,7 +335,7 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
         }
         
         std::ostringstream actual;
-        actual << "SQLColumnsW returned " << col_count << " column(s) for CUSTOMERS";
+        actual << "SQLColumnsW returned " << col_count << " column(s) for " << table_name;
         result.actual = actual.str();
         
         if (col_count == 0) {

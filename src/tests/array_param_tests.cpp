@@ -14,8 +14,56 @@
 
 namespace odbc_crusher::tests {
 
+// ── Table lifecycle ──────────────────────────────────────────────────────────
+
+bool ArrayParamTests::create_test_table() {
+    try {
+        // Ensure autocommit ON so DDL commits immediately
+        SQLUINTEGER old_ac = 0;
+        SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+
+        core::OdbcStatement stmt(conn_);
+
+        // Drop if exists (ignore errors)
+        try { stmt.execute("DROP TABLE ODBC_TEST_ARRAY"); } catch (...) {}
+
+        // Create the table
+        std::vector<std::string> ddl = {
+            "CREATE TABLE ODBC_TEST_ARRAY (ID INTEGER, NAME VARCHAR(50))",
+            "CREATE TABLE ODBC_TEST_ARRAY (ID INT, NAME VARCHAR(50))"
+        };
+        for (const auto& sql : ddl) {
+            try { stmt.execute(sql); return true; } catch (...) { continue; }
+        }
+
+        // Restore autocommit setting
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)(intptr_t)old_ac, 0);
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
+void ArrayParamTests::drop_test_table() {
+    try {
+        // Ensure autocommit ON so DROP commits
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+        core::OdbcStatement stmt(conn_);
+        stmt.execute("DROP TABLE ODBC_TEST_ARRAY");
+    } catch (...) {}
+}
+
+// ── run() ────────────────────────────────────────────────────────────────────
+
 std::vector<TestResult> ArrayParamTests::run() {
     std::vector<TestResult> results;
+
+    // Create test table once for all array-param tests
+    bool table_ok = create_test_table();
     
     results.push_back(test_column_wise_array_binding());
     results.push_back(test_row_wise_array_binding());
@@ -25,6 +73,9 @@ std::vector<TestResult> ArrayParamTests::run() {
     results.push_back(test_param_operation_array());
     results.push_back(test_paramset_size_one());
     results.push_back(test_array_partial_error());
+    
+    // Cleanup
+    if (table_ok) drop_test_table();
     
     return results;
 }
@@ -50,7 +101,7 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
         
         // Prepare an INSERT statement
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO USERS (USER_ID, USERNAME) VALUES (?, ?)").ptr(), SQL_NTS);
+            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -182,7 +233,7 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
         };
         
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO USERS (USER_ID, USERNAME) VALUES (?, ?)").ptr(), SQL_NTS);
+            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -302,7 +353,7 @@ TestResult ArrayParamTests::test_param_status_array() {
         constexpr SQLULEN ARRAY_SIZE = 3;
         
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO USERS (USER_ID, USERNAME) VALUES (?, ?)").ptr(), SQL_NTS);
+            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -416,7 +467,7 @@ TestResult ArrayParamTests::test_params_processed_count() {
         
         // Prepare
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO USERS (USER_ID) VALUES (?)").ptr(), SQL_NTS);
+            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -510,7 +561,7 @@ TestResult ArrayParamTests::test_array_with_null_values() {
         
         // Prepare
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO USERS (USER_ID, USERNAME) VALUES (?, ?)").ptr(), SQL_NTS);
+            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -595,7 +646,7 @@ TestResult ArrayParamTests::test_param_operation_array() {
         
         // Prepare
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO USERS (USER_ID) VALUES (?)").ptr(), SQL_NTS);
+            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -718,7 +769,7 @@ TestResult ArrayParamTests::test_paramset_size_one() {
         
         // Prepare
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO USERS (USER_ID) VALUES (?)").ptr(), SQL_NTS);
+            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -816,7 +867,7 @@ TestResult ArrayParamTests::test_array_partial_error() {
         
         // Prepare
         SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO USERS (USER_ID) VALUES (?)").ptr(), SQL_NTS);
+            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;

@@ -16,6 +16,10 @@ public:
     std::string category_name() const override { return "Array Parameter Tests"; }
     
 private:
+    // Table lifecycle — creates ODBC_TEST_ARRAY with autocommit ON, drops on cleanup
+    bool create_test_table();
+    void drop_test_table();
+    
     TestResult test_column_wise_array_binding();
     TestResult test_row_wise_array_binding();
     TestResult test_param_status_array();

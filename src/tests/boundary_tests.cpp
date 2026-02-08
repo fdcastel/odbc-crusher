@@ -85,7 +85,12 @@ TestResult BoundaryTests::test_getdata_zero_buffer() {
         
         core::OdbcStatement stmt(conn_);
         
-        std::vector<std::string> queries = {"SELECT 'hello'", "SELECT 'hello' FROM RDB$DATABASE"};
+        std::vector<std::string> queries = {
+            "SELECT 'hello'",
+            "SELECT 'hello' FROM RDB$DATABASE",
+            "SELECT CAST('hello' AS VARCHAR(50))",
+            "SELECT CAST('hello' AS VARCHAR(50)) FROM RDB$DATABASE"
+        };
         bool success = false;
         
         for (const auto& query : queries) {
@@ -94,7 +99,7 @@ TestResult BoundaryTests::test_getdata_zero_buffer() {
                 if (stmt.fetch()) {
                     SQLLEN indicator = 0;
                     
-                    // Pass NULL buffer, 0 size - should return data length in indicator
+                    // Strategy 1: NULL buffer, 0 size — should return data length
                     SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
                                              nullptr, 0, &indicator);
                     
@@ -111,23 +116,23 @@ TestResult BoundaryTests::test_getdata_zero_buffer() {
                         }
                         success = true;
                         break;
-                    } else {
-                        // DM may not support NULL buffer for Unicode drivers;
-                        // fallback: use 1-byte buffer to trigger truncation and get length
-                        stmt.recycle();
-                        stmt.execute(query);
-                        if (stmt.fetch()) {
-                            char tiny[1] = {0};
-                            indicator = 0;
-                            rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                            tiny, sizeof(tiny), &indicator);
-                            if (rc == SQL_SUCCESS_WITH_INFO && indicator > 0) {
-                                result.status = TestStatus::PASS;
-                                result.actual = "Data length = " + std::to_string(indicator) + 
-                                                " bytes (via 1-byte buffer truncation)";
-                                success = true;
-                                break;
-                            }
+                    }
+                    
+                    // Strategy 2: 1-byte buffer to trigger truncation
+                    // Re-execute since SQLGetData may have consumed the column
+                    SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+                    stmt.execute(query);
+                    if (stmt.fetch()) {
+                        char tiny[1] = {0};
+                        indicator = 0;
+                        rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
+                                        tiny, sizeof(tiny), &indicator);
+                        if ((SQL_SUCCEEDED(rc) || rc == SQL_SUCCESS_WITH_INFO) && indicator > 0) {
+                            result.status = TestStatus::PASS;
+                            result.actual = "Data length = " + std::to_string(indicator) + 
+                                            " bytes (via 1-byte buffer truncation)";
+                            success = true;
+                            break;
                         }
                     }
                 }

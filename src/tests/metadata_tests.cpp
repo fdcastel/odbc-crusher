@@ -411,6 +411,7 @@ TestResult MetadataTests::test_foreign_keys() {
         // Try to get foreign keys using different approaches
         // ODBC spec requires either PK or FK table name
         bool success = false;
+        bool callable = false;
         int fk_count = 0;
         
         // Strategy 1: Try known FK tables (mock driver)
@@ -429,6 +430,7 @@ TestResult MetadataTests::test_foreign_keys() {
                 );
                 
                 if (SQL_SUCCEEDED(ret)) {
+                    callable = true;  // Function works even if 0 rows returned
                     while (stmt.fetch() && fk_count < 100) {
                         fk_count++;
                     }
@@ -443,8 +445,7 @@ TestResult MetadataTests::test_foreign_keys() {
         }
         
         // Strategy 2: Try with all NULLs (some drivers support this)
-        bool callable = false;
-        if (!success) {
+        if (!success && !callable) {
             try {
                 stmt.recycle();
                 SQLRETURN ret = SQLForeignKeys(

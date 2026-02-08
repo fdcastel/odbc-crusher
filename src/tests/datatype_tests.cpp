@@ -447,10 +447,11 @@ TestResult DataTypeTests::test_unicode_types() {
         core::OdbcStatement stmt(conn_);
         
         // Try different SQL patterns for wide character strings
+        // Ordered: most portable first, then database-specific
         std::vector<std::string> test_queries = {
+            "SELECT CAST('Hello World' AS VARCHAR(50))",              // Standard (retrieve as SQL_C_WCHAR)
+            "SELECT CAST('Hello World' AS VARCHAR(50)) FROM RDB$DATABASE",  // Firebird
             "SELECT CAST(N'Hello World' AS NVARCHAR(50))",           // SQL Server style
-            "SELECT CAST('Unicode Test' AS VARCHAR(50))",             // Standard (will test as wide)
-            "SELECT N'Test' FROM RDB$DATABASE",                       // Firebird
             "SELECT 'Unicode' FROM DUAL"                              // Oracle
         };
         
