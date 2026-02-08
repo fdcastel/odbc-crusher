@@ -330,20 +330,32 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
                 nullptr, 0, nullptr, 0, nullptr, 0,
                 const_cast<SQLWCHAR*>(type_filter), type_len);
             if (!SQL_SUCCEEDED(tbl_ret)) return false;
-            if (SQLFetch(tbl_stmt.get_handle()) != SQL_SUCCESS) return false;
             
-            char cat_buf[128] = {0};
-            char sch_buf[128] = {0};
-            char name_buf[128] = {0};
-            SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
-            
-            SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
-            SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
-            SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
-            
-            if (name_ind > 0) {
-                table_catalog = (cat_ind > 0) ? std::string(cat_buf) : "";
-                table_schema = (sch_ind > 0) ? std::string(sch_buf) : "";
+            // Iterate through results to find a table NOT in information_schema.
+            // information_schema views are dynamically-defined in many databases
+            // (e.g. PostgreSQL) and SQLColumns cannot enumerate their columns.
+            while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS) {
+                char cat_buf[128] = {0};
+                char sch_buf[128] = {0};
+                char name_buf[128] = {0};
+                SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
+                
+                SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
+                SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
+                SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
+                
+                if (name_ind <= 0) continue;
+                
+                // Skip information_schema tables/views — many drivers cannot
+                // expose their columns via SQLColumns (they are synthetic views).
+                std::string candidate_schema = (sch_ind > 0) ? std::string(sch_buf) : "";
+                std::string candidate_catalog = (cat_ind > 0) ? std::string(cat_buf) : "";
+                if (candidate_schema == "information_schema" || candidate_catalog == "information_schema") {
+                    continue;
+                }
+                
+                table_catalog = candidate_catalog;
+                table_schema = candidate_schema;
                 table_name = std::string(name_buf);
                 return true;
             }

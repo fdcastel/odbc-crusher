@@ -43,11 +43,14 @@ TestResult CatalogDepthTests::test_tables_search_patterns() {
         
         core::OdbcStatement stmt(conn_);
         
-        // Test SQL_ALL_TABLE_TYPES — returns list of table types
+        // Test SQL_ALL_TABLE_TYPES — returns list of table types.
+        // Per ODBC spec, the special enumeration mode requires empty strings
+        // (not nullptr) for catalog, schema, and table name with "%" as type.
+        SqlWcharBuf empty_str("");
         SQLRETURN ret = SQLTablesW(stmt.get_handle(),
-            nullptr, 0,        // Catalog
-            nullptr, 0,        // Schema  
-            nullptr, 0,        // Table name
+            empty_str.ptr(), 0,   // Catalog = empty string
+            empty_str.ptr(), 0,   // Schema = empty string
+            empty_str.ptr(), 0,   // Table name = empty string
             SqlWcharBuf("%").ptr(), SQL_NTS);  // All table types
         
         if (!SQL_SUCCEEDED(ret)) {

@@ -552,6 +552,7 @@ TestResult DataTypeTests::test_binary_types() {
             "SELECT CAST('Binary' AS BLOB SUB_TYPE 0) FROM RDB$DATABASE",  // Firebird
             "SELECT CAST('test' AS BINARY(10))",                      // Standard
             "SELECT X'48656C6C6F'",                                   // Hex literal
+            "SELECT decode('48656C6C6F', 'hex')::bytea",             // PostgreSQL
         };
         
         bool success = false;

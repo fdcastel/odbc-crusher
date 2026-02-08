@@ -872,9 +872,9 @@ The psqlodbc driver **fully implements** `SQLSpecialColumns` (via `PGAPI_Special
 | B22-01 | `test_special_columns` | `metadata_tests.cpp` | Hardcoded table names; needs dynamic discovery via `SQLTables` and PostgreSQL tables like `pg_catalog.pg_class` |
 
 **Fix Strategy**:
-- [ ] Add dynamic table discovery via `SQLTables` (capture catalog, schema, table name) before calling `SQLSpecialColumns`
-- [ ] Add PostgreSQL-compatible static fallback tables: `{"pg_catalog", "pg_class"}`, `{"pg_catalog", "pg_type"}`
-- [ ] Prefer user tables (`TABLE` type) over system views
+- [x] Add dynamic table discovery via `SQLTables` (capture catalog, schema, table name) before calling `SQLSpecialColumns`
+- [x] Add PostgreSQL-compatible static fallback tables: `{"pg_catalog", "pg_class"}`, `{"pg_catalog", "pg_type"}`
+- [x] Prefer user tables (`TABLE` type) over system views
 
 #### 22.2 Binary Types — No PostgreSQL Syntax (1 test)
 
@@ -891,9 +891,9 @@ PostgreSQL uses `bytea` for binary data. None of these syntaxes produce a `bytea
 | B22-02 | `test_binary_types` | `datatype_tests.cpp` | No PostgreSQL-compatible binary literal syntax |
 
 **Fix Strategy**:
-- [ ] Add PostgreSQL binary query: `"SELECT decode('48656C6C6F', 'hex')::bytea"`
-- [ ] Alternative: `"SELECT E'\\\\x48656C6C6F'::bytea"`
-- [ ] Retrieve as `SQL_C_BINARY` and validate byte content
+- [x] Add PostgreSQL binary query: `"SELECT decode('48656C6C6F', 'hex')::bytea"`
+- [ ] Alternative: `"SELECT E'\\\\x48656C6C6F'::bytea"` (not needed, decode() works)
+- [x] Retrieve as `SQL_C_BINARY` and validate byte content
 
 #### 22.3 SQLColumnsW for information_schema Views (1 test)
 
@@ -906,9 +906,9 @@ This is not strictly an odbc-crusher propagation bug — the test should prefer 
 | B22-03 | `test_columns_unicode_patterns` | `unicode_tests.cpp` | Test should prefer base tables or `pg_catalog` tables over `information_schema` views |
 
 **Fix Strategy**:
-- [ ] Prefer `TABLE` type in discovery; add `SYSTEM TABLE` as second preference before falling back to any type
-- [ ] Filter out `information_schema` tables during discovery (these are views that may not expose columns via `SQLColumns`)
-- [ ] Add `pg_catalog.pg_class` as a static fallback
+- [x] Prefer `TABLE` type in discovery; add `SYSTEM TABLE` as second preference before falling back to any type
+- [x] Filter out `information_schema` tables during discovery (these are views that may not expose columns via `SQLColumns`)
+- [ ] Add `pg_catalog.pg_class` as a static fallback (not needed, filtering is sufficient)
 
 #### 22.4 SQLTables SQL_ALL_TABLE_TYPES Enumeration (1 test)
 
@@ -921,9 +921,9 @@ The psqlodbc driver's `PGAPI_Tables` implementation checks `escCatName && escSch
 | B22-04 | `test_tables_search_patterns` | `catalog_depth_tests.cpp` | Passes `nullptr` instead of `L""` for SQL_ALL_TABLE_TYPES enumeration |
 
 **Fix Strategy**:
-- [ ] Pass `SqlWcharBuf("").ptr()` with length 0 for catalog, schema, and table name
-- [ ] Keep `SqlWcharBuf("%").ptr()` with `SQL_NTS` for the table type parameter
-- [ ] Verify the result set contains at least one table type entry (e.g., `TABLE`, `VIEW`, `SYSTEM TABLE`)
+- [x] Pass `SqlWcharBuf("").ptr()` with length 0 for catalog, schema, and table name
+- [x] Keep `SqlWcharBuf("%").ptr()` with `SQL_NTS` for the table type parameter
+- [ ] Verify the result set contains at least one table type entry (deferred — driver-dependent behavior)
 
 #### 22.5 Correctly Identified Driver Gaps (No odbc-crusher bug)
 
@@ -942,10 +942,12 @@ All 125 passed tests were verified as correct by reviewing the driver source cod
 
 **Deliverables**:
 - [x] `postgresql_ODBC_RECOMMENDATIONS.md` documents 3 minor driver improvements
-- [ ] B22-01: Add dynamic table discovery to `test_special_columns`
-- [ ] B22-02: Add PostgreSQL binary syntax to `test_binary_types`
-- [ ] B22-03: Prefer base tables in `test_columns_unicode_patterns` discovery
-- [ ] B22-04: Use empty strings for `SQL_ALL_TABLE_TYPES` in `test_tables_search_patterns`
+- [x] B22-01: `metadata_tests.cpp`: `test_special_columns()` dynamically discovers base tables via `SQLTables(TABLE)`, captures catalog+schema+name; extended static fallback includes `pg_catalog.pg_class`, `pg_catalog.pg_type`, `dbo.sysobjects`
+- [x] B22-02: `datatype_tests.cpp`: `test_binary_types()` adds `SELECT decode('48656C6C6F', 'hex')::bytea` (PostgreSQL native `bytea` syntax)
+- [x] B22-03: `unicode_tests.cpp`: `test_columns_unicode_patterns()` discovery lambda now iterates through `SQLTables` results and skips `information_schema` tables (synthetic views whose columns are not enumerable via `SQLColumns`)
+- [x] B22-04: `catalog_depth_tests.cpp`: `test_tables_search_patterns()` passes `SqlWcharBuf("").ptr()` with length 0 (empty strings) instead of `nullptr` for catalog/schema/table, per ODBC spec's `SQL_ALL_TABLE_TYPES` enumeration mode
+- [x] Mock driver: 131/131 (100%) — unchanged
+- [x] Unit tests: 60/60 (100%) — pass on all platforms
 
 ---
 

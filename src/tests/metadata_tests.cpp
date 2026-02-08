@@ -412,23 +412,67 @@ TestResult MetadataTests::test_special_columns() {
         
         core::OdbcStatement stmt(conn_);
         
-        std::vector<std::pair<std::string, std::string>> test_tables = {
-            {"", "RDB$DATABASE"},
-            {"information_schema", "TABLES"}
+        // Strategy 1: Dynamically discover a base table via SQLTables.
+        // We want a TABLE (not VIEW) because SQLSpecialColumns with
+        // SQL_BEST_ROWID is meaningful on base tables with primary keys.
+        struct DiscoveredTable {
+            std::string catalog;
+            std::string schema;
+            std::string name;
         };
+        std::vector<DiscoveredTable> discovered;
+        
+        try {
+            core::OdbcStatement tbl_stmt(conn_);
+            SQLRETURN tbl_ret = SQLTables(tbl_stmt.get_handle(),
+                nullptr, 0, nullptr, 0, nullptr, 0,
+                (SQLCHAR*)"TABLE", SQL_NTS);
+            if (SQL_SUCCEEDED(tbl_ret)) {
+                char cat_buf[128] = {0};
+                char sch_buf[128] = {0};
+                char name_buf[128] = {0};
+                SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
+                while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                       && discovered.size() < 5) {
+                    cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
+                    SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
+                    SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
+                    SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
+                    if (name_ind > 0) {
+                        discovered.push_back({
+                            (cat_ind > 0) ? std::string(cat_buf) : "",
+                            (sch_ind > 0) ? std::string(sch_buf) : "",
+                            std::string(name_buf)
+                        });
+                    }
+                }
+            }
+        } catch (...) {}
+        
+        // Strategy 2: Static fallback list covering major drivers.
+        // Use discovered tables first, then well-known base tables.
+        std::vector<DiscoveredTable> test_tables;
+        for (auto& d : discovered) test_tables.push_back(std::move(d));
+        test_tables.push_back({"", "",  "RDB$DATABASE"});                // Firebird
+        test_tables.push_back({"", "pg_catalog", "pg_class"});           // PostgreSQL
+        test_tables.push_back({"", "pg_catalog", "pg_type"});            // PostgreSQL
+        test_tables.push_back({"", "information_schema", "TABLES"});     // MySQL / SQL Server
+        test_tables.push_back({"information_schema", "", "TABLES"});     // MySQL (catalog)
+        test_tables.push_back({"", "dbo", "sysobjects"});               // SQL Server
         
         bool callable = false;
         
-        for (const auto& [schema, table] : test_tables) {
+        for (const auto& tbl : test_tables) {
             try {
                 stmt.recycle();
                 SQLRETURN ret = SQLSpecialColumns(
                     stmt.get_handle(),
                     SQL_BEST_ROWID,     // Best row identifier
-                    nullptr, 0,
-                    schema.empty() ? nullptr : (SQLCHAR*)schema.c_str(),
-                    schema.empty() ? 0 : SQL_NTS,
-                    (SQLCHAR*)table.c_str(), SQL_NTS,
+                    tbl.catalog.empty() ? nullptr : (SQLCHAR*)tbl.catalog.c_str(),
+                    tbl.catalog.empty() ? 0 : SQL_NTS,
+                    tbl.schema.empty() ? nullptr : (SQLCHAR*)tbl.schema.c_str(),
+                    tbl.schema.empty() ? 0 : SQL_NTS,
+                    (SQLCHAR*)tbl.name.c_str(), SQL_NTS,
                     SQL_SCOPE_SESSION,  // Valid for session
                     SQL_NULLABLE        // Include nullable columns
                 );
