@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.3  
+**Version**: 2.4  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 8, 2026
 
@@ -572,6 +572,12 @@ Every test must:
 6. **`dynamic_cast` across DLL boundaries doesn't work on Windows.** Solved with opaque handle + magic number validation in the mock driver. This is a fundamental C++ / Windows ODBC constraint.
 
 7. **Multi-database SQL compatibility requires fallback patterns.** The `try Firebird syntax → try MySQL syntax → try generic` pattern works but hides failures. Tests should document which SQL dialect succeeded.
+
+8. **Hardcoded table names break real-driver testing.** Tests that reference `CUSTOMERS` or similar mock-driver tables fail silently against real databases. All SQL queries must include fallback options (e.g., `RDB$DATABASE` for Firebird, `information_schema.TABLES` for MySQL). Fixed in Phase 17 investigation.
+
+9. **DDL errors invalidate Firebird transactions.** When a `DROP TABLE` fails in Firebird with autocommit off, the transaction enters a broken state. A `ROLLBACK` is needed before subsequent DDL can succeed. Fixed by adding `SQLEndTran(ROLLBACK)` after failed DROP TABLE attempts in transaction tests.
+
+10. **"Zero results" ≠ "unsupported function."** A catalog function like `SQLForeignKeys` returning `SQL_SUCCESS` with 0 rows means the function works but the database has no foreign keys. The test must distinguish "callable" from "has data." Fixed in the `test_foreign_keys` metadata test.
 
 ---
 
