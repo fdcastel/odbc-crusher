@@ -28,6 +28,11 @@ bool TransactionTests::create_test_table() {
             // Ignore - table may not exist
         }
         
+        // Some databases (e.g. Firebird) invalidate the current transaction
+        // after a failed DDL statement.  Rollback to clean up, then start
+        // a fresh transaction so the subsequent CREATE TABLE can succeed.
+        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+        
         // Create table - try different syntaxes
         std::vector<std::string> create_queries = {
             "CREATE TABLE ODBC_TEST_TXN (ID INTEGER, VALUE VARCHAR(50))",  // Standard

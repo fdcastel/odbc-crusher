@@ -170,10 +170,21 @@ TestResult DiagnosticDepthTests::test_diagfield_row_count() {
         core::OdbcStatement stmt(conn_);
         
         // Execute a SELECT to generate a result set
-        SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
+        // Try multiple queries for cross-database compatibility
+        std::vector<std::string> queries = {
+            "SELECT * FROM CUSTOMERS",
+            "SELECT * FROM RDB$DATABASE",
+            "SELECT 1 AS COL1"
+        };
+        bool executed = false;
+        for (const auto& q : queries) {
+            SQLRETURN rc = SQLExecDirectW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(rc)) { executed = true; break; }
+            SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+        }
         
-        if (!SQL_SUCCEEDED(ret)) {
+        if (!executed) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
             result.actual = "Could not execute query for row count test";
             auto end_time = std::chrono::high_resolution_clock::now();

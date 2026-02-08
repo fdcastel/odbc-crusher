@@ -41,10 +41,21 @@ TestResult CursorBehaviorTests::test_forward_only_past_end() {
         
         core::OdbcStatement stmt(conn_);
         
-        SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
+        // Try multiple queries for cross-database compatibility
+        std::vector<std::string> queries = {
+            "SELECT * FROM CUSTOMERS",
+            "SELECT * FROM RDB$DATABASE",     // Firebird system table
+            "SELECT 1 AS COL1"                 // Minimal fallback
+        };
+        bool executed = false;
+        for (const auto& q : queries) {
+            SQLRETURN rc = SQLExecDirectW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(rc)) { executed = true; break; }
+            SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+        }
         
-        if (!SQL_SUCCEEDED(ret)) {
+        if (!executed) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
             result.actual = "Could not execute query for cursor test";
             auto end_time = std::chrono::high_resolution_clock::now();
@@ -61,7 +72,7 @@ TestResult CursorBehaviorTests::test_forward_only_past_end() {
         
         // The last fetch should have returned SQL_NO_DATA
         // Try one more fetch to verify
-        ret = SQLFetch(stmt.get_handle());
+        SQLRETURN ret = SQLFetch(stmt.get_handle());
         
         std::ostringstream actual;
         actual << "Fetched " << row_count << " rows, then SQLFetch returned " << ret;
@@ -105,10 +116,21 @@ TestResult CursorBehaviorTests::test_fetchscroll_first_forward_only() {
         SQLSetStmtAttrW(stmt.get_handle(), SQL_ATTR_CURSOR_TYPE,
             (SQLPOINTER)(intptr_t)SQL_CURSOR_FORWARD_ONLY, 0);
         
-        SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
+        // Try multiple queries for cross-database compatibility
+        std::vector<std::string> queries = {
+            "SELECT * FROM CUSTOMERS",
+            "SELECT * FROM RDB$DATABASE",
+            "SELECT 1 AS COL1"
+        };
+        bool executed = false;
+        for (const auto& q : queries) {
+            SQLRETURN rc = SQLExecDirectW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(rc)) { executed = true; break; }
+            SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+        }
         
-        if (!SQL_SUCCEEDED(ret)) {
+        if (!executed) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
             result.actual = "Could not execute query for fetchscroll test";
             auto end_time = std::chrono::high_resolution_clock::now();
@@ -120,7 +142,7 @@ TestResult CursorBehaviorTests::test_fetchscroll_first_forward_only() {
         SQLFetch(stmt.get_handle());
         
         // Now try SQL_FETCH_FIRST on a forward-only cursor — should fail
-        ret = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_FIRST, 0);
+        SQLRETURN ret = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_FIRST, 0);
         
         std::ostringstream actual;
         actual << "SQLFetchScroll(SQL_FETCH_FIRST) returned " << ret;
@@ -238,10 +260,22 @@ TestResult CursorBehaviorTests::test_getdata_same_column_twice() {
         
         core::OdbcStatement stmt(conn_);
         
-        SQLRETURN ret = SQLExecDirectW(stmt.get_handle(),
-            SqlWcharBuf("SELECT * FROM CUSTOMERS").ptr(), SQL_NTS);
+        // Try multiple queries for cross-database compatibility
+        std::vector<std::string> queries = {
+            "SELECT * FROM CUSTOMERS",
+            "SELECT * FROM RDB$DATABASE",
+            "SELECT 1 AS COL1"
+        };
+        bool executed = false;
+        SQLRETURN ret;
+        for (const auto& q : queries) {
+            ret = SQLExecDirectW(stmt.get_handle(),
+                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(ret)) { executed = true; break; }
+            SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+        }
         
-        if (!SQL_SUCCEEDED(ret)) {
+        if (!executed) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
             result.actual = "Could not execute query for double-read test";
             auto end_time = std::chrono::high_resolution_clock::now();

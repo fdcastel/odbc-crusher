@@ -443,6 +443,7 @@ TestResult MetadataTests::test_foreign_keys() {
         }
         
         // Strategy 2: Try with all NULLs (some drivers support this)
+        bool callable = false;
         if (!success) {
             try {
                 stmt.recycle();
@@ -457,6 +458,7 @@ TestResult MetadataTests::test_foreign_keys() {
                 );
                 
                 if (SQL_SUCCEEDED(ret)) {
+                    callable = true;
                     while (stmt.fetch() && fk_count < 100) {
                         fk_count++;
                     }
@@ -470,10 +472,12 @@ TestResult MetadataTests::test_foreign_keys() {
         }
         
         if (success || fk_count > 0) {
-            
             std::ostringstream oss;
             oss << "Found " << fk_count << " foreign key(s)";
             result.actual = oss.str();
+            result.status = TestStatus::PASS;
+        } else if (callable) {
+            result.actual = "SQLForeignKeys callable (no foreign keys in database)";
             result.status = TestStatus::PASS;
         } else {
             result.actual = "SQLForeignKeys not supported";
