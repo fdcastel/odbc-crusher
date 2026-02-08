@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.8  
+**Version**: 2.9  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 8, 2026
 
@@ -736,6 +736,103 @@ The Firebird driver's `returnStringInfo` and `setString` both correctly set `*re
 
 ---
 
+### Phase 20: Real-Driver Validation Bugs — Round 3 (MariaDB Analysis)
+
+**Goal**: Fix bugs in odbc-crusher discovered by running v0.4.1 against the MariaDB Connector/ODBC driver (v03.01.0015 / ODBC 3.51 / MariaDB 10.11) and cross-referencing each non-passing result against the driver's C++ source code (`tmp/external/mariadb-connector-odbc/driver/`).
+
+**Discovery Date**: February 8, 2026  
+**Analysis Method**: Ran odbc-crusher against MariaDB ODBC driver on Linux (libmaodbc.so), then read the driver's full C++ source code to verify each failure. Documented genuine driver issues in `mariadb_ODBC_RECOMMENDATIONS.md`.
+
+**Summary**: 115/131 passed (87.8%), 2 failed, 14 skipped. Of these 16 non-passing results:
+- **13 are odbc-crusher bugs** (false negatives — tests fail/skip due to test design, not driver deficiency)
+- **1 is a genuine driver deficiency** (`SQLSetConnectAttr` accepts invalid attributes)
+- **1 is a correctly-reported optional feature** (async not supported — Level 2 optional)
+- **1 is a DM artifact** (sentinel values test detects DM buffer behavior, not driver behavior)
+
+#### 20.1 Sentinel Values Test — DM Buffer Artifact (1 test)
+
+**Root Cause**: The "Sentinel Values Test" in `buffer_validation_tests.cpp` fills a buffer with `0xAA` sentinel bytes, calls `SQLGetInfo(SQL_DRIVER_NAME)`, and checks that bytes beyond `string_data + null_terminator` are untouched. On Windows/Linux, the Driver Manager intercepts the ANSI `SQLGetInfo` call, calls the driver's `SQLGetInfoW` (wide), then converts the result back to ANSI. The DM's ANSI↔Wide conversion layer writes extra bytes during this process, modifying the buffer at position 13. The MariaDB driver's own `MADB_SetString` function (in `ma_string.cpp`) writes only the needed characters + null terminator — the extra bytes come from the DM.
+
+**Evidence**: The driver's ANSI path uses `strncpy_s(p, DestLength, Src, _TRUNCATE)` which only writes the string + null. The wide path uses `MultiByteToWideChar` → explicit null placement — no extra writes. The modification at position 13 is caused by the DM's conversion.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B20-01 | Sentinel Values Test | `buffer_validation_tests.cpp` | DM ANSI↔Wide conversion writes extra bytes; test blames driver incorrectly |
+
+**Fix Strategy**:
+- [ ] Use `SQLGetInfoW` directly to test the driver's buffer behavior, bypassing the DM's conversion layer
+- [ ] Or mark sentinel values test as INFO/WARNING instead of FAIL when extra bytes are written, noting DM involvement
+- [ ] Or test with a driver-handled info type and compare behavior with/without DM
+
+#### 20.2 Catalog/Metadata Tests — Schema vs Catalog Confusion (2 tests)
+
+**Root Cause**: MariaDB treats databases as **catalogs**, not schemas. The driver's `SQLColumns` implementation in `ma_catalog.cpp` explicitly rejects non-empty schema parameters: `if (SchemaName != NULL && *SchemaName != '\0' && ...)` → returns `HYC00` ("Schemas are not supported. Use CatalogName parameter instead"). odbc-crusher's `test_columns_catalog` passes `"information_schema"` as the **schema** argument (2nd argument) instead of the **catalog** argument (1st argument), so the query returns no results.
+
+Similarly, `test_columns_unicode_patterns` discovers a table name via `SQLTables` (which may return tables from any database) but then calls `SQLColumnsW` without propagating the **catalog** from the `SQLTables` result. Since `SQLColumns` defaults to `DATABASE()` (the current database), it looks for the table in the wrong database and returns 0 columns.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B20-02 | `test_columns_catalog` | `metadata_tests.cpp` | Passes `information_schema` as schema arg; MariaDB requires it as catalog |
+| B20-03 | `test_columns_unicode_patterns` | `unicode_tests.cpp` | Discovers table from any DB via `SQLTables` but doesn't propagate catalog to `SQLColumnsW` |
+
+**Fix Strategy**:
+- [ ] `test_columns_catalog`: Discover real tables via `SQLTables` first; pass `information_schema` as catalog, not schema
+- [ ] `test_columns_unicode_patterns`: Capture the catalog column (column 1) from `SQLTables` result and pass it to `SQLColumnsW`
+
+#### 20.3 DDL Permission Failures — Transaction & Array Tests (10 tests)
+
+**Root Cause**: The test database connected to (`bpcom_test` on `SRV-MYSQL`) does not grant `CREATE TABLE` permission (or similar DDL restriction). Both `transaction_tests.cpp` and `array_param_tests.cpp` call `create_test_table()` which attempts `CREATE TABLE ODBC_TEST_TXN / ODBC_TEST_ARRAY`. When this fails, all dependent tests skip with "Could not create test table" or "Could not prepare parameterized INSERT".
+
+The MariaDB driver **fully supports** both transactions and array parameters. Transaction support is confirmed by `test_autocommit_on/off` and `test_transaction_isolation_levels` all passing. Array parameter support is confirmed by reading `ma_bulk.cpp` which has a comprehensive bulk execution engine handling column-wise binding, row-wise binding, indicator arrays, row skipping, and both server-side and client-side prepared statements.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B20-04 | `test_manual_commit` | `transaction_tests.cpp` | `create_test_table()` fails — no DDL permission |
+| B20-05 | `test_manual_rollback` | `transaction_tests.cpp` | Same |
+| B20-06 | `test_column_wise_array_binding` | `array_param_tests.cpp` | Same |
+| B20-07 | `test_row_wise_array_binding` | `array_param_tests.cpp` | Same |
+| B20-08 | `test_param_status_array` | `array_param_tests.cpp` | Same |
+| B20-09 | `test_params_processed_count` | `array_param_tests.cpp` | Same |
+| B20-10 | `test_array_with_null_values` | `array_param_tests.cpp` | Same |
+| B20-11 | `test_param_operation_array` | `array_param_tests.cpp` | Same |
+| B20-12 | `test_paramset_size_one` | `array_param_tests.cpp` | Same |
+| B20-13 | `test_array_partial_error` | `array_param_tests.cpp` | Same |
+
+**Fix Strategy**:
+- [ ] Capture and report the actual DDL error (SQLSTATE + message) in the skip suggestion, so users know the root cause
+- [ ] Try `SELECT 1 FROM ODBC_TEST_TXN LIMIT 1` before CREATE — reuse existing table from a prior run
+- [ ] Fall back to DDL-free transaction tests (verify `SQLEndTran` returns `SQL_SUCCESS` without data persistence check)
+- [ ] Document in the test suggestion: "CREATE TABLE privilege is required on the connected database for this test"
+
+#### 20.4 Unicode Truncation Test — Buffer Too Large (1 test)
+
+**Root Cause**: `test_string_truncation_wchar` allocates a 2-element `SQLWCHAR` buffer (4 bytes: 1 character + NUL) and calls `SQLGetInfoW(SQL_DBMS_NAME)`. It expects `SQL_SUCCESS_WITH_INFO` with SQLSTATE `01004` (truncation), but the test reports "DBMS name fit in 1-char buffer" — meaning the returned DBMS name is unexpectedly short (possibly due to DM behavior, or the `BUFFER_CHAR_LEN` macro computing a larger-than-expected character count from the byte-based buffer length).
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B20-14 | `test_string_truncation_wchar` | `unicode_tests.cpp` | Buffer too large or DM behavior prevents truncation; test inconclusive |
+
+**Fix Strategy**:
+- [ ] Call `SQLGetInfoW` with a full-size buffer first to learn the actual string length, then craft a buffer guaranteed to be too small
+- [ ] Use a 1-byte buffer (`BufferLength=2`, room for only a wide NUL) to guarantee truncation
+- [ ] Try multiple info types (`SQL_DBMS_NAME`, `SQL_DBMS_VER`, `SQL_SERVER_NAME`) and use the longest one
+
+#### 20.5 Summary Table
+
+| Category | Count | Bug IDs | Root Cause |
+|----------|-------|---------|------------|
+| DM buffer artifact | 1 | B20-01 | DM ANSI↔Wide conversion writes extra bytes |
+| Schema vs catalog confusion | 2 | B20-02, B20-03 | Test passes info as schema; MariaDB uses catalogs |
+| DDL permission failures | 10 | B20-04 to B20-13 | No CREATE TABLE permission in test DB |
+| Unicode truncation | 1 | B20-14 | Buffer too large to trigger truncation |
+
+**Deliverables**:
+- [ ] All 14 odbc-crusher bugs fixed
+- [ ] `mariadb_ODBC_RECOMMENDATIONS.md` documents the 1 actionable driver fix
+- [ ] Re-run against MariaDB driver to verify improved pass rate
+
+---
+
 ## 5. Technical Stack
 | Language | C++17 | Direct ODBC API access, `std::optional`, `std::string_view` |
 | Build | CMake 3.20+ | Industry standard, CTest integration |
@@ -854,6 +951,12 @@ Every test must:
 20. **Failed DDL can corrupt connection-level state in Firebird.** Even with autocommit ON and separate statement handles, a failed `DROP TABLE <nonexistent>` on Firebird can corrupt the connection's transaction state, causing subsequent DDL to fail. The safest approach is: (1) try CREATE first, (2) only DROP+retry if CREATE fails with "table exists," (3) issue `SQLEndTran(SQL_ROLLBACK)` after any DDL failure, (4) consider database-specific DDL like `RECREATE TABLE` for Firebird.
 
 21. **Catalog functions should return empty result sets, not errors, for non-existent objects.** Per ODBC spec, `SQLForeignKeys` called with a non-existent table name should return `SQL_SUCCESS` with an empty result set. Some drivers (Firebird) throw exceptions instead. Tests should handle both behaviors and discover real table names before calling catalog functions.
+
+22. **MySQL/MariaDB uses databases as catalogs, not schemas.** The MariaDB ODBC driver treats the database name as the catalog parameter and rejects non-empty schema parameters with `HYC00`. Tests that pass `information_schema` as a schema argument will fail on MariaDB — it must be passed as the catalog argument instead. When calling `SQLColumns` after discovering a table via `SQLTables`, always propagate the catalog column (column 1) from the `SQLTables` result set.
+
+23. **DDL failures due to permissions produce misleading skip messages.** When `CREATE TABLE` fails because the connected user lacks DDL privileges, tests that depend on test tables skip with generic messages like "Could not prepare parameterized INSERT" — which sounds like a driver bug. The test should capture and report the actual SQLSTATE and error message from the failed DDL to help the user diagnose the real problem (e.g., `42000 — Access denied`).
+
+24. **Sentinel values / buffer overwrite tests may detect DM behavior, not driver behavior.** On Windows and Linux, the Driver Manager intercepts ANSI calls, converts to Wide, calls the driver, then converts back. This conversion process may modify buffer bytes beyond the null terminator. A sentinel-values test that fills unused buffer bytes with a marker and checks for preservation may detect DM-caused overwrites, not driver bugs. To isolate driver behavior, call W-functions directly or accept DM-caused modifications as informational.
 
 ---
 
