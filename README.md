@@ -236,8 +236,6 @@ odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
 
 The mock driver implements a simplified in-memory database. It does **not** support:
 - Arbitrary SQL `SELECT` queries with literal values
-- Stored procedures
-- Complex joins or subqueries
 - Real transaction isolation
 - Cursor scrolling (forward-only cursors only)
 
