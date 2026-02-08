@@ -20,6 +20,9 @@ private:
     bool create_test_table();
     void drop_test_table();
     
+    // Stores the last DDL error message for reporting in skip suggestions
+    std::string last_ddl_error_;
+    
     TestResult test_column_wise_array_binding();
     TestResult test_row_wise_array_binding();
     TestResult test_param_status_array();

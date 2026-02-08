@@ -314,58 +314,48 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
         
         core::OdbcStatement stmt(conn_);
         
-        // Discover a table from the database via SQLTables
-        // then use that table name for SQLColumnsW
+        // Discover a table from the database via SQLTables.
+        // IMPORTANT: Also capture the catalog (column 1) and schema (column 2)
+        // from the SQLTables result, so we can pass them to SQLColumnsW.
+        // On MySQL/MariaDB, the database is the catalog and schema is empty.
+        // Without propagating the catalog, SQLColumns defaults to DATABASE()
+        // which may be a different database than where the table was discovered.
+        std::string table_catalog;
+        std::string table_schema;
         std::string table_name;
-        {
+
+        auto discover_table = [&](const SQLWCHAR* type_filter, SQLSMALLINT type_len) -> bool {
             core::OdbcStatement tbl_stmt(conn_);
-            // Strategy 1: Look for user tables (type = 'TABLE')
             SQLRETURN tbl_ret = SQLTablesW(tbl_stmt.get_handle(),
                 nullptr, 0, nullptr, 0, nullptr, 0,
-                SqlWcharBuf("TABLE").ptr(), SQL_NTS);
-            if (SQL_SUCCEEDED(tbl_ret)) {
-                if (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS) {
-                    char name_buf[128] = {0};
-                    SQLLEN ind = 0;
-                    if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR,
-                                                 name_buf, sizeof(name_buf), &ind))) {
-                        if (ind > 0) table_name = name_buf;
-                    }
-                }
+                const_cast<SQLWCHAR*>(type_filter), type_len);
+            if (!SQL_SUCCEEDED(tbl_ret)) return false;
+            if (SQLFetch(tbl_stmt.get_handle()) != SQL_SUCCESS) return false;
+            
+            char cat_buf[128] = {0};
+            char sch_buf[128] = {0};
+            char name_buf[128] = {0};
+            SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
+            
+            SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
+            SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
+            SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
+            
+            if (name_ind > 0) {
+                table_catalog = (cat_ind > 0) ? std::string(cat_buf) : "";
+                table_schema = (sch_ind > 0) ? std::string(sch_buf) : "";
+                table_name = std::string(name_buf);
+                return true;
             }
-            // Strategy 2: Look for system tables if no user tables found
-            if (table_name.empty()) {
-                SQLFreeStmt(tbl_stmt.get_handle(), SQL_CLOSE);
-                tbl_ret = SQLTablesW(tbl_stmt.get_handle(),
-                    nullptr, 0, nullptr, 0, nullptr, 0,
-                    SqlWcharBuf("SYSTEM TABLE").ptr(), SQL_NTS);
-                if (SQL_SUCCEEDED(tbl_ret)) {
-                    if (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS) {
-                        char name_buf[128] = {0};
-                        SQLLEN ind = 0;
-                        if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR,
-                                                     name_buf, sizeof(name_buf), &ind))) {
-                            if (ind > 0) table_name = name_buf;
-                        }
-                    }
-                }
-            }
-            // Strategy 3: Look for any table type
-            if (table_name.empty()) {
-                SQLFreeStmt(tbl_stmt.get_handle(), SQL_CLOSE);
-                tbl_ret = SQLTablesW(tbl_stmt.get_handle(),
-                    nullptr, 0, nullptr, 0, nullptr, 0,
-                    nullptr, 0);
-                if (SQL_SUCCEEDED(tbl_ret)) {
-                    if (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS) {
-                        char name_buf[128] = {0};
-                        SQLLEN ind = 0;
-                        if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR,
-                                                     name_buf, sizeof(name_buf), &ind))) {
-                            if (ind > 0) table_name = name_buf;
-                        }
-                    }
-                }
+            return false;
+        };
+        
+        // Strategy 1: Look for user tables (type = 'TABLE')
+        if (!discover_table(SqlWcharBuf("TABLE").ptr(), SQL_NTS)) {
+            // Strategy 2: Look for system tables
+            if (!discover_table(SqlWcharBuf("SYSTEM TABLE").ptr(), SQL_NTS)) {
+                // Strategy 3: Look for any table type
+                discover_table(nullptr, 0);
             }
         }
         
@@ -377,12 +367,14 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
             return result;
         }
         
-        // Call SQLColumnsW with the discovered table name
+        // Call SQLColumnsW with the discovered table name AND its catalog/schema
         SQLRETURN ret = SQLColumnsW(stmt.get_handle(),
-            nullptr, 0,       // Catalog
-            nullptr, 0,       // Schema
-            SqlWcharBuf(table_name.c_str()).ptr(), SQL_NTS,  // Table name
-            SqlWcharBuf("%").ptr(), SQL_NTS);               // Column name pattern
+            table_catalog.empty() ? nullptr : SqlWcharBuf(table_catalog.c_str()).ptr(),
+            table_catalog.empty() ? 0 : SQL_NTS,
+            table_schema.empty() ? nullptr : SqlWcharBuf(table_schema.c_str()).ptr(),
+            table_schema.empty() ? 0 : SQL_NTS,
+            SqlWcharBuf(table_name.c_str()).ptr(), SQL_NTS,
+            SqlWcharBuf("%").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -400,6 +392,7 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
         
         std::ostringstream actual;
         actual << "SQLColumnsW returned " << col_count << " column(s) for " << table_name;
+        if (!table_catalog.empty()) actual << " (catalog=" << table_catalog << ")";
         result.actual = actual.str();
         
         if (col_count == 0) {
@@ -434,30 +427,83 @@ TestResult UnicodeTests::test_string_truncation_wchar() {
     try {
         auto start_time = std::chrono::high_resolution_clock::now();
         
-        // Use a tiny buffer for SQLGetInfoW to force truncation
-        SQLWCHAR tiny_buf[2] = {0};  // Only 4 bytes - enough for 1 char + NUL
+        // Step 1: Probe several info types with a full-size buffer to find one
+        // that returns a string long enough to guarantee truncation.
+        // The actual string length varies by driver and server.
+        struct InfoProbe { SQLUSMALLINT type; const char* name; };
+        InfoProbe probes[] = {
+            { SQL_DBMS_NAME, "SQL_DBMS_NAME" },
+            { SQL_DBMS_VER, "SQL_DBMS_VER" },
+            { SQL_SERVER_NAME, "SQL_SERVER_NAME" },
+            { SQL_DRIVER_VER, "SQL_DRIVER_VER" },
+        };
+        
+        SQLUSMALLINT chosen_type = 0;
+        SQLSMALLINT full_byte_len = 0;     // bytes, excluding NUL
+        
+        for (const auto& p : probes) {
+            SQLWCHAR full_buf[256] = {0};
+            SQLSMALLINT len = 0;
+            SQLRETURN probe_ret = SQLGetInfoW(conn_.get_handle(), p.type,
+                                              full_buf, sizeof(full_buf), &len);
+            if (SQL_SUCCEEDED(probe_ret) && len > static_cast<SQLSMALLINT>(sizeof(SQLWCHAR))) {
+                // Need at least 2 characters of data for truncation to be meaningful
+                if (len > full_byte_len) {
+                    full_byte_len = len;
+                    chosen_type = p.type;
+                }
+            }
+        }
+        
+        if (chosen_type == 0 || full_byte_len <= static_cast<SQLSMALLINT>(sizeof(SQLWCHAR))) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "All string info types returned very short values; truncation test inconclusive";
+            auto end_time = std::chrono::high_resolution_clock::now();
+            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+            return result;
+        }
+        
+        // Step 2: Craft a buffer that is exactly half the full data length.
+        // This guarantees truncation.  BufferLength is in bytes for W-functions.
+        // We need room for at least 1 wide char + NUL, but less than the full string.
+        SQLSMALLINT tiny_byte_len = std::max(
+            static_cast<SQLSMALLINT>(2 * sizeof(SQLWCHAR)),   // minimum: 1 char + NUL
+            static_cast<SQLSMALLINT>(full_byte_len / 2));
+        // Ensure it's a multiple of sizeof(SQLWCHAR)
+        tiny_byte_len = static_cast<SQLSMALLINT>(
+            (tiny_byte_len / sizeof(SQLWCHAR)) * sizeof(SQLWCHAR));
+        
+        std::vector<SQLWCHAR> tiny_buf(tiny_byte_len / sizeof(SQLWCHAR), 0);
         SQLSMALLINT needed_len = 0;
         
-        SQLRETURN ret = SQLGetInfoW(conn_.get_handle(), SQL_DBMS_NAME,
-                                    tiny_buf, sizeof(tiny_buf), &needed_len);
+        SQLRETURN ret = SQLGetInfoW(conn_.get_handle(), chosen_type,
+                                    tiny_buf.data(), tiny_byte_len, &needed_len);
         
         if (ret == SQL_SUCCESS_WITH_INFO) {
             // Check that needed_len reports the full string length in bytes
             std::ostringstream actual;
             actual << "Truncation detected: 01004, needed " << needed_len 
-                   << " bytes, buffer was " << sizeof(tiny_buf) << " bytes";
+                   << " bytes, buffer was " << tiny_byte_len 
+                   << " bytes (full=" << full_byte_len << ")";
             result.actual = actual.str();
             
             if (needed_len <= 0) {
                 result.status = TestStatus::FAIL;
                 result.suggestion = "pcbInfoValue should report total bytes needed (excl NUL) even on truncation";
+            } else if (needed_len < tiny_byte_len) {
+                result.status = TestStatus::FAIL;
+                result.suggestion = "pcbInfoValue (" + std::to_string(needed_len) +
+                                   ") is less than buffer size (" + std::to_string(tiny_byte_len) +
+                                   ") despite truncation";
             }
         } else if (ret == SQL_SUCCESS) {
-            // String fit in the tiny buffer - that's OK for very short DBMS names
-            result.actual = "DBMS name fit in 1-char buffer; truncation test inconclusive";
+            // String fit in the tiny buffer — shouldn't happen with our probing
+            result.actual = "String fit in " + std::to_string(tiny_byte_len) +
+                           " byte buffer (full=" + std::to_string(full_byte_len) +
+                           " bytes); truncation test inconclusive";
             result.status = TestStatus::SKIP_INCONCLUSIVE;
         } else {
-            result.actual = "SQLGetInfoW failed unexpectedly";
+            result.actual = "SQLGetInfoW failed unexpectedly (ret=" + std::to_string(ret) + ")";
             result.status = TestStatus::SKIP_INCONCLUSIVE;
         }
         

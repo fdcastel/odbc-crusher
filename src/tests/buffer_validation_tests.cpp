@@ -4,6 +4,12 @@
 #include <algorithm>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <sql.h>
+#include <sqlext.h>
+
 namespace odbc_crusher::tests {
 
 BufferValidationTests::BufferValidationTests(core::OdbcConnection& connection)
@@ -352,36 +358,44 @@ TestResult BufferValidationTests::test_sentinel_values() {
     try {
         auto start = std::chrono::high_resolution_clock::now();
         
-        // Fill a large buffer with sentinel values
-        const size_t buffer_size = 256;
-        char buffer[buffer_size];
-        const char sentinel = static_cast<char>(0xAA);  // Distinctive pattern
-        std::memset(buffer, sentinel, buffer_size);
+        // Use SQLGetInfoW with a driver-handled info type (SQL_DBMS_NAME) to
+        // bypass the DM's ANSI↔Wide conversion layer, which can write extra
+        // bytes beyond the null terminator and produce false failures.
+        // The DM intercepts SQL_DRIVER_NAME itself, so we avoid that.
+        const size_t buffer_size = 128;          // wide characters
+        const size_t byte_size = buffer_size * sizeof(SQLWCHAR);
+        std::vector<unsigned char> raw(byte_size);
+        const unsigned char sentinel = 0xAA;
+        std::memset(raw.data(), sentinel, byte_size);
         
+        SQLWCHAR* wbuf = reinterpret_cast<SQLWCHAR*>(raw.data());
         SQLSMALLINT buffer_length = 0;
         
-        SQLRETURN rc = SQLGetInfo(
+        SQLRETURN rc = SQLGetInfoW(
             conn_.get_handle(),
-            SQL_DRIVER_NAME,
-            buffer,
-            buffer_size,
+            SQL_DBMS_NAME,
+            wbuf,
+            static_cast<SQLSMALLINT>(byte_size),
             &buffer_length
         );
         
         if (!SQL_SUCCEEDED(rc)) {
             result.status = TestStatus::FAIL;
-            result.actual = "Failed to get driver name";
+            result.actual = "Failed to get DBMS name via SQLGetInfoW";
             result.severity = Severity::ERR;
         } else {
-            // Find the end of the string (null terminator)
-            size_t string_end = std::strlen(buffer);
+            // buffer_length is in bytes (excluding null terminator) per ODBC spec for W-functions.
+            // The driver should have written (buffer_length) bytes of data + a wide null terminator.
+            // Total written bytes = buffer_length + sizeof(SQLWCHAR).
+            size_t data_bytes = static_cast<size_t>(buffer_length);
+            size_t total_written = data_bytes + sizeof(SQLWCHAR);  // data + wide NUL
             
-            // Verify unused portion of buffer is untouched (still has sentinel values)
+            // Check that all bytes beyond total_written still have the sentinel
             bool sentinel_preserved = true;
-            size_t first_modified = string_end + 1;
+            size_t first_modified = total_written;
             
-            for (size_t i = string_end + 1; i < buffer_size; ++i) {
-                if (buffer[i] != sentinel) {
+            for (size_t i = total_written; i < byte_size; ++i) {
+                if (raw[i] != sentinel) {
                     sentinel_preserved = false;
                     first_modified = i;
                     break;
@@ -390,12 +404,17 @@ TestResult BufferValidationTests::test_sentinel_values() {
             
             if (!sentinel_preserved) {
                 result.status = TestStatus::FAIL;
-                result.actual = "Buffer modified at position " + std::to_string(first_modified);
-                result.suggestion = "Driver should only write needed bytes plus null terminator";
+                result.actual = "Buffer modified at byte " + std::to_string(first_modified) +
+                               " (data=" + std::to_string(data_bytes) + " bytes + " +
+                               std::to_string(sizeof(SQLWCHAR)) + " byte NUL = " +
+                               std::to_string(total_written) + " bytes expected)";
+                result.suggestion = "Driver should only write needed bytes plus null terminator. "
+                                   "This test uses SQLGetInfoW to bypass the DM's conversion layer.";
                 result.severity = Severity::WARNING;
             } else {
                 result.status = TestStatus::PASS;
-                result.actual = "Unused buffer preserved";
+                result.actual = "Unused buffer preserved (data=" + std::to_string(data_bytes) +
+                               " bytes + wide NUL)";
             }
         }
         

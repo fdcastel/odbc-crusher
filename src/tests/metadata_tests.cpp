@@ -91,36 +91,88 @@ TestResult MetadataTests::test_columns_catalog() {
         
         core::OdbcStatement stmt(conn_);
         
-        // Try to get columns from a known system table
-        // Different databases have different system tables
-        std::vector<std::pair<std::string, std::string>> test_tables = {
-            {"", "RDB$DATABASE"},      // Firebird system table
-            {"information_schema", "TABLES"},  // MySQL system table
-            {"sys", "tables"},         // SQL Server system table
-            {"", "CUSTOMERS"},         // Mock/test driver table
-            {"", "USERS"}             // Mock/test driver table
+        // Strategy 1: Discover a real table via SQLTables, capturing both
+        // catalog and table name, then query SQLColumns with both.
+        // This avoids hard-coding schema/catalog assumptions that break on
+        // drivers that use catalogs (MySQL/MariaDB) vs schemas (SQL Server).
+        struct DiscoveredTable {
+            std::string catalog;
+            std::string schema;
+            std::string name;
+        };
+        std::vector<DiscoveredTable> discovered;
+        
+        {
+            core::OdbcStatement tbl_stmt(conn_);
+            SQLRETURN tbl_ret = SQLTables(
+                tbl_stmt.get_handle(),
+                nullptr, 0,   // Catalog (all)
+                nullptr, 0,   // Schema (all)
+                nullptr, 0,   // Table (all)
+                (SQLCHAR*)"TABLE", SQL_NTS  // Type
+            );
+            if (SQL_SUCCEEDED(tbl_ret)) {
+                char cat_buf[128] = {0};
+                char sch_buf[128] = {0};
+                char name_buf[128] = {0};
+                SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
+                while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                       && discovered.size() < 5) {
+                    cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
+                    SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
+                    SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
+                    SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
+                    if (name_ind > 0) {
+                        discovered.push_back({
+                            cat_ind > 0 ? std::string(cat_buf) : "",
+                            sch_ind > 0 ? std::string(sch_buf) : "",
+                            std::string(name_buf)
+                        });
+                    }
+                }
+            }
+        }
+        
+        // Strategy 2: Also try well-known system tables / mock tables with
+        // different catalog/schema arrangements.
+        // For MySQL/MariaDB: 'information_schema' is a catalog, not a schema.
+        // For SQL Server: 'sys' is a schema.
+        // For Firebird: no catalog/schema, just table name.
+        struct StaticTable {
+            std::string catalog;
+            std::string schema;
+            std::string name;
+        };
+        std::vector<StaticTable> static_tables = {
+            {"information_schema", "", "TABLES"},       // MySQL/MariaDB (database=catalog)
+            {"", "information_schema", "TABLES"},       // Fallback (schema-based)
+            {"", "sys", "tables"},                      // SQL Server
+            {"", "", "RDB$DATABASE"},                   // Firebird
+            {"", "", "CUSTOMERS"},                      // Mock driver
+            {"", "", "USERS"},                          // Mock driver
         };
         
         bool success = false;
         int column_count = 0;
         
-        for (const auto& [schema, table] : test_tables) {
+        // Try discovered tables first (these have the correct catalog/schema)
+        for (const auto& dt : discovered) {
             try {
                 stmt.recycle();
                 SQLRETURN ret = SQLColumns(
                     stmt.get_handle(),
-                    nullptr, 0,                                    // Catalog
-                    schema.empty() ? nullptr : (SQLCHAR*)schema.c_str(),
-                    schema.empty() ? 0 : SQL_NTS,                 // Schema
-                    (SQLCHAR*)table.c_str(), SQL_NTS,            // Table
-                    nullptr, 0                                    // Column (all)
+                    dt.catalog.empty() ? nullptr : (SQLCHAR*)dt.catalog.c_str(),
+                    dt.catalog.empty() ? 0 : SQL_NTS,
+                    dt.schema.empty() ? nullptr : (SQLCHAR*)dt.schema.c_str(),
+                    dt.schema.empty() ? 0 : SQL_NTS,
+                    (SQLCHAR*)dt.name.c_str(), SQL_NTS,
+                    nullptr, 0
                 );
                 
                 if (SQL_SUCCEEDED(ret)) {
                     while (stmt.fetch() && column_count < 50) {
                         column_count++;
                     }
-                    
                     if (column_count > 0) {
                         success = true;
                         break;
@@ -128,6 +180,37 @@ TestResult MetadataTests::test_columns_catalog() {
                 }
             } catch (const core::OdbcError&) {
                 continue;
+            }
+        }
+        
+        // If discovered tables didn't work, try static table list
+        if (!success) {
+            for (const auto& st : static_tables) {
+                try {
+                    stmt.recycle();
+                    column_count = 0;
+                    SQLRETURN ret = SQLColumns(
+                        stmt.get_handle(),
+                        st.catalog.empty() ? nullptr : (SQLCHAR*)st.catalog.c_str(),
+                        st.catalog.empty() ? 0 : SQL_NTS,
+                        st.schema.empty() ? nullptr : (SQLCHAR*)st.schema.c_str(),
+                        st.schema.empty() ? 0 : SQL_NTS,
+                        (SQLCHAR*)st.name.c_str(), SQL_NTS,
+                        nullptr, 0
+                    );
+                    
+                    if (SQL_SUCCEEDED(ret)) {
+                        while (stmt.fetch() && column_count < 50) {
+                            column_count++;
+                        }
+                        if (column_count > 0) {
+                            success = true;
+                            break;
+                        }
+                    }
+                } catch (const core::OdbcError&) {
+                    continue;
+                }
             }
         }
         

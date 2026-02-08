@@ -24,6 +24,21 @@ bool ArrayParamTests::create_test_table() {
         SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                           (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
 
+        // Strategy 0: Check if the test table already exists from a prior run.
+        // This avoids needing DDL privileges when the table is already there.
+        {
+            try {
+                core::OdbcStatement probe(conn_);
+                probe.execute("SELECT 1 FROM ODBC_TEST_ARRAY WHERE 1=0");
+                // Table exists — no DDL needed
+                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                  (SQLPOINTER)(intptr_t)old_ac, 0);
+                return true;
+            } catch (...) {
+                // Table doesn't exist — try to create it
+            }
+        }
+
         // Strategy: CREATE first.  If it fails with "table already exists",
         // DROP + rollback + retry CREATE.  This avoids corrupting the
         // connection-level transaction state on Firebird when DROP fails for
@@ -41,6 +56,10 @@ bool ArrayParamTests::create_test_table() {
                 SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                                   (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
+            } catch (const core::OdbcError& e) {
+                last_ddl_error_ = e.format_diagnostics();
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+                continue;
             } catch (...) {
                 SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
                 continue;
@@ -62,6 +81,10 @@ bool ArrayParamTests::create_test_table() {
                 SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                                   (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
+            } catch (const core::OdbcError& e) {
+                last_ddl_error_ = e.format_diagnostics();
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+                continue;
             } catch (...) {
                 SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
                 continue;
@@ -98,6 +121,69 @@ std::vector<TestResult> ArrayParamTests::run() {
     // Create test table once for all array-param tests
     bool table_ok = create_test_table();
     
+    // If table creation failed, short-circuit all tests with a clear message
+    // explaining the root cause (DDL error) instead of letting each test
+    // independently fail with the misleading "Could not prepare parameterized INSERT".
+    if (!table_ok) {
+        std::string base_msg = "Could not create test table for array parameter tests";
+        std::string suggestion = "CREATE TABLE privilege is required on the connected database. ";
+        if (!last_ddl_error_.empty()) {
+            suggestion += "DDL error: " + last_ddl_error_;
+        }
+        
+        auto make_skip = [&](const char* test_name, const char* function,
+                             const char* expected, ConformanceLevel level,
+                             const char* spec_ref) -> TestResult {
+            TestResult r = make_result(test_name, function,
+                TestStatus::SKIP_INCONCLUSIVE, expected, base_msg,
+                Severity::INFO, level, spec_ref);
+            r.suggestion = suggestion;
+            return r;
+        };
+        
+        results.push_back(make_skip("test_column_wise_array_binding",
+            "SQLSetStmtAttr/SQLBindParameter/SQLExecute",
+            "Column-wise array binding with PARAMSET_SIZE=3 executes successfully",
+            ConformanceLevel::LEVEL_1,
+            "ODBC 3.x Arrays of Parameter Values: Column-wise binding"));
+        results.push_back(make_skip("test_row_wise_array_binding",
+            "SQLSetStmtAttr/SQLBindParameter/SQLExecute",
+            "Row-wise array binding with struct layout executes successfully",
+            ConformanceLevel::LEVEL_1,
+            "ODBC 3.x Arrays of Parameter Values: Row-wise binding"));
+        results.push_back(make_skip("test_param_status_array",
+            "SQLSetStmtAttr/SQLExecute",
+            "SQL_ATTR_PARAM_STATUS_PTR is populated with SQL_PARAM_SUCCESS for each row",
+            ConformanceLevel::LEVEL_1,
+            "ODBC 3.x Using Arrays of Parameters: Parameter status array"));
+        results.push_back(make_skip("test_params_processed_count",
+            "SQLSetStmtAttr/SQLExecute",
+            "SQL_ATTR_PARAMS_PROCESSED_PTR reports correct count after array execution",
+            ConformanceLevel::LEVEL_1,
+            "ODBC 3.x Using Arrays of Parameters: SQL_ATTR_PARAMS_PROCESSED_PTR"));
+        results.push_back(make_skip("test_array_with_null_values",
+            "SQLBindParameter/SQLExecute",
+            "Array binding with SQL_NULL_DATA indicators in some rows executes successfully",
+            ConformanceLevel::LEVEL_1,
+            "ODBC 3.x Arrays of Parameter Values: NULL indicators in arrays"));
+        results.push_back(make_skip("test_param_operation_array",
+            "SQLSetStmtAttr/SQLExecute",
+            "SQL_ATTR_PARAM_OPERATION_PTR skips rows marked SQL_PARAM_IGNORE, status=SQL_PARAM_UNUSED",
+            ConformanceLevel::LEVEL_1,
+            "ODBC 3.x Using Arrays of Parameters: SQL_ATTR_PARAM_OPERATION_PTR"));
+        results.push_back(make_skip("test_paramset_size_one",
+            "SQLSetStmtAttr/SQLExecute",
+            "SQL_ATTR_PARAMSET_SIZE=1 behaves like normal single-parameter execution",
+            ConformanceLevel::CORE,
+            "ODBC 3.x SQLSetStmtAttr: SQL_ATTR_PARAMSET_SIZE default is 1"));
+        results.push_back(make_skip("test_array_partial_error",
+            "SQLSetStmtAttr/SQLExecute",
+            "Partial failure in array execution returns SQL_SUCCESS_WITH_INFO with mixed status",
+            ConformanceLevel::LEVEL_1,
+            "ODBC 3.x Using Arrays of Parameters: Error Processing"));
+        
+        return results;
+    }
     results.push_back(test_column_wise_array_binding());
     results.push_back(test_row_wise_array_binding());
     results.push_back(test_param_status_array());

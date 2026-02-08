@@ -760,9 +760,9 @@ The Firebird driver's `returnStringInfo` and `setString` both correctly set `*re
 | B20-01 | Sentinel Values Test | `buffer_validation_tests.cpp` | DM ANSI↔Wide conversion writes extra bytes; test blames driver incorrectly |
 
 **Fix Strategy**:
-- [ ] Use `SQLGetInfoW` directly to test the driver's buffer behavior, bypassing the DM's conversion layer
-- [ ] Or mark sentinel values test as INFO/WARNING instead of FAIL when extra bytes are written, noting DM involvement
-- [ ] Or test with a driver-handled info type and compare behavior with/without DM
+- [x] Use `SQLGetInfoW` directly with `SQL_DBMS_NAME` to test the driver's buffer behavior, bypassing the DM's ANSI↔Wide conversion layer
+- [x] Use byte-level sentinel checking that accounts for wide character boundaries
+- [x] Test with a driver-handled info type (`SQL_DBMS_NAME` instead of `SQL_DRIVER_NAME`)
 
 #### 20.2 Catalog/Metadata Tests — Schema vs Catalog Confusion (2 tests)
 
@@ -776,8 +776,8 @@ Similarly, `test_columns_unicode_patterns` discovers a table name via `SQLTables
 | B20-03 | `test_columns_unicode_patterns` | `unicode_tests.cpp` | Discovers table from any DB via `SQLTables` but doesn't propagate catalog to `SQLColumnsW` |
 
 **Fix Strategy**:
-- [ ] `test_columns_catalog`: Discover real tables via `SQLTables` first; pass `information_schema` as catalog, not schema
-- [ ] `test_columns_unicode_patterns`: Capture the catalog column (column 1) from `SQLTables` result and pass it to `SQLColumnsW`
+- [x] `test_columns_catalog`: Discover real tables via `SQLTables` first (capture catalog, schema, name); try `information_schema` as catalog; static table list includes both catalog-based and schema-based arrangements
+- [x] `test_columns_unicode_patterns`: Capture catalog (column 1) and schema (column 2) from `SQLTables` result and propagate both to `SQLColumnsW`
 
 #### 20.3 DDL Permission Failures — Transaction & Array Tests (10 tests)
 
@@ -799,10 +799,11 @@ The MariaDB driver **fully supports** both transactions and array parameters. Tr
 | B20-13 | `test_array_partial_error` | `array_param_tests.cpp` | Same |
 
 **Fix Strategy**:
-- [ ] Capture and report the actual DDL error (SQLSTATE + message) in the skip suggestion, so users know the root cause
-- [ ] Try `SELECT 1 FROM ODBC_TEST_TXN LIMIT 1` before CREATE — reuse existing table from a prior run
-- [ ] Fall back to DDL-free transaction tests (verify `SQLEndTran` returns `SQL_SUCCESS` without data persistence check)
-- [ ] Document in the test suggestion: "CREATE TABLE privilege is required on the connected database for this test"
+- [x] Capture and report the actual DDL error (SQLSTATE + message) in the skip suggestion via `last_ddl_error_` member
+- [x] Try `SELECT 1 FROM ODBC_TEST_TXN/ODBC_TEST_ARRAY WHERE 1=0` before CREATE — reuse existing table from a prior run
+- [x] Fall back to DDL-free transaction tests: verify `SQLEndTran(SQL_COMMIT/SQL_ROLLBACK)` returns `SQL_SUCCESS` even without a test table (PASS with suggestion about DDL privileges)
+- [x] Short-circuit all 8 array param tests immediately when table creation fails, with a single clear message explaining the DDL error
+- [x] Document in the test suggestion: "CREATE TABLE privilege is required on the connected database"
 
 #### 20.4 Unicode Truncation Test — Buffer Too Large (1 test)
 
@@ -813,9 +814,9 @@ The MariaDB driver **fully supports** both transactions and array parameters. Tr
 | B20-14 | `test_string_truncation_wchar` | `unicode_tests.cpp` | Buffer too large or DM behavior prevents truncation; test inconclusive |
 
 **Fix Strategy**:
-- [ ] Call `SQLGetInfoW` with a full-size buffer first to learn the actual string length, then craft a buffer guaranteed to be too small
-- [ ] Use a 1-byte buffer (`BufferLength=2`, room for only a wide NUL) to guarantee truncation
-- [ ] Try multiple info types (`SQL_DBMS_NAME`, `SQL_DBMS_VER`, `SQL_SERVER_NAME`) and use the longest one
+- [x] Probe 4 info types (`SQL_DBMS_NAME`, `SQL_DBMS_VER`, `SQL_SERVER_NAME`, `SQL_DRIVER_VER`) with full-size buffer to learn actual string lengths; use the longest one
+- [x] Craft buffer at exactly half the full data length (guaranteed truncation for strings > 2 chars)
+- [x] Ensure buffer size is a multiple of `sizeof(SQLWCHAR)` and at least `2 * sizeof(SQLWCHAR)` (1 char + NUL)
 
 #### 20.5 Summary Table
 
@@ -827,9 +828,18 @@ The MariaDB driver **fully supports** both transactions and array parameters. Tr
 | Unicode truncation | 1 | B20-14 | Buffer too large to trigger truncation |
 
 **Deliverables**:
-- [ ] All 14 odbc-crusher bugs fixed
-- [ ] `mariadb_ODBC_RECOMMENDATIONS.md` documents the 1 actionable driver fix
+- [x] All 14 odbc-crusher bugs fixed
+- [x] `mariadb_ODBC_RECOMMENDATIONS.md` documents the 1 actionable driver fix
 - [ ] Re-run against MariaDB driver to verify improved pass rate
+
+**Changes Made**:
+- [x] `buffer_validation_tests.cpp`: Sentinel test uses `SQLGetInfoW` with `SQL_DBMS_NAME` and byte-level sentinel checking
+- [x] `metadata_tests.cpp`: `test_columns_catalog` discovers tables via `SQLTables` with catalog/schema propagation; static fallback list includes catalog-based and schema-based arrangements
+- [x] `unicode_tests.cpp`: `test_columns_unicode_patterns` captures catalog+schema from `SQLTables` and passes them to `SQLColumnsW`; `test_string_truncation_wchar` probes multiple info types and crafts guaranteed-too-small buffer
+- [x] `transaction_tests.cpp/hpp`: `create_test_table()` tries `SELECT` probe first; captures DDL errors in `last_ddl_error_`; DDL-free fallback verifies `SQLEndTran` is callable
+- [x] `array_param_tests.cpp/hpp`: `create_test_table()` tries `SELECT` probe first; captures DDL errors; `run()` short-circuits all 8 tests with clear DDL error message when table creation fails
+- [x] Mock driver: 131/131 (100%) — unchanged
+- [x] Unit tests: 60/60 (100%) — pass on all platforms
 
 ---
 

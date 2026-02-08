@@ -23,6 +23,9 @@ private:
     // Helper to create test table
     bool create_test_table();
     void drop_test_table();
+    
+    // Stores the last DDL error message for reporting in skip suggestions
+    std::string last_ddl_error_;
 };
 
 } // namespace odbc_crusher::tests
