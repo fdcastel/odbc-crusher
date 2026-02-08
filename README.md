@@ -139,6 +139,110 @@ The binary is at `build/src/Release/odbc-crusher.exe` (Windows) or `build/src/od
 ctest --test-dir build -C Release --output-on-failure
 ```
 
+### Build and Run with Mock ODBC Driver
+
+The project includes a **Mock ODBC Driver** (in `mock-driver/`) for testing without requiring a real database. This is useful for CI/CD pipelines and development.
+
+#### 1. Build the Mock Driver
+
+```bash
+# Windows
+cd mock-driver
+cmake -B build
+cmake --build build --config Release
+cd ..
+
+# Linux / macOS
+cd mock-driver
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+cd ..
+```
+
+The compiled driver is at:
+- Windows: `mock-driver/build/src/Release/mockodbc.dll`
+- Linux: `mock-driver/build/src/libmockodbc.so`
+- macOS: `mock-driver/build/src/libmockodbc.dylib`
+
+#### 2. Register the Driver
+
+**Windows**:
+```powershell
+# Use ODBC Administrator (odbcad32.exe) or set registry manually:
+# HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\Mock ODBC Driver
+# Driver = C:\path\to\mockodbc.dll
+```
+
+**Linux/macOS**:
+```bash
+# Add to /etc/odbcinst.ini or ~/.odbc.ini:
+# [Mock ODBC Driver]
+# Description = Mock ODBC Driver for Testing
+# Driver = /path/to/libmockodbc.so
+```
+
+#### 3. Run ODBC Crusher with the Mock Driver
+
+```bash
+# Windows
+odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;"
+
+# Linux / macOS
+odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;"
+```
+
+#### 4. Configuration Options
+
+The mock driver supports these connection string parameters:
+
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `Mode` | Success, Failure, Random | Overall behavior (Success = normal operation, Failure = all operations fail) |
+| `Catalog` | Default, Empty, Large | Mock schema preset (Default has USERS/ORDERS/PRODUCTS tables) |
+| `ResultSetSize` | Number | Number of rows to return in result sets (default: 100) |
+| `FailOn` | Function names | Comma-separated list of functions to fail (e.g., `FailOn=SQLExecute,SQLFetch`) |
+| `ErrorCode` | SQLSTATE | Error code to return for failures (default: HY000) |
+
+#### 5. Example Usage
+
+```bash
+# Test basic functionality
+odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -v
+
+# Test with larger result sets
+odbc-crusher "Driver={Mock ODBC Driver};ResultSetSize=1000;" -o json -f report.json
+
+# Test error handling (all operations fail)
+odbc-crusher "Driver={Mock ODBC Driver};Mode=Failure;" -v
+
+# Test specific function failures
+odbc-crusher "Driver={Mock ODBC Driver};FailOn=SQLPrepare,SQLExecute;ErrorCode=42000;" -v
+
+# Use JSON output for CI/CD
+odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
+```
+
+#### 6. What the Mock Driver Supports
+
+- **All core ODBC 3.x functions** (SQLConnect, SQLPrepare, SQLExecute, etc.)
+- **Catalog functions** (SQLTables, SQLColumns, SQLStatistics, etc.)
+- **Data types** (Integer, String, Decimal, Date/Time, NULL, GUID, Binary)
+- **Transactions** (Autocommit, commit/rollback, isolation levels)
+- **Metadata** (Type information, function support, driver attributes)
+- **Error diagnostics** (SQLGetDiagRec with SQLSTATE codes)
+- **Unicode** (W-variant entry points: SQLConnectW, SQLColumnsW, etc.)
+
+#### Mock Driver Limitations
+
+The mock driver implements a simplified in-memory database. It does **not** support:
+- Arbitrary SQL `SELECT` queries with literal values
+- Stored procedures
+- Complex joins or subqueries
+- Real transaction isolation
+- Cursor scrolling (forward-only cursors only)
+
+For testing these features, use a real database (Firebird, MySQL, PostgreSQL, etc.) instead.
+
 ## CLI Reference
 
 ```
