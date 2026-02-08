@@ -843,6 +843,72 @@ The MariaDB driver **fully supports** both transactions and array parameters. Tr
 
 ---
 
+### Phase 21: Real-Driver Validation Bugs — Round 4 (SQLite Analysis)
+
+**Goal**: Fix odbc-crusher bugs discovered by running v0.4.1 against the SQLite ODBC driver (sqlite3odbc.so v0.99991 / ODBC 3.00 / SQLite 3.45.1) and cross-referencing each non-passing result against the driver's C source code (`tmp/external/sqliteodbc/sqlite3odbc.c`).
+
+**Discovery Date**: February 8, 2026  
+**Analysis Method**: Ran odbc-crusher against SQLite ODBC driver on Linux, then read the driver's full C source code to verify each failure. Documented genuine driver issues in `sqlite_ODBC_RECOMMENDATIONS.md`.
+
+**Summary**: 116/131 passed (88.5%), 7 failed, 8 skipped. Of these 15 non-passing results:
+- **9 are genuine driver deficiencies** (documented in `sqlite_ODBC_RECOMMENDATIONS.md`)
+- **2 are correctly-reported optional features** (async execution Level 2, connection timeout)
+- **3 are legitimate skips** (empty test database, driver truncation edge case)
+- **1 is an odbc-crusher bug** (test lacks SQLite-compatible query)
+
+#### 21.1 Date/Time Types Test — Missing SQLite-Compatible Query (1 test)
+
+**Root Cause**: `test_date_time_types` in `datatype_tests.cpp` tries three SQL patterns for date/time testing:
+1. `SELECT CAST('2026-02-05' AS DATE) FROM RDB$DATABASE` (Firebird)
+2. `SELECT CAST('2026-02-05' AS DATE)` (MySQL)
+3. `SELECT DATE '2026-02-05'` (SQL-92 typed literal)
+
+None of these work with SQLite. SQLite has no native DATE type — `CAST(... AS DATE)` falls through to NUMERIC affinity, and SQL-92 typed literals are not supported. The sqlite ODBC driver **does** handle date/time types correctly (mapping `SQL_TYPE_DATE`, `SQL_TYPE_TIME`, `SQL_TYPE_TIMESTAMP` based on column type affinity), but the test queries never produce a column with date affinity.
+
+**Evidence**: The driver's source code correctly handles date/time type mapping in `mapsqltype()` and `mapdeftype()`, converting column type names "date", "time", "timestamp" to the appropriate ODBC 3.x SQL types. However, SQLite's type system is based on column affinity from CREATE TABLE, not from CAST expressions.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B21-01 | `test_date_time_types` | `datatype_tests.cpp` | No SQLite-compatible date/time query pattern |
+
+**Fix Strategy**:
+- [ ] Add a SQLite-compatible query: create a temporary table with DATE/TIME/TIMESTAMP columns, insert a value, then query it — this gives the sqlite ODBC driver the type affinity it needs
+- [ ] Alternatively, add `"SELECT '2026-02-05' AS d"` and try `SQLGetData` with `SQL_C_TYPE_DATE` target type (text→date conversion)
+- [ ] Fall back to `SQL_C_CHAR` retrieval and validate date string format if structured type retrieval fails
+
+#### 21.2 Correctly Identified Driver Deficiencies (No odbc-crusher bug)
+
+The following failures are **correct** — the SQLite ODBC driver has genuine conformance gaps:
+
+| Test | Status | Driver Issue | Details |
+|------|--------|-------------|---------|
+| `test_copy_desc` | FAIL | `SQLCopyDesc` unimplemented (returns `SQL_ERROR` unconditionally) | Core conformance function |
+| `test_execdirect_syntax_error` | FAIL | All errors mapped to `HY000`; never returns `42000` | No SQLSTATE differentiation |
+| `test_setconnattr_invalid_attr` | FAIL | Default case returns `SQL_SUCCESS_WITH_INFO`/`01S02` instead of `SQL_ERROR`/`HY092` | Silently accepts invalid attributes |
+| `test_param_status_array` | FAIL | `parm_status` stored but never written in `drvexecute()` | Array status uninitialized |
+| `test_param_operation_array` | FAIL | `parm_oper` stored but never checked; `SQL_PARAM_IGNORE` not honored | All rows always executed |
+| `test_paramset_size_one` | FAIL | Status entry remains 0xFFFF (same root cause as `test_param_status_array`) | |
+| `test_array_partial_error` | FAIL | Status entries remain 0xFFFF (same root cause) | |
+| `test_ird_after_prepare` | SKIP | `SQLGetDescField` returns `SQL_ERROR` ("not implemented") | Descriptor API unimplemented |
+| `test_apd_fields` | SKIP | `SQLSetDescField` returns `SQL_ERROR` ("not implemented") | Descriptor API unimplemented |
+
+#### 21.3 Correctly Skipped Tests (No bug)
+
+| Test | Status | Reason |
+|------|--------|--------|
+| `test_connection_timeout` | SKIP | `SQL_ATTR_CONNECTION_TIMEOUT` not implemented; optional for embedded DB |
+| `test_async_capability` | SKIP | Level 2 optional; SQLite is single-threaded embedded |
+| `test_columns_catalog` | SKIP | Empty test database (`/tmp/test.db`) — no tables to discover |
+| `test_columns_unicode_patterns` | SKIP | Same — empty test database |
+| `test_string_truncation_wchar` | SKIP | All probed info strings are short; driver's `strmak` macro has truncation length bug |
+| `test_date_time_types` | SKIP | odbc-crusher bug B21-01 (see above) |
+
+**Deliverables**:
+- [x] `sqlite_ODBC_RECOMMENDATIONS.md` documents 7 actionable driver fixes
+- [ ] B21-01: Add SQLite-compatible date/time query to `test_date_time_types`
+
+---
+
 ## 5. Technical Stack
 | Language | C++17 | Direct ODBC API access, `std::optional`, `std::string_view` |
 | Build | CMake 3.20+ | Industry standard, CTest integration |
