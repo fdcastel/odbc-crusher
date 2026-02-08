@@ -3,6 +3,7 @@
 #include <cctype>
 #include <sstream>
 #include <regex>
+#include <cmath>
 
 namespace mock_odbc {
 
@@ -43,6 +44,315 @@ std::string generate_product_name(int index) {
     return std::string(products[index % 14]) + " " + std::to_string(index);
 }
 
+// Count '?' parameter markers in SQL (outside of quoted strings)
+int count_param_markers(const std::string& sql) {
+    int count = 0;
+    bool in_single_quote = false;
+    bool in_double_quote = false;
+    for (size_t i = 0; i < sql.length(); ++i) {
+        char c = sql[i];
+        if (c == '\'' && !in_double_quote) {
+            if (in_single_quote && i + 1 < sql.length() && sql[i + 1] == '\'') {
+                ++i;
+                continue;
+            }
+            in_single_quote = !in_single_quote;
+        } else if (c == '"' && !in_single_quote) {
+            in_double_quote = !in_double_quote;
+        } else if (c == '?' && !in_single_quote && !in_double_quote) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// Parse a SQL type name to SQL type constant
+SQLSMALLINT parse_sql_type(const std::string& type_str, SQLULEN& column_size, SQLSMALLINT& decimal_digits) {
+    std::string upper = to_upper(trim(type_str));
+    column_size = 255;
+    decimal_digits = 0;
+
+    auto paren_pos = upper.find('(');
+    std::string base_type = upper;
+    if (paren_pos != std::string::npos) {
+        base_type = trim(upper.substr(0, paren_pos));
+        auto close_paren = upper.find(')', paren_pos);
+        if (close_paren != std::string::npos) {
+            std::string params = upper.substr(paren_pos + 1, close_paren - paren_pos - 1);
+            auto comma = params.find(',');
+            if (comma != std::string::npos) {
+                try { column_size = std::stoul(trim(params.substr(0, comma))); } catch (...) {}
+                try { decimal_digits = static_cast<SQLSMALLINT>(std::stoi(trim(params.substr(comma + 1)))); } catch (...) {}
+            } else {
+                try { column_size = std::stoul(trim(params)); } catch (...) {}
+            }
+        }
+    }
+
+    if (base_type == "INTEGER" || base_type == "INT" || base_type == "SIGNED") { column_size = 10; return SQL_INTEGER; }
+    if (base_type == "SMALLINT") { column_size = 5; return SQL_SMALLINT; }
+    if (base_type == "BIGINT") { column_size = 19; return SQL_BIGINT; }
+    if (base_type == "TINYINT") { column_size = 3; return SQL_TINYINT; }
+    if (base_type == "DECIMAL" || base_type == "NUMERIC") { if (paren_pos == std::string::npos) { column_size = 18; decimal_digits = 2; } return SQL_DECIMAL; }
+    if (base_type == "REAL") { column_size = 7; return SQL_REAL; }
+    if (base_type == "FLOAT") { column_size = 15; return SQL_FLOAT; }
+    if (base_type == "DOUBLE" || base_type == "DOUBLE PRECISION") { column_size = 15; return SQL_DOUBLE; }
+    if (base_type == "VARCHAR" || base_type == "CHAR VARYING") { return SQL_VARCHAR; }
+    if (base_type == "CHAR" || base_type == "CHARACTER") { return SQL_CHAR; }
+    if (base_type == "LONGVARCHAR" || base_type == "TEXT" || base_type == "CLOB") { column_size = 65535; return SQL_LONGVARCHAR; }
+    if (base_type == "NVARCHAR" || base_type == "NATIONAL VARCHAR") { return SQL_WVARCHAR; }
+    if (base_type == "NCHAR" || base_type == "NATIONAL CHAR") { return SQL_WCHAR; }
+    if (base_type == "BINARY") { return SQL_BINARY; }
+    if (base_type == "VARBINARY") { return SQL_VARBINARY; }
+    if (base_type == "LONGVARBINARY" || base_type == "BLOB") { column_size = 65535; return SQL_LONGVARBINARY; }
+    if (base_type == "DATE") { column_size = 10; return SQL_TYPE_DATE; }
+    if (base_type == "TIME") { column_size = 8; return SQL_TYPE_TIME; }
+    if (base_type == "TIMESTAMP") { column_size = 26; return SQL_TYPE_TIMESTAMP; }
+    if (base_type == "BIT" || base_type == "BOOLEAN") { column_size = 1; return SQL_BIT; }
+    if (base_type == "UNIQUEIDENTIFIER" || base_type == "UUID" || base_type == "GUID") { column_size = 36; return SQL_GUID; }
+    return SQL_VARCHAR;
+}
+
+// Split expression list by commas, respecting parentheses and quotes
+std::vector<std::string> split_expressions(const std::string& str) {
+    std::vector<std::string> result;
+    int paren_depth = 0;
+    bool in_single_quote = false;
+    bool in_double_quote = false;
+    std::string current;
+
+    for (size_t i = 0; i < str.length(); ++i) {
+        char c = str[i];
+        if (c == '\'' && !in_double_quote) {
+            if (in_single_quote && i + 1 < str.length() && str[i + 1] == '\'') {
+                current += c;
+                current += str[++i];
+                continue;
+            }
+            in_single_quote = !in_single_quote;
+        } else if (c == '"' && !in_single_quote) {
+            in_double_quote = !in_double_quote;
+        } else if (c == '(' && !in_single_quote && !in_double_quote) {
+            ++paren_depth;
+        } else if (c == ')' && !in_single_quote && !in_double_quote) {
+            --paren_depth;
+        } else if (c == ',' && paren_depth == 0 && !in_single_quote && !in_double_quote) {
+            result.push_back(trim(current));
+            current.clear();
+            continue;
+        }
+        current += c;
+    }
+    if (!current.empty()) {
+        result.push_back(trim(current));
+    }
+    return result;
+}
+
+// Parse a literal value from SQL expression
+ParsedQuery::LiteralExpr parse_literal_expression(const std::string& expr_str) {
+    ParsedQuery::LiteralExpr lit;
+    std::string trimmed = trim(expr_str);
+    std::string upper = to_upper(trimmed);
+
+    // Strip trailing alias "AS name" at depth 0 for the purpose of value parsing
+    // We handle alias extraction separately in the caller
+
+    // CAST(expr AS type)
+    if (upper.find("CAST(") == 0 || upper.find("CAST (") == 0) {
+        auto open = trimmed.find('(');
+        auto as_pos = upper.find(" AS ");
+        if (open != std::string::npos && as_pos != std::string::npos) {
+            // Find the AS that's at paren depth 1 (inside the CAST)
+            int depth = 0;
+            size_t cast_as = std::string::npos;
+            for (size_t i = open; i < upper.length(); ++i) {
+                if (upper[i] == '(') ++depth;
+                else if (upper[i] == ')') { --depth; if (depth == 0) break; }
+                else if (depth == 1 && upper.substr(i, 4) == " AS ") { cast_as = i; break; }
+            }
+            if (cast_as != std::string::npos) {
+                std::string inner_expr = trim(trimmed.substr(open + 1, cast_as - open - 1));
+                auto close = trimmed.find(')', cast_as);
+                std::string type_str = (close != std::string::npos)
+                    ? trim(trimmed.substr(cast_as + 4, close - cast_as - 4))
+                    : trim(trimmed.substr(cast_as + 4));
+
+                SQLULEN col_size = 255;
+                SQLSMALLINT dec_digits = 0;
+                lit.sql_type = parse_sql_type(type_str, col_size, dec_digits);
+                lit.column_size = col_size;
+
+                std::string upper_inner = to_upper(inner_expr);
+                if (upper_inner == "NULL") {
+                    lit.value = std::monostate{};
+                } else if (inner_expr.front() == '\'' && inner_expr.back() == '\'') {
+                    std::string val = inner_expr.substr(1, inner_expr.length() - 2);
+                    std::string unescaped;
+                    for (size_t i = 0; i < val.length(); ++i) {
+                        if (val[i] == '\'' && i + 1 < val.length() && val[i + 1] == '\'') {
+                            unescaped += '\'';
+                            ++i;
+                        } else {
+                            unescaped += val[i];
+                        }
+                    }
+                    lit.value = unescaped;
+                } else if ((inner_expr.find("N'") == 0 || inner_expr.find("n'") == 0) && inner_expr.back() == '\'') {
+                    std::string val = inner_expr.substr(2, inner_expr.length() - 3);
+                    lit.value = val;
+                    if (lit.sql_type == SQL_VARCHAR) lit.sql_type = SQL_WVARCHAR;
+                } else if (inner_expr.find("0x") == 0 || inner_expr.find("0X") == 0) {
+                    std::string hex = inner_expr.substr(2);
+                    std::string binary;
+                    for (size_t i = 0; i + 1 < hex.length(); i += 2) {
+                        try { binary += static_cast<char>(std::stoi(hex.substr(i, 2), nullptr, 16)); } catch (...) {}
+                    }
+                    lit.value = binary;
+                } else {
+                    try {
+                        if (inner_expr.find('.') != std::string::npos) {
+                            lit.value = std::stod(inner_expr);
+                        } else {
+                            lit.value = static_cast<long long>(std::stoll(inner_expr));
+                        }
+                    } catch (...) {
+                        lit.value = inner_expr;
+                    }
+                }
+                return lit;
+            }
+        }
+    }
+
+    // NULL
+    if (upper == "NULL") { lit.value = std::monostate{}; lit.sql_type = SQL_VARCHAR; lit.column_size = 255; return lit; }
+
+    // Parameter marker
+    if (trimmed == "?") { lit.value = std::monostate{}; lit.sql_type = SQL_VARCHAR; lit.column_size = 255; lit.is_parameter_marker = true; return lit; }
+
+    // N'...' Unicode string literal
+    if (trimmed.length() >= 3 && (trimmed[0] == 'N' || trimmed[0] == 'n') && trimmed[1] == '\'' && trimmed.back() == '\'') {
+        std::string val = trimmed.substr(2, trimmed.length() - 3);
+        lit.value = val; lit.sql_type = SQL_WVARCHAR;
+        lit.column_size = std::max(static_cast<SQLULEN>(1), static_cast<SQLULEN>(val.length()));
+        return lit;
+    }
+
+    // X'...' hex binary literal
+    if (trimmed.length() >= 3 && (trimmed[0] == 'X' || trimmed[0] == 'x') && trimmed[1] == '\'' && trimmed.back() == '\'') {
+        std::string hex = trimmed.substr(2, trimmed.length() - 3);
+        std::string binary;
+        for (size_t i = 0; i + 1 < hex.length(); i += 2) {
+            try { binary += static_cast<char>(std::stoi(hex.substr(i, 2), nullptr, 16)); } catch (...) {}
+        }
+        lit.value = binary; lit.sql_type = SQL_VARBINARY;
+        lit.column_size = static_cast<SQLULEN>(binary.length());
+        return lit;
+    }
+
+    // DATE 'yyyy-mm-dd'
+    if (upper.find("DATE ") == 0 && trimmed.length() > 6) {
+        std::string date_part = trim(trimmed.substr(5));
+        if (date_part.front() == '\'' && date_part.back() == '\'') date_part = date_part.substr(1, date_part.length() - 2);
+        lit.value = date_part; lit.sql_type = SQL_TYPE_DATE; lit.column_size = 10;
+        return lit;
+    }
+
+    // UUID() or GEN_UUID()
+    if (upper == "UUID()" || upper == "GEN_UUID()") {
+        lit.value = std::string("6F9619FF-8B86-D011-B42D-00C04FC964FF");
+        lit.sql_type = SQL_GUID; lit.column_size = 36;
+        return lit;
+    }
+
+    // Quoted string
+    if (trimmed.length() >= 2 && trimmed.front() == '\'' && trimmed.back() == '\'') {
+        std::string val = trimmed.substr(1, trimmed.length() - 2);
+        std::string unescaped;
+        for (size_t i = 0; i < val.length(); ++i) {
+            if (val[i] == '\'' && i + 1 < val.length() && val[i + 1] == '\'') {
+                unescaped += '\''; ++i;
+            } else {
+                unescaped += val[i];
+            }
+        }
+        lit.value = unescaped; lit.sql_type = SQL_VARCHAR;
+        lit.column_size = std::max(static_cast<SQLULEN>(1), static_cast<SQLULEN>(unescaped.length()));
+        return lit;
+    }
+
+    // Numeric — float
+    if (!trimmed.empty() && (std::isdigit(static_cast<unsigned char>(trimmed[0])) || trimmed[0] == '-' || trimmed[0] == '+')) {
+        if (trimmed.find('.') != std::string::npos) {
+            try { lit.value = std::stod(trimmed); lit.sql_type = SQL_DOUBLE; lit.column_size = 15; return lit; } catch (...) {}
+        }
+        try {
+            long long val = std::stoll(trimmed);
+            lit.value = val; lit.sql_type = SQL_INTEGER; lit.column_size = 10;
+            if (val > 2147483647LL || val < -2147483648LL) { lit.sql_type = SQL_BIGINT; lit.column_size = 19; }
+            return lit;
+        } catch (...) {}
+    }
+
+    // Default: string
+    lit.value = trimmed; lit.sql_type = SQL_VARCHAR;
+    lit.column_size = static_cast<SQLULEN>(trimmed.length());
+    return lit;
+}
+
+// Parse INSERT VALUES clause
+std::vector<CellValue> parse_insert_values(const std::string& values_str) {
+    std::vector<CellValue> result;
+    auto exprs = split_expressions(values_str);
+    for (const auto& expr : exprs) {
+        std::string trimmed = trim(expr);
+        std::string upper = to_upper(trimmed);
+        if (upper == "NULL") { result.push_back(std::monostate{}); }
+        else if (trimmed == "?") { result.push_back(std::monostate{}); }
+        else if (trimmed.front() == '\'' && trimmed.back() == '\'') {
+            std::string val = trimmed.substr(1, trimmed.length() - 2);
+            std::string unescaped;
+            for (size_t i = 0; i < val.length(); ++i) {
+                if (val[i] == '\'' && i + 1 < val.length() && val[i + 1] == '\'') { unescaped += '\''; ++i; }
+                else { unescaped += val[i]; }
+            }
+            result.push_back(unescaped);
+        } else {
+            try {
+                if (trimmed.find('.') != std::string::npos) result.push_back(std::stod(trimmed));
+                else result.push_back(static_cast<long long>(std::stoll(trimmed)));
+            } catch (...) { result.push_back(trimmed); }
+        }
+    }
+    return result;
+}
+
+// Parse column definitions for CREATE TABLE
+std::vector<ParsedQuery::ColumnDef> parse_column_defs(const std::string& defs_str) {
+    std::vector<ParsedQuery::ColumnDef> result;
+    auto cols = split_expressions(defs_str);
+    for (const auto& col_str : cols) {
+        std::string trimmed = trim(col_str);
+        if (trimmed.empty()) continue;
+        auto first_space = trimmed.find(' ');
+        if (first_space == std::string::npos) continue;
+        ParsedQuery::ColumnDef def;
+        def.name = to_upper(trim(trimmed.substr(0, first_space)));
+        std::string rest = trim(trimmed.substr(first_space + 1));
+        std::string upper_rest = to_upper(rest);
+        size_t constraint_pos = std::string::npos;
+        for (const auto& kw : {"NOT NULL", "PRIMARY KEY", "DEFAULT", "UNIQUE", "CHECK", "REFERENCES"}) {
+            auto pos = upper_rest.find(kw);
+            if (pos != std::string::npos && (constraint_pos == std::string::npos || pos < constraint_pos)) constraint_pos = pos;
+        }
+        std::string type_part = (constraint_pos != std::string::npos) ? trim(rest.substr(0, constraint_pos)) : rest;
+        def.data_type = parse_sql_type(type_part, def.column_size, def.decimal_digits);
+        result.push_back(def);
+    }
+    return result;
+}
+
 } // anonymous namespace
 
 CellValue generate_value(const MockColumn& column, int row_index) {
@@ -81,6 +391,8 @@ CellValue generate_value(const MockColumn& column, int row_index) {
         case SQL_VARCHAR:
         case SQL_CHAR:
         case SQL_LONGVARCHAR:
+        case SQL_WVARCHAR:
+        case SQL_WCHAR:
             if (upper_name.find("NAME") != std::string::npos && 
                 upper_name.find("USER") != std::string::npos) {
                 return generate_name(row_index);
@@ -88,10 +400,13 @@ CellValue generate_value(const MockColumn& column, int row_index) {
             if (upper_name == "USERNAME") {
                 return "user" + std::to_string(row_index + 1);
             }
+            if (upper_name == "NAME") {
+                return generate_name(row_index);
+            }
             if (upper_name.find("EMAIL") != std::string::npos) {
                 return generate_email(row_index + 1);
             }
-            if (upper_name == "NAME" || upper_name.find("PRODUCT") != std::string::npos) {
+            if (upper_name.find("PRODUCT") != std::string::npos) {
                 return generate_product_name(row_index);
             }
             if (upper_name.find("DESCRIPTION") != std::string::npos) {
@@ -155,71 +470,175 @@ ParsedQuery parse_sql(const std::string& sql) {
         return result;
     }
     
+    // Count parameter markers
+    result.param_count = count_param_markers(trimmed);
+    
     std::string upper = to_upper(trimmed);
     
-    // Determine query type
+    // ---- CREATE TABLE ----
+    if (upper.find("CREATE") == 0 && upper.find("TABLE") != std::string::npos) {
+        result.query_type = ParsedQuery::QueryType::CreateTable;
+        auto table_pos = upper.find("TABLE");
+        auto name_start = table_pos + 5;
+        while (name_start < upper.length() && std::isspace(upper[name_start])) ++name_start;
+        auto name_end = name_start;
+        while (name_end < upper.length() && !std::isspace(upper[name_end]) && upper[name_end] != '(') ++name_end;
+        result.table_name = to_upper(trim(trimmed.substr(name_start, name_end - name_start)));
+        auto open_paren = trimmed.find('(', name_end);
+        auto close_paren = trimmed.rfind(')');
+        if (open_paren != std::string::npos && close_paren != std::string::npos && close_paren > open_paren) {
+            result.create_columns = parse_column_defs(trimmed.substr(open_paren + 1, close_paren - open_paren - 1));
+        }
+        result.is_valid = true;
+        return result;
+    }
+    
+    // ---- DROP TABLE ----
+    if (upper.find("DROP") == 0 && upper.find("TABLE") != std::string::npos) {
+        result.query_type = ParsedQuery::QueryType::DropTable;
+        auto table_pos = upper.find("TABLE");
+        auto name_start = table_pos + 5;
+        while (name_start < upper.length() && std::isspace(upper[name_start])) ++name_start;
+        auto name_end = name_start;
+        while (name_end < upper.length() && !std::isspace(upper[name_end]) && upper[name_end] != ';') ++name_end;
+        result.table_name = to_upper(trim(trimmed.substr(name_start, name_end - name_start)));
+        result.is_valid = true;
+        return result;
+    }
+    
+    // ---- SELECT ----
     if (upper.find("SELECT") == 0) {
         result.query_type = ParsedQuery::QueryType::Select;
         
-        // Extract table name (simple parsing)
-        auto from_pos = upper.find("FROM");
+        // Find FROM clause (not inside parentheses or quotes)
+        size_t from_pos = std::string::npos;
+        {
+            int depth = 0;
+            bool in_sq = false, in_dq = false;
+            for (size_t i = 6; i + 4 <= upper.length(); ++i) {
+                char c = upper[i];
+                if (c == '\'' && !in_dq) { if (in_sq && i+1 < upper.length() && upper[i+1] == '\'') { ++i; continue; } in_sq = !in_sq; }
+                else if (c == '"' && !in_sq) { in_dq = !in_dq; }
+                else if (c == '(' && !in_sq && !in_dq) ++depth;
+                else if (c == ')' && !in_sq && !in_dq) --depth;
+                else if (depth == 0 && !in_sq && !in_dq && i > 6 && std::isspace(upper[i-1]) &&
+                         upper.substr(i, 4) == "FROM" &&
+                         (i + 4 >= upper.length() || std::isspace(upper[i+4]))) {
+                    from_pos = i;
+                    break;
+                }
+            }
+        }
+        
         if (from_pos != std::string::npos) {
+            // Table-based SELECT
             auto table_start = from_pos + 4;
-            while (table_start < upper.length() && std::isspace(upper[table_start])) {
-                ++table_start;
-            }
-            
+            while (table_start < upper.length() && std::isspace(upper[table_start])) ++table_start;
             auto table_end = table_start;
-            while (table_end < upper.length() && 
-                   !std::isspace(upper[table_end]) && 
-                   upper[table_end] != ';' &&
-                   upper[table_end] != '(' &&
-                   upper[table_end] != ')') {
-                ++table_end;
+            while (table_end < upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != ';' && upper[table_end] != '(' && upper[table_end] != ')') ++table_end;
+            result.table_name = trimmed.substr(table_start, table_end - table_start);
+            
+            // Skip system pseudo-tables used by Firebird/Oracle
+            std::string upper_table = to_upper(result.table_name);
+            if (upper_table == "RDB$DATABASE" || upper_table == "DUAL") {
+                // Treat as literal select — the FROM clause is just a database-specific idiom
+                result.is_literal_select = true;
+                result.table_name.clear();
+                std::string expr_str = trim(trimmed.substr(6, from_pos - 7));
+                while (!expr_str.empty() && expr_str.back() == ';') { expr_str.pop_back(); expr_str = trim(expr_str); }
+                auto expressions = split_expressions(expr_str);
+                int expr_idx = 1;
+                for (const auto& expr : expressions) {
+                    auto lit = parse_literal_expression(expr);
+                    lit.alias = "EXPR_" + std::to_string(expr_idx++);
+                    result.literal_exprs.push_back(std::move(lit));
+                }
+                result.is_valid = true;
+                return result;
             }
             
-            result.table_name = trimmed.substr(table_start, table_end - table_start);
-            result.is_valid = true;
-            
-            // Check for WHERE clause
-            auto where_pos = upper.find("WHERE");
+            // WHERE clause
+            auto where_pos = upper.find("WHERE", table_end);
             if (where_pos != std::string::npos) {
                 result.where_clause = trimmed.substr(where_pos + 5);
             }
             
-            // Parse columns
-            auto select_end = from_pos;
-            std::string cols_str = trim(trimmed.substr(6, select_end - 6));
+            // Parse column list
+            std::string cols_str = trim(trimmed.substr(6, from_pos - 7));
+            std::string upper_cols = to_upper(cols_str);
+            
+            // COUNT(*)
+            if (upper_cols.find("COUNT(*)") != std::string::npos || upper_cols.find("COUNT (*)") != std::string::npos) {
+                result.is_count_query = true;
+                result.is_valid = true;
+                return result;
+            }
+            
             if (cols_str == "*") {
                 result.columns.push_back("*");
             } else {
-                std::istringstream iss(cols_str);
-                std::string col;
-                while (std::getline(iss, col, ',')) {
-                    result.columns.push_back(trim(col));
+                auto col_exprs = split_expressions(cols_str);
+                for (const auto& c : col_exprs) {
+                    result.columns.push_back(trim(c));
                 }
             }
+            result.is_valid = true;
         } else {
-            result.error_message = "SELECT without FROM clause";
+            // No FROM clause — literal SELECT
+            result.is_literal_select = true;
+            std::string expr_str = trim(trimmed.substr(6));
+            while (!expr_str.empty() && expr_str.back() == ';') { expr_str.pop_back(); expr_str = trim(expr_str); }
+            auto expressions = split_expressions(expr_str);
+            int expr_idx = 1;
+            for (const auto& expr : expressions) {
+                auto lit = parse_literal_expression(expr);
+                lit.alias = "EXPR_" + std::to_string(expr_idx++);
+                // Check for AS alias (outside CAST parentheses)
+                std::string upper_expr = to_upper(expr);
+                size_t as_pos = std::string::npos;
+                int depth = 0;
+                for (size_t i = 0; i + 4 <= upper_expr.length(); ++i) {
+                    if (upper_expr[i] == '(') ++depth;
+                    else if (upper_expr[i] == ')') --depth;
+                    else if (depth == 0 && upper_expr.substr(i, 4) == " AS ") { as_pos = i; }
+                }
+                if (as_pos != std::string::npos) {
+                    lit.alias = trim(expr.substr(as_pos + 4));
+                }
+                result.literal_exprs.push_back(std::move(lit));
+            }
+            result.is_valid = true;
         }
     } else if (upper.find("INSERT") == 0) {
         result.query_type = ParsedQuery::QueryType::Insert;
-        
         auto into_pos = upper.find("INTO");
         if (into_pos != std::string::npos) {
             auto table_start = into_pos + 4;
-            while (table_start < upper.length() && std::isspace(upper[table_start])) {
-                ++table_start;
-            }
-            
+            while (table_start < upper.length() && std::isspace(upper[table_start])) ++table_start;
             auto table_end = table_start;
-            while (table_end < upper.length() && 
-                   !std::isspace(upper[table_end]) && 
-                   upper[table_end] != '(') {
-                ++table_end;
+            while (table_end < upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != '(') ++table_end;
+            result.table_name = trimmed.substr(table_start, table_end - table_start);
+            
+            // Parse column names
+            auto col_open = trimmed.find('(', table_end);
+            auto values_pos = upper.find("VALUES");
+            if (col_open != std::string::npos && (values_pos == std::string::npos || col_open < values_pos)) {
+                auto col_close = trimmed.find(')', col_open);
+                if (col_close != std::string::npos) {
+                    auto col_list = split_expressions(trimmed.substr(col_open + 1, col_close - col_open - 1));
+                    for (const auto& c : col_list) result.insert_columns.push_back(to_upper(trim(c)));
+                }
             }
             
-            result.table_name = trimmed.substr(table_start, table_end - table_start);
+            // Parse VALUES
+            if (values_pos != std::string::npos) {
+                auto val_open = trimmed.find('(', values_pos);
+                auto val_close = trimmed.rfind(')');
+                if (val_open != std::string::npos && val_close != std::string::npos && val_close > val_open) {
+                    result.insert_values = parse_insert_values(trimmed.substr(val_open + 1, val_close - val_open - 1));
+                }
+            }
+            
             result.is_valid = true;
             result.affected_rows = 1;
         } else {
@@ -227,47 +646,26 @@ ParsedQuery parse_sql(const std::string& sql) {
         }
     } else if (upper.find("UPDATE") == 0) {
         result.query_type = ParsedQuery::QueryType::Update;
-        
         auto table_start = 6;
-        while (table_start < (int)upper.length() && std::isspace(upper[table_start])) {
-            ++table_start;
-        }
-        
+        while (table_start < (int)upper.length() && std::isspace(upper[table_start])) ++table_start;
         auto table_end = table_start;
-        while (table_end < (int)upper.length() && 
-               !std::isspace(upper[table_end]) && 
-               upper[table_end] != ';') {
-            ++table_end;
-        }
-        
+        while (table_end < (int)upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != ';') ++table_end;
         result.table_name = trimmed.substr(table_start, table_end - table_start);
         result.is_valid = true;
-        result.affected_rows = 1;  // Mock: 1 row affected
-        
+        result.affected_rows = 1;
         auto where_pos = upper.find("WHERE");
-        if (where_pos != std::string::npos) {
-            result.where_clause = trimmed.substr(where_pos + 5);
-        }
+        if (where_pos != std::string::npos) result.where_clause = trimmed.substr(where_pos + 5);
     } else if (upper.find("DELETE") == 0) {
         result.query_type = ParsedQuery::QueryType::Delete;
-        
         auto from_pos = upper.find("FROM");
         if (from_pos != std::string::npos) {
             auto table_start = from_pos + 4;
-            while (table_start < upper.length() && std::isspace(upper[table_start])) {
-                ++table_start;
-            }
-            
+            while (table_start < upper.length() && std::isspace(upper[table_start])) ++table_start;
             auto table_end = table_start;
-            while (table_end < upper.length() && 
-                   !std::isspace(upper[table_end]) && 
-                   upper[table_end] != ';') {
-                ++table_end;
-            }
-            
+            while (table_end < upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != ';') ++table_end;
             result.table_name = trimmed.substr(table_start, table_end - table_start);
             result.is_valid = true;
-            result.affected_rows = 1;  // Mock: 1 row affected
+            result.affected_rows = 1;
         } else {
             result.error_message = "DELETE without FROM clause";
         }
@@ -289,10 +687,69 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
         return result;
     }
     
-    // Get catalog
     MockCatalog& catalog = MockCatalog::instance();
-    const MockTable* table = catalog.find_table(query.table_name);
     
+    // ---- CREATE TABLE ----
+    if (query.query_type == ParsedQuery::QueryType::CreateTable) {
+        if (catalog.find_table(query.table_name)) {
+            result.success = false;
+            result.error_message = "Table already exists: " + query.table_name;
+            result.error_sqlstate = "42S01";
+            return result;
+        }
+        MockTable new_table;
+        new_table.catalog = "";
+        new_table.schema = "";
+        new_table.name = to_upper(query.table_name);
+        new_table.type = "TABLE";
+        new_table.remarks = "User-created table";
+        for (const auto& def : query.create_columns) {
+            MockColumn col;
+            col.name = def.name;
+            col.data_type = def.data_type;
+            col.column_size = def.column_size;
+            col.decimal_digits = def.decimal_digits;
+            col.nullable = SQL_NULLABLE;
+            col.is_primary_key = false;
+            col.is_auto_increment = false;
+            new_table.columns.push_back(col);
+        }
+        catalog.add_table(new_table);
+        result.success = true;
+        result.affected_rows = 0;
+        return result;
+    }
+    
+    // ---- DROP TABLE ----
+    if (query.query_type == ParsedQuery::QueryType::DropTable) {
+        if (!catalog.find_table(query.table_name)) {
+            result.success = false;
+            result.error_message = "Table not found: " + query.table_name;
+            result.error_sqlstate = "42S02";
+            return result;
+        }
+        catalog.remove_table(query.table_name);
+        result.success = true;
+        result.affected_rows = 0;
+        return result;
+    }
+    
+    // ---- Literal SELECT ----
+    if (query.is_literal_select) {
+        result.success = true;
+        MockRow row;
+        for (const auto& lit : query.literal_exprs) {
+            result.column_names.push_back(lit.alias);
+            result.column_types.push_back(lit.sql_type);
+            result.column_sizes.push_back(lit.column_size);
+            row.push_back(lit.value);
+        }
+        result.data.push_back(std::move(row));
+        return result;
+    }
+    
+    // ---- Table-based queries ----
+    const MockTable* table = catalog.find_table(query.table_name);
     if (!table) {
         result.success = false;
         result.error_message = "Table not found: " + query.table_name;
@@ -302,13 +759,30 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
     
     switch (query.query_type) {
         case ParsedQuery::QueryType::Select: {
-            // Generate mock data
-            result.success = true;
+            // COUNT(*)
+            if (query.is_count_query) {
+                result.success = true;
+                result.column_names.push_back("COUNT");
+                result.column_types.push_back(SQL_INTEGER);
+                result.column_sizes.push_back(10);
+                long long count = 0;
+                auto& inserted = catalog.inserted_data();
+                std::string upper_name = to_upper(query.table_name);
+                auto it = inserted.find(upper_name);
+                if (it != inserted.end()) {
+                    count = static_cast<long long>(it->second.size());
+                } else if (table->remarks != "User-created table") {
+                    count = static_cast<long long>(result_set_size);
+                }
+                MockRow row;
+                row.push_back(count);
+                result.data.push_back(std::move(row));
+                return result;
+            }
             
-            // Determine which columns to return
+            result.success = true;
             bool all_columns = query.columns.empty() || 
                                (query.columns.size() == 1 && query.columns[0] == "*");
-            
             if (all_columns) {
                 for (const auto& col : table->columns) {
                     result.column_names.push_back(col.name);
@@ -336,12 +810,44 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 }
             }
             
-            // Generate data
-            result.data = generate_mock_data(*table, result_set_size);
+            // Return inserted data if available, otherwise generate mock data
+            auto& inserted = catalog.inserted_data();
+            std::string upper_name = to_upper(query.table_name);
+            auto it = inserted.find(upper_name);
+            if (it != inserted.end() && !it->second.empty()) {
+                result.data = it->second;
+            } else if (table->remarks == "User-created table") {
+                // User-created table with no data — empty result
+            } else {
+                result.data = generate_mock_data(*table, result_set_size);
+            }
             break;
         }
         
-        case ParsedQuery::QueryType::Insert:
+        case ParsedQuery::QueryType::Insert: {
+            result.success = true;
+            result.affected_rows = query.affected_rows;
+            if (!query.insert_values.empty()) {
+                MockRow row;
+                if (!query.insert_columns.empty() && query.insert_columns.size() == query.insert_values.size()) {
+                    row.resize(table->columns.size(), std::monostate{});
+                    for (size_t i = 0; i < query.insert_columns.size(); ++i) {
+                        for (size_t j = 0; j < table->columns.size(); ++j) {
+                            if (to_upper(table->columns[j].name) == query.insert_columns[i]) {
+                                row[j] = query.insert_values[i];
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    row = query.insert_values;
+                    while (row.size() < table->columns.size()) row.push_back(std::monostate{});
+                }
+                catalog.insert_row(to_upper(query.table_name), std::move(row));
+            }
+            break;
+        }
+        
         case ParsedQuery::QueryType::Update:
         case ParsedQuery::QueryType::Delete:
             result.success = true;

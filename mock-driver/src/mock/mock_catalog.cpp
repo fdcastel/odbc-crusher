@@ -23,6 +23,7 @@ MockCatalog& MockCatalog::instance() {
 void MockCatalog::initialize(const std::string& preset) {
     tables_.clear();
     indexes_.clear();
+    inserted_data_.clear();
     
     std::string lower_preset = preset;
     std::transform(lower_preset.begin(), lower_preset.end(), lower_preset.begin(),
@@ -38,6 +39,23 @@ void MockCatalog::initialize(const std::string& preset) {
 }
 
 void MockCatalog::create_default_catalog() {
+    // CUSTOMERS table (referenced by tests)
+    MockTable customers;
+    customers.catalog = "";
+    customers.schema = "";
+    customers.name = "CUSTOMERS";
+    customers.type = "TABLE";
+    customers.remarks = "Customer accounts";
+    customers.columns = {
+        {"CUSTOMER_ID", SQL_INTEGER, 10, 0, SQL_NO_NULLS, true, true, "", "", ""},
+        {"NAME", SQL_VARCHAR, 100, 0, SQL_NO_NULLS, false, false, "", "", ""},
+        {"EMAIL", SQL_VARCHAR, 100, 0, SQL_NULLABLE, false, false, "", "", ""},
+        {"CREATED_DATE", SQL_TYPE_DATE, 10, 0, SQL_NULLABLE, false, false, "", "", ""},
+        {"IS_ACTIVE", SQL_BIT, 1, 0, SQL_NULLABLE, false, false, "1", "", ""},
+        {"BALANCE", SQL_DECIMAL, 10, 2, SQL_NULLABLE, false, false, "0.00", "", ""}
+    };
+    tables_.push_back(customers);
+    
     // USERS table
     MockTable users;
     users.catalog = "";
@@ -55,7 +73,7 @@ void MockCatalog::create_default_catalog() {
     };
     tables_.push_back(users);
     
-    // ORDERS table
+    // ORDERS table (FK to CUSTOMERS)
     MockTable orders;
     orders.catalog = "";
     orders.schema = "";
@@ -64,7 +82,7 @@ void MockCatalog::create_default_catalog() {
     orders.remarks = "Order records";
     orders.columns = {
         {"ORDER_ID", SQL_INTEGER, 10, 0, SQL_NO_NULLS, true, true, "", "", ""},
-        {"USER_ID", SQL_INTEGER, 10, 0, SQL_NO_NULLS, false, false, "", "USERS", "USER_ID"},
+        {"CUSTOMER_ID", SQL_INTEGER, 10, 0, SQL_NO_NULLS, false, false, "", "CUSTOMERS", "CUSTOMER_ID"},
         {"ORDER_DATE", SQL_TYPE_TIMESTAMP, 26, 6, SQL_NULLABLE, false, false, "", "", ""},
         {"TOTAL_AMOUNT", SQL_DECIMAL, 10, 2, SQL_NULLABLE, false, false, "0.00", "", ""},
         {"STATUS", SQL_VARCHAR, 20, 0, SQL_NULLABLE, false, false, "PENDING", "", ""}
@@ -105,6 +123,22 @@ void MockCatalog::create_default_catalog() {
     tables_.push_back(order_items);
     
     // Create indexes
+    MockIndex customers_pk;
+    customers_pk.table_name = "CUSTOMERS";
+    customers_pk.index_name = "PK_CUSTOMERS";
+    customers_pk.non_unique = false;
+    customers_pk.type = SQL_INDEX_CLUSTERED;
+    customers_pk.columns = {"CUSTOMER_ID"};
+    indexes_.push_back(customers_pk);
+    
+    MockIndex customers_email;
+    customers_email.table_name = "CUSTOMERS";
+    customers_email.index_name = "UQ_CUSTOMERS_EMAIL";
+    customers_email.non_unique = false;
+    customers_email.type = SQL_INDEX_OTHER;
+    customers_email.columns = {"EMAIL"};
+    indexes_.push_back(customers_email);
+    
     MockIndex users_pk;
     users_pk.table_name = "USERS";
     users_pk.index_name = "PK_USERS";
@@ -163,6 +197,36 @@ const MockTable* MockCatalog::find_table(const std::string& name) const {
         }
     }
     return nullptr;
+}
+
+void MockCatalog::add_table(const MockTable& table) {
+    tables_.push_back(table);
+}
+
+void MockCatalog::remove_table(const std::string& name) {
+    std::string upper_name = to_upper(name);
+    tables_.erase(
+        std::remove_if(tables_.begin(), tables_.end(),
+                       [&upper_name](const MockTable& t) { return to_upper(t.name) == upper_name; }),
+        tables_.end());
+    // Also remove inserted data and indexes for this table
+    inserted_data_.erase(upper_name);
+    indexes_.erase(
+        std::remove_if(indexes_.begin(), indexes_.end(),
+                       [&upper_name](const MockIndex& idx) { return to_upper(idx.table_name) == upper_name; }),
+        indexes_.end());
+}
+
+void MockCatalog::insert_row(const std::string& table_name, MockRow row) {
+    inserted_data_[to_upper(table_name)].push_back(std::move(row));
+}
+
+void MockCatalog::clear_inserted_data() {
+    inserted_data_.clear();
+}
+
+void MockCatalog::clear_inserted_data(const std::string& table_name) {
+    inserted_data_.erase(to_upper(table_name));
 }
 
 std::vector<MockColumn> MockCatalog::get_columns(const std::string& table_name,

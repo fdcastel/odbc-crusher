@@ -5,6 +5,9 @@
 #include "driver/diagnostics.hpp"
 #include "mock/mock_catalog.hpp"
 #include "mock/behaviors.hpp"
+#include <cstring>
+#include <string>
+#include <variant>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -323,18 +326,147 @@ SQLRETURN SQL_API SQLFetchScroll(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
+    HandleLock lock(stmt);
     
-    (void)iRow;
+    stmt->clear_diagnostics();
     
-    // For forward-only cursor, only SQL_FETCH_NEXT is supported
-    if (fFetchType != SQL_FETCH_NEXT) {
-        stmt->add_diagnostic(sqlstate::OPTIONAL_FEATURE_NOT_IMPLEMENTED, 0,
-                            "Only SQL_FETCH_NEXT is supported");
+    if (!stmt->executed_) {
+        stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,
+                            "Cursor is not open");
         return SQL_ERROR;
     }
     
-    // Forward to regular fetch
-    return SQLFetch(hstmt);
+    // For forward-only cursor, only SQL_FETCH_NEXT is supported
+    if (stmt->cursor_type_ == SQL_CURSOR_FORWARD_ONLY && fFetchType != SQL_FETCH_NEXT) {
+        stmt->add_diagnostic("HY106", 0,
+                            "Fetch type out of range for forward-only cursor");
+        return SQL_ERROR;
+    }
+    
+    SQLLEN new_row = stmt->current_row_;
+    SQLLEN total_rows = static_cast<SQLLEN>(stmt->result_data_.size());
+    
+    switch (fFetchType) {
+        case SQL_FETCH_NEXT:
+            new_row = stmt->current_row_ + 1;
+            break;
+        case SQL_FETCH_FIRST:
+            new_row = 0;
+            break;
+        case SQL_FETCH_LAST:
+            new_row = total_rows - 1;
+            break;
+        case SQL_FETCH_ABSOLUTE:
+            if (iRow > 0) {
+                new_row = iRow - 1;  // 1-based to 0-based
+            } else if (iRow < 0) {
+                new_row = total_rows + iRow;  // Negative = from end
+            } else {
+                // iRow == 0: before first row
+                new_row = -1;
+            }
+            break;
+        case SQL_FETCH_RELATIVE:
+            new_row = stmt->current_row_ + iRow;
+            break;
+        default:
+            stmt->add_diagnostic("HY106", 0, "Fetch type out of range");
+            return SQL_ERROR;
+    }
+    
+    // Check bounds
+    if (new_row < 0 || new_row >= total_rows) {
+        stmt->current_row_ = (new_row < 0) ? -1 : total_rows;
+        return SQL_NO_DATA;
+    }
+    
+    stmt->current_row_ = new_row;
+    stmt->cursor_open_ = true;
+    
+    // Transfer data to bound columns (same logic as SQLFetch)
+    const auto& row = stmt->result_data_[stmt->current_row_];
+    
+    for (const auto& [col_num, binding] : stmt->column_bindings_) {
+        if (col_num < 1 || col_num > static_cast<SQLUSMALLINT>(row.size())) {
+            continue;
+        }
+        
+        const auto& cell = row[col_num - 1];
+        
+        // Handle NULL
+        if (std::holds_alternative<std::monostate>(cell)) {
+            if (binding.str_len_or_ind) {
+                *binding.str_len_or_ind = SQL_NULL_DATA;
+            }
+            continue;
+        }
+        
+        // Convert and copy data based on target type
+        if (std::holds_alternative<long long>(cell)) {
+            long long value = std::get<long long>(cell);
+            switch (binding.target_type) {
+                case SQL_C_SLONG:
+                case SQL_C_LONG:
+                    if (binding.target_value)
+                        *static_cast<SQLINTEGER*>(binding.target_value) = static_cast<SQLINTEGER>(value);
+                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLINTEGER);
+                    break;
+                case SQL_C_SBIGINT:
+                    if (binding.target_value) *static_cast<SQLBIGINT*>(binding.target_value) = value;
+                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLBIGINT);
+                    break;
+                case SQL_C_SSHORT:
+                    if (binding.target_value)
+                        *static_cast<SQLSMALLINT*>(binding.target_value) = static_cast<SQLSMALLINT>(value);
+                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLSMALLINT);
+                    break;
+                case SQL_C_CHAR:
+                default: {
+                    std::string str = std::to_string(value);
+                    if (binding.target_value && binding.buffer_length > 0) {
+                        size_t copy_len = std::min(str.length(), static_cast<size_t>(binding.buffer_length - 1));
+                        std::memcpy(binding.target_value, str.c_str(), copy_len);
+                        static_cast<char*>(binding.target_value)[copy_len] = '\0';
+                    }
+                    if (binding.str_len_or_ind) *binding.str_len_or_ind = static_cast<SQLLEN>(str.length());
+                    break;
+                }
+            }
+        } else if (std::holds_alternative<double>(cell)) {
+            double value = std::get<double>(cell);
+            switch (binding.target_type) {
+                case SQL_C_DOUBLE:
+                    if (binding.target_value) *static_cast<SQLDOUBLE*>(binding.target_value) = value;
+                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLDOUBLE);
+                    break;
+                case SQL_C_FLOAT:
+                    if (binding.target_value) *static_cast<SQLREAL*>(binding.target_value) = static_cast<SQLREAL>(value);
+                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLREAL);
+                    break;
+                case SQL_C_CHAR:
+                default: {
+                    std::string str = std::to_string(value);
+                    if (binding.target_value && binding.buffer_length > 0) {
+                        size_t copy_len = std::min(str.length(), static_cast<size_t>(binding.buffer_length - 1));
+                        std::memcpy(binding.target_value, str.c_str(), copy_len);
+                        static_cast<char*>(binding.target_value)[copy_len] = '\0';
+                    }
+                    if (binding.str_len_or_ind) *binding.str_len_or_ind = static_cast<SQLLEN>(str.length());
+                    break;
+                }
+            }
+        } else if (std::holds_alternative<std::string>(cell)) {
+            const std::string& value = std::get<std::string>(cell);
+            if (binding.target_value && binding.buffer_length > 0) {
+                size_t copy_len = std::min(value.length(), static_cast<size_t>(binding.buffer_length - 1));
+                std::memcpy(binding.target_value, value.c_str(), copy_len);
+                static_cast<char*>(binding.target_value)[copy_len] = '\0';
+            }
+            if (binding.str_len_or_ind) *binding.str_len_or_ind = static_cast<SQLLEN>(value.length());
+        }
+    }
+    
+    return SQL_SUCCESS;
 }
 
 // Bulk operations (stub)

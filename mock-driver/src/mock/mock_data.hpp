@@ -22,14 +22,42 @@ CellValue generate_value(const MockColumn& column, int row_index);
 
 // Parse simple SQL and determine result
 struct ParsedQuery {
-    enum class QueryType { Select, Insert, Update, Delete, Other };
+    enum class QueryType { Select, Insert, Update, Delete, CreateTable, DropTable, Other };
     QueryType query_type = QueryType::Other;
     std::string table_name;
     std::vector<std::string> columns;  // For SELECT: requested columns (* = all)
     std::string where_clause;
     int affected_rows = 0;
     bool is_valid = false;
+    bool is_literal_select = false;    // SELECT without FROM (literal values)
+    bool is_count_query = false;       // SELECT COUNT(*) FROM table
     std::string error_message;
+
+    // For literal SELECT: parsed expressions
+    struct LiteralExpr {
+        CellValue value;
+        SQLSMALLINT sql_type = SQL_VARCHAR;
+        SQLULEN column_size = 255;
+        std::string alias;  // Column name (or EXPR_N if no alias)
+        bool is_parameter_marker = false;
+    };
+    std::vector<LiteralExpr> literal_exprs;
+
+    // For CREATE TABLE: column definitions
+    struct ColumnDef {
+        std::string name;
+        SQLSMALLINT data_type = SQL_VARCHAR;
+        SQLULEN column_size = 255;
+        SQLSMALLINT decimal_digits = 0;
+    };
+    std::vector<ColumnDef> create_columns;
+
+    // For INSERT: parsed values
+    std::vector<CellValue> insert_values;
+    std::vector<std::string> insert_columns;
+
+    // Parameter count
+    int param_count = 0;
 };
 
 ParsedQuery parse_sql(const std::string& sql);

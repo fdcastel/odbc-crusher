@@ -96,7 +96,9 @@ TestResult MetadataTests::test_columns_catalog() {
         std::vector<std::pair<std::string, std::string>> test_tables = {
             {"", "RDB$DATABASE"},      // Firebird system table
             {"information_schema", "TABLES"},  // MySQL system table
-            {"sys", "tables"}          // SQL Server system table
+            {"sys", "tables"},         // SQL Server system table
+            {"", "CUSTOMERS"},         // Mock/test driver table
+            {"", "USERS"}             // Mock/test driver table
         };
         
         bool success = false;
@@ -406,22 +408,68 @@ TestResult MetadataTests::test_foreign_keys() {
         
         core::OdbcStatement stmt(conn_);
         
-        // Try to get foreign keys (pass NULLs to get all foreign keys)
-        SQLRETURN ret = SQLForeignKeys(
-            stmt.get_handle(),
-            nullptr, 0,     // PK Catalog
-            nullptr, 0,     // PK Schema
-            nullptr, 0,     // PK Table
-            nullptr, 0,     // FK Catalog
-            nullptr, 0,     // FK Schema
-            nullptr, 0      // FK Table
-        );
+        // Try to get foreign keys using different approaches
+        // ODBC spec requires either PK or FK table name
+        bool success = false;
+        int fk_count = 0;
         
-        if (SQL_SUCCEEDED(ret)) {
-            int fk_count = 0;
-            while (stmt.fetch() && fk_count < 100) {
-                fk_count++;
+        // Strategy 1: Try known FK tables (mock driver)
+        std::vector<std::string> fk_tables = {"ORDERS", "ORDER_ITEMS"};
+        for (const auto& fk_tbl : fk_tables) {
+            try {
+                stmt.recycle();
+                SQLRETURN ret = SQLForeignKeys(
+                    stmt.get_handle(),
+                    nullptr, 0,     // PK Catalog
+                    nullptr, 0,     // PK Schema
+                    nullptr, 0,     // PK Table
+                    nullptr, 0,     // FK Catalog
+                    nullptr, 0,     // FK Schema
+                    (SQLCHAR*)fk_tbl.c_str(), SQL_NTS  // FK Table
+                );
+                
+                if (SQL_SUCCEEDED(ret)) {
+                    while (stmt.fetch() && fk_count < 100) {
+                        fk_count++;
+                    }
+                    if (fk_count > 0) {
+                        success = true;
+                        break;
+                    }
+                }
+            } catch (const core::OdbcError&) {
+                continue;
             }
+        }
+        
+        // Strategy 2: Try with all NULLs (some drivers support this)
+        if (!success) {
+            try {
+                stmt.recycle();
+                SQLRETURN ret = SQLForeignKeys(
+                    stmt.get_handle(),
+                    nullptr, 0,     // PK Catalog
+                    nullptr, 0,     // PK Schema
+                    nullptr, 0,     // PK Table
+                    nullptr, 0,     // FK Catalog
+                    nullptr, 0,     // FK Schema
+                    nullptr, 0      // FK Table
+                );
+                
+                if (SQL_SUCCEEDED(ret)) {
+                    while (stmt.fetch() && fk_count < 100) {
+                        fk_count++;
+                    }
+                    if (fk_count > 0) {
+                        success = true;
+                    }
+                }
+            } catch (const core::OdbcError&) {
+                // Ignore - some drivers don't support all-NULLs
+            }
+        }
+        
+        if (success || fk_count > 0) {
             
             std::ostringstream oss;
             oss << "Found " << fk_count << " foreign key(s)";

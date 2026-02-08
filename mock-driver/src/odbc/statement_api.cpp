@@ -253,6 +253,69 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
     }
     
     // --- Single parameter set execution (original path) ---
+    
+    // Substitute bound parameter values into the parsed query for literal SELECTs
+    if (parsed.is_literal_select && parsed.param_count > 0 && !stmt->parameter_bindings_.empty()) {
+        int param_idx = 0;
+        for (auto& lit : parsed.literal_exprs) {
+            param_idx++;
+            if (lit.is_parameter_marker) {
+                auto it = stmt->parameter_bindings_.find(static_cast<SQLUSMALLINT>(param_idx));
+                if (it != stmt->parameter_bindings_.end()) {
+                    const auto& pb = it->second;
+                    if (pb.str_len_or_ind && *pb.str_len_or_ind == SQL_NULL_DATA) {
+                        lit.value = std::monostate{};
+                        lit.sql_type = SQL_VARCHAR;
+                    } else if (pb.param_value) {
+                        switch (pb.value_type) {
+                            case SQL_C_SLONG:
+                            case SQL_C_LONG:
+                                lit.value = static_cast<long long>(*static_cast<SQLINTEGER*>(pb.param_value));
+                                lit.sql_type = SQL_INTEGER;
+                                lit.column_size = 10;
+                                break;
+                            case SQL_C_SBIGINT:
+                                lit.value = static_cast<long long>(*static_cast<SQLBIGINT*>(pb.param_value));
+                                lit.sql_type = SQL_BIGINT;
+                                lit.column_size = 19;
+                                break;
+                            case SQL_C_SSHORT:
+                                lit.value = static_cast<long long>(*static_cast<SQLSMALLINT*>(pb.param_value));
+                                lit.sql_type = SQL_SMALLINT;
+                                lit.column_size = 5;
+                                break;
+                            case SQL_C_DOUBLE:
+                                lit.value = *static_cast<SQLDOUBLE*>(pb.param_value);
+                                lit.sql_type = SQL_DOUBLE;
+                                lit.column_size = 15;
+                                break;
+                            case SQL_C_FLOAT:
+                                lit.value = static_cast<double>(*static_cast<SQLREAL*>(pb.param_value));
+                                lit.sql_type = SQL_FLOAT;
+                                lit.column_size = 15;
+                                break;
+                            case SQL_C_CHAR:
+                            default: {
+                                SQLLEN len = pb.buffer_length;
+                                if (pb.str_len_or_ind && *pb.str_len_or_ind != SQL_NTS) {
+                                    len = *pb.str_len_or_ind;
+                                }
+                                if (len == SQL_NTS || len < 0) {
+                                    lit.value = std::string(static_cast<const char*>(pb.param_value));
+                                } else {
+                                    lit.value = std::string(static_cast<const char*>(pb.param_value), static_cast<size_t>(len));
+                                }
+                                lit.sql_type = SQL_VARCHAR;
+                                lit.column_size = 255;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     auto result = execute_query(parsed, config.result_set_size);
     
     if (!result.success) {
@@ -563,6 +626,45 @@ SQLRETURN SQL_API SQLGetData(
                                     "String data, right truncated");
                 return SQL_SUCCESS_WITH_INFO;
             }
+        } else if (fCType == SQL_C_TYPE_DATE) {
+            // Parse date string "YYYY-MM-DD" into SQL_DATE_STRUCT
+            SQL_DATE_STRUCT ds = {0, 0, 0};
+            if (value.length() >= 10 && value[4] == '-' && value[7] == '-') {
+                try {
+                    ds.year = static_cast<SQLSMALLINT>(std::stoi(value.substr(0, 4)));
+                    ds.month = static_cast<SQLUSMALLINT>(std::stoi(value.substr(5, 2)));
+                    ds.day = static_cast<SQLUSMALLINT>(std::stoi(value.substr(8, 2)));
+                } catch (...) { /* leave as zeros */ }
+            }
+            if (rgbValue) *static_cast<SQL_DATE_STRUCT*>(rgbValue) = ds;
+            if (pcbValue) *pcbValue = sizeof(SQL_DATE_STRUCT);
+        } else if (fCType == SQL_C_TYPE_TIME) {
+            // Parse time string "HH:MM:SS" into SQL_TIME_STRUCT
+            SQL_TIME_STRUCT ts = {0, 0, 0};
+            if (value.length() >= 8 && value[2] == ':' && value[5] == ':') {
+                try {
+                    ts.hour = static_cast<SQLUSMALLINT>(std::stoi(value.substr(0, 2)));
+                    ts.minute = static_cast<SQLUSMALLINT>(std::stoi(value.substr(3, 2)));
+                    ts.second = static_cast<SQLUSMALLINT>(std::stoi(value.substr(6, 2)));
+                } catch (...) { /* leave as zeros */ }
+            }
+            if (rgbValue) *static_cast<SQL_TIME_STRUCT*>(rgbValue) = ts;
+            if (pcbValue) *pcbValue = sizeof(SQL_TIME_STRUCT);
+        } else if (fCType == SQL_C_TYPE_TIMESTAMP) {
+            // Parse timestamp string "YYYY-MM-DD HH:MM:SS" into SQL_TIMESTAMP_STRUCT
+            SQL_TIMESTAMP_STRUCT tss = {0, 0, 0, 0, 0, 0, 0};
+            if (value.length() >= 19) {
+                try {
+                    tss.year = static_cast<SQLSMALLINT>(std::stoi(value.substr(0, 4)));
+                    tss.month = static_cast<SQLUSMALLINT>(std::stoi(value.substr(5, 2)));
+                    tss.day = static_cast<SQLUSMALLINT>(std::stoi(value.substr(8, 2)));
+                    tss.hour = static_cast<SQLUSMALLINT>(std::stoi(value.substr(11, 2)));
+                    tss.minute = static_cast<SQLUSMALLINT>(std::stoi(value.substr(14, 2)));
+                    tss.second = static_cast<SQLUSMALLINT>(std::stoi(value.substr(17, 2)));
+                } catch (...) { /* leave as zeros */ }
+            }
+            if (rgbValue) *static_cast<SQL_TIMESTAMP_STRUCT*>(rgbValue) = tss;
+            if (pcbValue) *pcbValue = sizeof(SQL_TIMESTAMP_STRUCT);
         } else {
             // SQL_C_CHAR or default — return ANSI
             if (rgbValue && cbValueMax > 0) {
@@ -571,6 +673,13 @@ SQLRETURN SQL_API SQLGetData(
                 static_cast<char*>(rgbValue)[copy_len] = '\0';
             }
             if (pcbValue) *pcbValue = static_cast<SQLLEN>(value.length());
+            
+            if (cbValueMax == 0) {
+                // Zero buffer: report needed length, indicate truncation
+                stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                    "String data, right truncated");
+                return SQL_SUCCESS_WITH_INFO;
+            }
             
             if (static_cast<SQLLEN>(value.length()) >= cbValueMax) {
                 stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
@@ -1062,7 +1171,35 @@ SQLRETURN SQL_API SQLDescribeParam(
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     
-    (void)ipar;
+    if (!stmt->prepared_) {
+        stmt->add_diagnostic(sqlstate::FUNCTION_SEQUENCE_ERROR, 0,
+                            "Statement not prepared");
+        return SQL_ERROR;
+    }
+    
+    // Count parameter markers in the prepared SQL
+    int num_params = 0;
+    {
+        bool in_sq = false, in_dq = false;
+        for (size_t i = 0; i < stmt->sql_.length(); ++i) {
+            char c = stmt->sql_[i];
+            if (c == '\'' && !in_dq) {
+                if (in_sq && i + 1 < stmt->sql_.length() && stmt->sql_[i + 1] == '\'') { ++i; continue; }
+                in_sq = !in_sq;
+            } else if (c == '"' && !in_sq) {
+                in_dq = !in_dq;
+            } else if (c == '?' && !in_sq && !in_dq) {
+                ++num_params;
+            }
+        }
+    }
+    
+    if (ipar < 1 || ipar > static_cast<SQLUSMALLINT>(num_params)) {
+        stmt->add_diagnostic("HY000", 0,
+                            "Invalid parameter number: " + std::to_string(ipar) +
+                            " (statement has " + std::to_string(num_params) + " parameters)");
+        return SQL_ERROR;
+    }
     
     // Default parameter description
     if (pfSqlType) *pfSqlType = SQL_VARCHAR;

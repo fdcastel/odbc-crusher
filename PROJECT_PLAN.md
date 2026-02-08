@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.2  
+**Version**: 2.3  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 7, 2026
 
@@ -423,6 +423,62 @@ After the mock driver rewrite, verify the consonant development rule:
 - 8 new tests covering all ODBC array parameter features ✅
 - GTest unit tests passing against mock driver ✅
 - `SQLGetInfo` reports correct array parameter capabilities ✅
+
+---
+
+### Phase 17: Mock Driver Full SQL Support & Zero Skips
+
+**Goal**: Make the mock driver a reference ODBC implementation. With `Mode=Success`, every odbc-crusher test should pass — zero failures, minimal skips (only for genuinely optional Level 2 features the mock driver explicitly doesn't implement).
+
+**Problem Statement**: Running odbc-crusher against the mock driver produces 75/131 passes (57.3%), 2 failures, and 54 skipped tests. For a driver meant to be the "example of how to do ODBC right," this is unacceptable.
+
+**Reference**: `MOCK_DRIVER_PLAN.md` Phase M6 contains the full implementation plan.
+
+#### 17.1 Root Cause Analysis
+
+| Root Cause | Tests Affected | Fix |
+|------------|----------------|-----|
+| `SELECT literal` (no FROM clause) rejected | ~35 tests (statements, data types, edge cases, state machine, etc.) | Add literal SELECT parser to mock driver |
+| `CUSTOMERS` table missing from mock catalog | ~14 tests (unicode, cursor, param binding, diagnostics, catalog depth) | Add CUSTOMERS table with FK relationships |
+| `CREATE TABLE`/`DROP TABLE` not supported | 2 tests (manual commit, manual rollback) | Add DDL support with mutable catalog |
+| No scrollable cursors | 3 tests (FIRST, LAST, ABSOLUTE scroll) | Implement `SQLFetchScroll` with all orientations |
+| `SQLDescribeParam` doesn't validate param number | 1 test | Count `?` markers, validate range |
+| `INSERT` doesn't persist data | 2 tests (transaction verification) | Add mutable data storage with rollback support |
+
+#### 17.2 Mock Driver Changes (from MOCK_DRIVER_PLAN.md Phase M6)
+
+- [x] **Literal SELECT parser**: Handle `SELECT expr [, expr ...]` without FROM — integers, floats, quoted strings, NULL, CAST(), parameter markers, N'...', X'...', UUID()
+- [x] **CUSTOMERS table**: Add to default catalog with CUSTOMER_ID, NAME, EMAIL, CREATED_DATE, IS_ACTIVE, BALANCE columns; FK from ORDERS
+- [x] **DDL support**: `CREATE TABLE name (col type, ...)` and `DROP TABLE name` modify catalog at runtime
+- [x] **Data persistence**: INSERT stores rows in mutable storage; SELECT COUNT(*) reads from it; SQLEndTran(ROLLBACK) clears pending data
+- [x] **Scrollable cursors**: SQLFetchScroll supports FIRST, LAST, ABSOLUTE, RELATIVE when cursor type allows it
+- [x] **SQLDescribeParam**: Count `?` markers in SQL, validate parameter number range
+
+#### 17.3 Unit Tests
+
+- [x] GTest tests for literal SELECT parsing and execution
+- [x] GTest tests for CREATE TABLE / DROP TABLE
+- [x] GTest tests for INSERT + SELECT COUNT(*) + ROLLBACK
+- [x] GTest tests for scrollable cursor fetch orientations
+- [x] GTest tests for SQLDescribeParam validation
+
+#### 17.4 Verification
+
+- [x] `odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;"` exits with code 0 (all tests pass) ✅
+- [x] Mock driver unit tests: 48/48 pass (100%) ✅
+- [x] odbc-crusher unit tests: 60/60 pass (100%) ✅
+- [ ] CI workflow passes on all platforms
+
+#### 17.5 README Update
+
+- [x] Remove "Mock Driver Limitations" section listing limitations that Phase M6 fixes
+- [x] Update mock driver capabilities list with all new features
+
+**Deliverables**:
+- Mock driver handles all SQL patterns emitted by odbc-crusher ✅
+- **131/131 tests pass (100.0%) — 0 failures, 0 skips** ✅
+- Mock driver unit tests cover all new functionality (48/48 pass) ✅
+- README accurately describes mock driver capabilities ✅
 
 ---
 

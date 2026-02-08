@@ -257,8 +257,8 @@ std::string sqlw_to_string(const SQLWCHAR* sql_str, SQLINTEGER length) {
     if (length == SQL_NTS) {
         char_count = wcslen_sqlw(sql_str);
     } else if (length > 0) {
-        // length is in bytes for W functions
-        char_count = length / static_cast<SQLINTEGER>(sizeof(SQLWCHAR));
+        // length is in characters for W functions per ODBC spec
+        char_count = length;
     } else {
         return "";
     }

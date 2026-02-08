@@ -286,25 +286,39 @@ SQLRETURN SQL_API SQLForeignKeys(
     
     MockCatalog& catalog = MockCatalog::instance();
     
-    // If FK table specified, get its foreign keys
+    // Collect FK table names to iterate
+    std::vector<std::string> fk_tables_to_check;
     if (!fk_table.empty()) {
-        auto fks = catalog.get_foreign_keys(fk_table);
+        fk_tables_to_check.push_back(fk_table);
+    } else if (fk_table.empty() && pk_table.empty()) {
+        // Return all foreign keys from all tables
+        for (const auto& tbl : catalog.tables()) {
+            fk_tables_to_check.push_back(tbl.name);
+        }
+    }
+    
+    for (const auto& table_name : fk_tables_to_check) {
+        auto fks = catalog.get_foreign_keys(table_name);
         int seq = 1;
         
         for (const auto& [fk_col, pk_col] : fks) {
+            // Filter by PK table if specified
+            if (!pk_table.empty() && fk_col.fk_table != pk_table) {
+                continue;
+            }
             std::vector<std::variant<std::monostate, long long, double, std::string>> row;
             row.push_back(std::monostate{});  // PKTABLE_CAT
             row.push_back(std::monostate{});  // PKTABLE_SCHEM
-            row.push_back(fk_col.fk_table);   // PKTABLE_NAME
-            row.push_back(fk_col.fk_column);  // PKCOLUMN_NAME
+            row.push_back(fk_col.fk_table);   // PKTABLE_NAME (the referenced PK table)
+            row.push_back(fk_col.fk_column);  // PKCOLUMN_NAME (the referenced PK column)
             row.push_back(std::monostate{});  // FKTABLE_CAT
             row.push_back(std::monostate{});  // FKTABLE_SCHEM
-            row.push_back(fk_table);          // FKTABLE_NAME
+            row.push_back(table_name);         // FKTABLE_NAME
             row.push_back(fk_col.name);       // FKCOLUMN_NAME
             row.push_back(static_cast<long long>(seq++));  // KEY_SEQ
             row.push_back(static_cast<long long>(SQL_CASCADE));  // UPDATE_RULE
             row.push_back(static_cast<long long>(SQL_CASCADE));  // DELETE_RULE
-            row.push_back(std::string("FK_") + fk_table + "_" + fk_col.name);  // FK_NAME
+            row.push_back(std::string("FK_") + table_name + "_" + fk_col.name);  // FK_NAME
             row.push_back(std::string("PK_") + fk_col.fk_table);  // PK_NAME
             row.push_back(static_cast<long long>(SQL_NOT_DEFERRABLE));  // DEFERRABILITY
             

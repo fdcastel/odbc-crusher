@@ -3,6 +3,7 @@
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/behaviors.hpp"
+#include "mock/mock_catalog.hpp"
 
 using namespace mock_odbc;
 
@@ -41,6 +42,10 @@ SQLRETURN SQL_API SQLEndTran(
                 }
             }
         }
+        
+        if (fType == SQL_ROLLBACK) {
+            MockCatalog::instance().clear_inserted_data();
+        }
     } else if (fHandleType == SQL_HANDLE_DBC) {
         auto* conn = validate_dbc_handle(hHandle);
         if (!conn) return SQL_INVALID_HANDLE;
@@ -60,6 +65,10 @@ SQLRETURN SQL_API SQLEndTran(
                 stmt->executed_ = false;
                 stmt->result_data_.clear();
             }
+        }
+        
+        if (fType == SQL_ROLLBACK) {
+            MockCatalog::instance().clear_inserted_data();
         }
     } else {
         return SQL_INVALID_HANDLE;

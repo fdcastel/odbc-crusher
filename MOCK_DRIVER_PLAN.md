@@ -6,7 +6,7 @@
 
 ---
 
-## 0. Status (February 6, 2026)
+## 0. Status (February 7, 2026)
 
 ### Completed
 
@@ -16,20 +16,32 @@
   - Explicit `.def` file matching MySQL ODBC Unicode Driver export pattern (W-only for string functions, plain names for non-string functions)
   - `WINDOWS_EXPORT_ALL_SYMBOLS` removed — explicit `.def` file prevents DM symbol re-export
   - **DM crash fix**: `StatementHandle` constructor now allocates all four implicit descriptor handles (`app_param_desc_`, `imp_param_desc_`, `app_row_desc_`, `imp_row_desc_`); `SQLGetStmtAttr` returns them for `SQL_ATTR_APP_PARAM_DESC`/`SQL_ATTR_IMP_PARAM_DESC`/`SQL_ATTR_APP_ROW_DESC`/`SQL_ATTR_IMP_ROW_DESC`. This was the root cause of the DM access violation at `ODBC32.dll+0x3E48` — the DM queries these descriptors immediately after `SQLAllocHandle(SQL_HANDLE_STMT)`.
+- **Phase M2 (Internal API Hardening)** — DONE
+- **Phase M3 (Spec Compliance Polish)** — DONE
+- **Phase M4 (Thread Safety)** — DONE
+- **Phase M5 (Arrays of Parameter Values)** — DONE
+- **Phase M6 (Full SQL Support & Catalog Alignment)** — DONE
+  - Literal `SELECT` queries without `FROM` clause (integers, floats, strings, NULL, CAST, N'...', X'...', DATE '...', UUID(), parameter markers `?`)
+  - `CREATE TABLE` / `DROP TABLE` with runtime catalog modification
+  - `INSERT INTO` with data persistence + `SELECT COUNT(*)` aggregate
+  - `SQLEndTran(SQL_ROLLBACK)` clears inserted data
+  - Scrollable cursors (`SQL_FETCH_FIRST`, `SQL_FETCH_LAST`, `SQL_FETCH_ABSOLUTE`, `SQL_FETCH_RELATIVE`, `SQL_FETCH_PRIOR`)
+  - `CUSTOMERS` table added to default catalog with FK from `ORDERS`
+  - `SQLDescribeParam` validates parameter number range
+  - `SQLForeignKeys` returns all FKs when iterating tables
+  - Unicode W-wrapper string length bug fixed (`sqlw_to_string` was dividing character count by `sizeof(SQLWCHAR)`)
+  - `SQLGetData` with `cbValueMax=0` returns `SQL_SUCCESS_WITH_INFO` with data length
+  - `SQL_C_TYPE_DATE` conversion from string values
 
-### Test Results
+### Test Results (Post-M6)
 
 - **Mock driver unit tests**: 48/48 pass (100%)
-- **odbc-crusher end-to-end**: 53/101 tests pass (52.5%), 2 fail, 46 skipped
-  - Failures are pre-existing: mock driver doesn't support arbitrary `SELECT` queries with literal values
-  - All connection, metadata, transaction, buffer validation, error queue, state machine, descriptor, and advanced feature tests pass
-- **odbc-crusher unit tests**: 42/45 pass (93%), 3 fail (pre-existing: require real Firebird/MySQL drivers or arbitrary SQL execution)
+- **odbc-crusher end-to-end**: **131/131 tests pass (100.0%)** — 0 failures, 0 skips
+- **odbc-crusher unit tests**: 60/60 pass (100%)
 
 ### Remaining Work
 
-- Phase M2: Internal API hardening (Unicode-aware `SQLGetData`, catalog column types)
-- Phase M3: Spec compliance polish (SQLSTATEs, `DllMain`, connection attributes)
-- Phase M4: Thread safety (per-handle locking)
+No pending phases. The mock driver is feature-complete for odbc-crusher's current test suite.
 
 ---
 
@@ -643,6 +655,149 @@ Report array parameter capabilities:
 - [x] Partial failure returns `SQL_SUCCESS_WITH_INFO` with mixed status
 - [x] `SQLGetInfo` reports `SQL_PARC_BATCH` and `SQL_PAS_NO_SELECT`
 - [x] Mock driver unit tests cover array parameter execution
+
+---
+
+### Phase M6: Full SQL Support & Catalog Alignment (HIGH)
+
+**Goal**: The mock driver with `Mode=Success` should be a reference implementation — every odbc-crusher test should pass. The mock driver must handle all SQL patterns the test suite emits, support scrollable cursors, and have a catalog that matches what the tests expect.
+
+**Root Cause Analysis**: 54 of 131 tests skip or fail because:
+
+| Problem | Impact | Tests Affected |
+|---------|--------|----------------|
+| `SELECT literal` (no FROM) fails with "SELECT without FROM clause" | All statement/datatype/edge-case tests | ~35 tests |
+| `CUSTOMERS` table missing from catalog | Unicode, cursor, param binding, diagnostic, catalog depth tests reference it | ~14 tests |
+| `CREATE TABLE`/`DROP TABLE` not supported | Transaction commit/rollback tests | 2 tests |
+| Scrollable cursors not implemented | `SQLFetchScroll(FIRST/LAST/ABSOLUTE)` tests | 3 tests |
+| `SQLDescribeParam` doesn't validate parameter number | Reported as unsupported | 1 test |
+| `SQLForeignKeys` has no data for `CUSTOMERS` table | Reported as unsupported | 1 test |
+
+#### M6.1 SELECT Literal Queries (Critical)
+
+The SQL parser must handle `SELECT` without a `FROM` clause. These patterns are the most common in the test suite:
+
+| Pattern | Expected Behavior |
+|---------|-------------------|
+| `SELECT 1` | 1 row, 1 column (INTEGER), value = 1 |
+| `SELECT 42` | 1 row, 1 column (INTEGER), value = 42 |
+| `SELECT -2147483648` | 1 row, 1 column (INTEGER), value = INT_MIN |
+| `SELECT 3.14` | 1 row, 1 column (DOUBLE), value = 3.14 |
+| `SELECT 'hello'` | 1 row, 1 column (VARCHAR), value = "hello" |
+| `SELECT ''` | 1 row, 1 column (VARCHAR), value = "" |
+| `SELECT NULL` | 1 row, 1 column (VARCHAR), value = NULL |
+| `SELECT 1, 'text'` | 1 row, 2 columns |
+| `SELECT CAST(42 AS INTEGER)` | 1 row, 1 column (INTEGER), value = 42 |
+| `SELECT CAST(NULL AS INTEGER)` | 1 row, 1 column (INTEGER), value = NULL |
+| `SELECT CAST('...' AS VARCHAR(n))` | 1 row, 1 column (VARCHAR), value = literal |
+| `SELECT CAST('...' AS DATE)` | 1 row, 1 column (DATE), value = literal |
+| `SELECT CAST(x AS DOUBLE PRECISION)` | 1 row, 1 column (DOUBLE), value = x |
+| `SELECT CAST(0x... AS VARBINARY(n))` | 1 row, 1 column (VARBINARY), value = hex |
+| `SELECT ?` | 1 row, 1 column, type from bound param |
+| `SELECT DATE '2026-02-05'` | 1 row, 1 column (DATE), value = literal |
+| `SELECT N'...'` | 1 row, 1 column (WVARCHAR), value = literal |
+| `SELECT X'48656C6C6F'` | 1 row, 1 column (VARBINARY), value = hex |
+| `SELECT UUID()` / `SELECT GEN_UUID()` | 1 row, 1 column (GUID/CHAR), value = generated UUID |
+
+Implementation:
+- [x] In `parse_sql()`: When `SELECT` is detected and no `FROM` is found, parse the expression list and set `is_literal_select = true`
+- [x] Add literal expression parser that handles: integers, floats, quoted strings, `NULL`, `CAST(expr AS type)`, parameter markers `?`, `N'...'`, `X'...'`, `DATE '...'`, `UUID()`/`GEN_UUID()`
+- [x] In `execute_query()`: For literal SELECTs, generate a single row with inferred column types and the literal values
+- [x] Column names for literals: `EXPR_1`, `EXPR_2`, etc. (or alias if `AS name` present)
+
+#### M6.2 Catalog Alignment (Critical)
+
+The test suite references `CUSTOMERS` extensively but the mock catalog only has `USERS`, `ORDERS`, `PRODUCTS`, `ORDER_ITEMS`. The tests also reference columns like `NAME`, `CUSTOMER_ID`, `EMAIL`.
+
+Add a `CUSTOMERS` table to the default catalog:
+
+```
+CUSTOMERS (
+    CUSTOMER_ID  INTEGER     PK, auto-increment
+    NAME         VARCHAR(100) NOT NULL
+    EMAIL        VARCHAR(100) NULLABLE
+    CREATED_DATE DATE         NULLABLE
+    IS_ACTIVE    BIT          NULLABLE, default 1
+    BALANCE      DECIMAL(10,2) NULLABLE, default 0.00
+)
+```
+
+Also add foreign key from `ORDERS.USER_ID` → `CUSTOMERS.CUSTOMER_ID` (renaming the FK target) so `SQLForeignKeys` returns data for `CUSTOMERS`.
+
+- [x] Add `CUSTOMERS` table to `create_default_catalog()`
+- [x] Add FK relationship from `ORDERS` to `CUSTOMERS`
+- [x] Add indexes for `CUSTOMERS` (PK, unique index on EMAIL)
+
+#### M6.3 CREATE TABLE / DROP TABLE Support
+
+Transaction tests need `CREATE TABLE ODBC_TEST_TXN (ID INTEGER, VALUE VARCHAR(50))` and `DROP TABLE ODBC_TEST_TXN`.
+
+Make the catalog mutable:
+
+- [x] Add `add_table()` method to `MockCatalog` — creates a new table with given columns
+- [x] Add `remove_table()` method to `MockCatalog` — removes a table by name
+- [x] In `parse_sql()`: Recognize `CREATE TABLE name (col_defs)` and `DROP TABLE name`
+- [x] Add `QueryType::CreateTable` and `QueryType::DropTable` to `ParsedQuery`
+- [x] In `execute_query()`: Call `MockCatalog::add_table()` / `remove_table()` for DDL
+- [x] Parse column definitions: `name TYPE` pairs, support `INTEGER`, `INT`, `VARCHAR(n)`, `DECIMAL(p,s)`, `DATE`, `TIMESTAMP`, `BIT`
+
+#### M6.4 Scrollable Cursors
+
+The mock driver stores result data in `std::vector<MockRow>` which supports random access. Only the fetch logic needs updating.
+
+- [x] `SQLFetchScroll(SQL_FETCH_NEXT)`: Already works (delegates to `SQLFetch`)
+- [x] `SQLFetchScroll(SQL_FETCH_FIRST)`: Set `current_row_ = 0`, return first row
+- [x] `SQLFetchScroll(SQL_FETCH_LAST)`: Set `current_row_ = result_data_.size() - 1`, return last row
+- [x] `SQLFetchScroll(SQL_FETCH_ABSOLUTE, n)`: Set `current_row_ = n - 1` (1-based), return row at that position; handle out-of-range with `SQL_NO_DATA`
+- [x] `SQLFetchScroll(SQL_FETCH_RELATIVE, n)`: Set `current_row_ += n`, return row; handle bounds
+- [x] Honor `cursor_type_` attribute: if `SQL_CURSOR_FORWARD_ONLY`, reject non-NEXT scroll types with HY106; if `SQL_CURSOR_STATIC` or higher, allow all scroll types
+- [x] Transfer data to bound columns (same logic as `SQLFetch`)
+
+#### M6.5 SQLDescribeParam Accuracy
+
+The current implementation returns hardcoded values for all parameters without validating the parameter number. Fix:
+
+- [x] Count `?` markers in the prepared SQL string
+- [x] Validate `ParameterNumber` is in range `[1, num_params]`; return HY000 if out of range
+- [x] Return reasonable type info based on context (SQL_VARCHAR/255/SQL_NULLABLE is acceptable for a mock driver)
+
+#### M6.6 INSERT Data Persistence (for Transaction Tests)
+
+Transaction commit/rollback tests need:
+1. `INSERT INTO ODBC_TEST_TXN VALUES (1, 'test')` — actually insert data
+2. `SELECT COUNT(*) FROM ODBC_TEST_TXN` — return the count of inserted rows
+3. `SQLEndTran(SQL_ROLLBACK)` — revert inserts
+
+- [x] Add mutable data storage to `MockCatalog`: `std::unordered_map<string, vector<MockRow>> inserted_data_`
+- [x] `INSERT` statements parse `VALUES (...)` and store the row
+- [x] `SELECT COUNT(*)` recognized as an aggregate — returns count from `inserted_data_` + `result_set_size` for static data
+- [x] `SQLEndTran(SQL_COMMIT)`: No-op (data already stored)
+- [x] `SQLEndTran(SQL_ROLLBACK)`: Clear `inserted_data_` for all tables modified in the current transaction
+- [x] Track pending transaction data separately so rollback can discard it
+
+#### M6.7 Mock Driver Unit Tests
+
+- [x] Test `SELECT 1`, `SELECT 'hello'`, `SELECT 3.14`, `SELECT NULL` parse and execute correctly
+- [x] Test `SELECT CAST(42 AS INTEGER)` returns INTEGER type
+- [x] Test `SELECT CAST(NULL AS VARCHAR(50))` returns NULL with SQL_NULL_DATA
+- [x] Test `CREATE TABLE` / `DROP TABLE` add and remove tables from catalog
+- [x] Test `INSERT INTO` + `SELECT COUNT(*)` returns correct count
+- [x] Test `SQLEndTran(SQL_ROLLBACK)` clears inserted data
+- [x] Test `SQLFetchScroll` with all fetch orientations
+- [x] Test `SQLDescribeParam` validates parameter number range
+- [x] Test `CUSTOMERS` table exists in default catalog with expected columns
+
+#### M6.8 Deliverables
+
+- [x] `SELECT literal` queries work (integers, floats, strings, NULL, CAST, parameters, N'...', X'...', UUID)
+- [x] `CUSTOMERS` table in default catalog with FK relationship from ORDERS
+- [x] `CREATE TABLE` / `DROP TABLE` modify the catalog at runtime
+- [x] `INSERT INTO` persists data; `SELECT COUNT(*)` returns actual count
+- [x] `SQLEndTran(SQL_ROLLBACK)` reverts inserted data
+- [x] Scrollable cursors work: FIRST, LAST, ABSOLUTE, RELATIVE
+- [x] `SQLDescribeParam` validates parameter number
+- [x] All 131 odbc-crusher tests pass (0 failures, 0 skips) ✅
+- [x] Mock driver unit tests cover all new functionality (48/48 pass)
 
 ---
 

@@ -5,7 +5,7 @@
 
 A command-line tool that tests ODBC drivers for correctness and spec compliance.
 
-Point it at any ODBC connection string and it will run **120+ tests** covering connections, statements, metadata, data types, transactions, Unicode handling, catalog functions, diagnostics, cursor behavior, parameter binding, error handling, buffer validation, and state machine compliance — then report what passed, failed, or was skipped.
+Point it at any ODBC connection string and it will run **131 tests** covering connections, statements, metadata, data types, transactions, Unicode handling, catalog functions, diagnostics, cursor behavior, parameter binding, error handling, buffer validation, and state machine compliance — then report what passed, failed, or was skipped.
 
 ## Quick Start
 
@@ -225,21 +225,19 @@ odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
 #### 6. What the Mock Driver Supports
 
 - **All core ODBC 3.x functions** (SQLConnect, SQLPrepare, SQLExecute, etc.)
-- **Catalog functions** (SQLTables, SQLColumns, SQLStatistics, etc.)
+- **Catalog functions** (SQLTables, SQLColumns, SQLStatistics, SQLForeignKeys, etc.)
 - **Data types** (Integer, String, Decimal, Date/Time, NULL, GUID, Binary)
-- **Transactions** (Autocommit, commit/rollback, isolation levels)
+- **Transactions** (Autocommit, commit/rollback with data rollback, isolation levels)
 - **Metadata** (Type information, function support, driver attributes)
 - **Error diagnostics** (SQLGetDiagRec with SQLSTATE codes)
 - **Unicode** (W-variant entry points: SQLConnectW, SQLColumnsW, etc.)
+- **Literal SELECT queries** (SELECT 1, SELECT 'hello', SELECT CAST(...), etc.)
+- **CREATE/DROP TABLE** (dynamic schema modification)
+- **INSERT with data persistence** (in-memory row storage)
+- **Scrollable cursors** (static cursors with SQL_FETCH_FIRST/LAST/PRIOR/ABSOLUTE/RELATIVE)
+- **Parameter binding** (SQLBindParameter with value substitution in literal SELECTs)
 
-#### Mock Driver Limitations
-
-The mock driver implements a simplified in-memory database. It does **not** support:
-- Arbitrary SQL `SELECT` queries with literal values
-- Real transaction isolation
-- Cursor scrolling (forward-only cursors only)
-
-For testing these features, use a real database (Firebird, MySQL, PostgreSQL, etc.) instead.
+The mock driver achieves **100% pass rate** (131/131 tests) when run with `Mode=Success`.
 
 ## CLI Reference
 
