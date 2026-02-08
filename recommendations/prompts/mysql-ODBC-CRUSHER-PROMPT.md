@@ -1,0 +1,21 @@
+# ODBC Crusher Analysis Prompt – mysql
+
+**Driver version**: `9.2.0`
+**Source code**: `tmp/external/mysql-connector-odbc` (checked out at tag `9.2.0`)
+**Reports**:
+- `tmp/external/mysql-connector-odbc/crusher-report.txt`
+- `tmp/external/mysql-connector-odbc/crusher-report.json`
+
+## Instructions
+
+Do a critical analysis of what `odbc-crusher` says about the `mysql` driver and review its source code (at exactly this version) to see what the driver actually implements.
+
+### GOAL
+
+For each **failed** or **skipped** test, investigate its result against the real `mysql` sources:
+
+1. **If the odbc-crusher report is CORRECT** (the driver really has the deficiency):
+   Write a recommendation in `recommendations/mysql_ODBC_RECOMMENDATIONS.md` explaining what the `mysql` developers should do to fix it.
+
+2. **If the odbc-crusher report is WRONG** (the driver is fine, odbc-crusher misjudged it):
+   Record it as a bug in `PROJECT_PLAN.md` for future fix.
