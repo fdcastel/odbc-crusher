@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.4  
+**Version**: 2.5  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 8, 2026
 
@@ -482,6 +482,90 @@ After the mock driver rewrite, verify the consonant development rule:
 
 ---
 
+### Phase 18: Real-Driver Validation Bugs (Firebird Analysis)
+
+**Goal**: Fix all bugs discovered by running odbc-crusher against the Firebird ODBC driver (v03.00.0021) and cross-referencing against the driver's actual source code. These bugs cause false negatives (reporting failures or skips for features the driver actually supports) and undermine trust in the tool's output.
+
+**Discovery Date**: February 8, 2026  
+**Analysis Method**: Ran odbc-crusher against Firebird ODBC Debug driver, then compared every failed/skipped test result against the Firebird ODBC driver source code to determine whether the result was correct or a bug in odbc-crusher.
+
+**Summary**: Of 25 skipped + 1 failed + 1 error tests, investigation found **17 bugs in odbc-crusher** where tests falsely report features as unsupported due to hardcoded table names, non-portable SQL syntax, or flawed test logic.
+
+#### 18.1 Hardcoded Table Names (14 tests)
+
+**Root Cause**: Tests reference tables (`CUSTOMERS`, `USERS`) that only exist in the mock driver's default catalog, not in real databases. When `SQLPrepare` or `SQLExecDirect` fails because the table doesn't exist, the test reports `SKIP_INCONCLUSIVE` — falsely implying the driver can't handle the feature.
+
+| Bug ID | Test | File | Hardcoded Table | Fix |
+|--------|------|------|-----------------|-----|
+| B18-01 | `test_describecol_wchar_names` | `unicode_tests.cpp` | `CUSTOMERS` | Use `RDB$DATABASE` / `INFORMATION_SCHEMA` fallback or discover table via `SQLTables` |
+| B18-02 | `test_getdata_sql_c_wchar` | `unicode_tests.cpp` | `CUSTOMERS` | Same — use discovery or `SELECT literal FROM RDB$DATABASE` |
+| B18-03 | `test_columns_unicode_patterns` | `unicode_tests.cpp` | `CUSTOMERS` | Call `SQLTables` first, pick first user table for `SQLColumnsW` |
+| B18-04 | `test_column_wise_array_binding` | `array_param_tests.cpp` | `USERS` | Create temp table before test, drop after |
+| B18-05 | `test_row_wise_array_binding` | `array_param_tests.cpp` | `USERS` | Same |
+| B18-06 | `test_param_status_array` | `array_param_tests.cpp` | `USERS` | Same |
+| B18-07 | `test_params_processed_count` | `array_param_tests.cpp` | `USERS` | Same |
+| B18-08 | `test_array_with_null_values` | `array_param_tests.cpp` | `USERS` | Same |
+| B18-09 | `test_param_operation_array` | `array_param_tests.cpp` | `USERS` | Same |
+| B18-10 | `test_paramset_size_one` | `array_param_tests.cpp` | `USERS` | Same |
+| B18-11 | `test_array_partial_error` | `array_param_tests.cpp` | `USERS` | Same |
+| B18-12 | `test_bindparam_wchar_input` | `param_binding_tests.cpp` | `CUSTOMERS` | Use `SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE` or discover table |
+| B18-13 | `test_bindparam_null_indicator` | `param_binding_tests.cpp` | `CUSTOMERS` | Same |
+| B18-14 | `test_param_rebind_execute` | `param_binding_tests.cpp` | `CUSTOMERS` | Same |
+
+**Fix Strategy**: All tests that need a writable table (`INSERT` tests) should `CREATE TABLE` their own temp table at the start and `DROP TABLE` at the end, similar to how `transaction_tests.cpp` already works. All tests that only need a readable table (`SELECT` tests) should discover a table via `SQLTables` or use a literal query like `SELECT CAST(? AS INTEGER) FROM RDB$DATABASE`.
+
+- [ ] Array param tests: Add `create_test_table()` / `drop_test_table()` helper that creates `ODBC_TEST_ARRAY (ID INTEGER, NAME VARCHAR(50))` with DDL
+- [ ] Param binding tests: Replace `CUSTOMERS` references with discovery-based or literal queries
+- [ ] Unicode tests: Replace `CUSTOMERS` references with discovery-based queries or `RDB$DATABASE`
+
+#### 18.2 Non-Portable SQL Syntax (1 test)
+
+| Bug ID | Test | File | Issue | Fix |
+|--------|------|------|-------|-----|
+| B18-15 | `test_unicode_types` | `datatype_tests.cpp` | Uses `N'...'` string prefix, `NVARCHAR` type, and `DUAL` table — none exist in Firebird | Add Firebird-compatible fallback: `SELECT CAST('text' AS VARCHAR(50)) FROM RDB$DATABASE` then retrieve as `SQL_C_WCHAR` |
+
+- [ ] Add fallback query that works on Firebird (`SELECT CAST('Hello' AS VARCHAR(50)) FROM RDB$DATABASE`)
+- [ ] The test should request data as `SQL_C_WCHAR` regardless of SQL type — the driver handles the conversion
+
+#### 18.3 Test Setup / Logic Bugs (2 tests)
+
+| Bug ID | Test | File | Issue | Fix |
+|--------|------|------|-------|-----|
+| B18-16 | `test_manual_commit` / `test_manual_rollback` | `transaction_tests.cpp` | When `DROP TABLE` fails on Firebird, the transaction enters a broken state. Subsequent `CREATE TABLE` fails because no `ROLLBACK` was issued after the failed DDL | Add `SQLEndTran(SQL_ROLLBACK)` after a failed `DROP TABLE` attempt |
+| B18-17 | `test_foreign_keys` | `metadata_tests.cpp` | Test treats `SQLForeignKeys` returning `SQL_SUCCESS` with 0 rows as "unsupported". But the driver reports `SQLForeignKeys` as supported via `SQLGetFunctions`, and the function executes correctly — the test tables simply have no FK relationships | Distinguish "function callable with 0 results" (PASS) from "function returned SQL_ERROR" (SKIP_UNSUPPORTED) |
+
+- [ ] Transaction tests: Add rollback recovery after failed DROP TABLE
+- [ ] Foreign keys test: If `SQLForeignKeys` returns `SQL_SUCCESS` (even with 0 rows), report PASS — the function works
+
+#### 18.4 Cursor/Boundary/Diagnostic Query Failures (5 tests)
+
+These tests have fallback query chains but the fallbacks may not work on all drivers. While they currently degrade to `SKIP_INCONCLUSIVE`, improving them would increase test coverage on real drivers.
+
+| Bug ID | Test | File | Issue | Fix |
+|--------|------|------|-------|-----|
+| B18-18 | `test_forward_only_past_end` | `cursor_behavior_tests.cpp` | Fallback queries work but test still SKIPs on some drivers | Verify fallback chain includes `SELECT 1 FROM RDB$DATABASE` and `SELECT 1` |
+| B18-19 | `test_fetchscroll_first_forward_only` | `cursor_behavior_tests.cpp` | Same | Same |
+| B18-20 | `test_getdata_same_column_twice` | `cursor_behavior_tests.cpp` | Same | Same |
+| B18-21 | `test_getdata_zero_buffer` | `boundary_tests.cpp` | Query fallback may not be reached | Ensure fallback chain is robust |
+| B18-22 | `test_diagfield_row_count` | `diagnostic_depth_tests.cpp` | Query fallback may not be reached | Ensure fallback chain is robust |
+
+- [ ] Review all fallback query chains for completeness
+- [ ] Ensure `SELECT 1 FROM RDB$DATABASE` is always in the fallback list for Firebird
+- [ ] Add `SELECT 1` as a final universal fallback (works on most databases without FROM)
+
+#### 18.5 Documentation
+
+- [ ] Add `FIREBIRD_ODBC_RECOMMENDATIONS.md` to project (recommendations for Firebird ODBC developers) ✅
+- [ ] Update Lessons Learned section with real-driver validation insights
+
+**Deliverables**:
+- All 22 bugs fixed — no false negatives when testing against Firebird ODBC
+- Tests create their own temp tables instead of relying on pre-existing ones
+- SQL fallback chains cover Firebird, MySQL, PostgreSQL, SQL Server syntax
+- Test results accurately reflect driver capabilities
+
+---
+
 ## 5. Technical Stack
 | Language | C++17 | Direct ODBC API access, `std::optional`, `std::string_view` |
 | Build | CMake 3.20+ | Industry standard, CTest integration |
@@ -573,11 +657,15 @@ Every test must:
 
 7. **Multi-database SQL compatibility requires fallback patterns.** The `try Firebird syntax → try MySQL syntax → try generic` pattern works but hides failures. Tests should document which SQL dialect succeeded.
 
-8. **Hardcoded table names break real-driver testing.** Tests that reference `CUSTOMERS` or similar mock-driver tables fail silently against real databases. All SQL queries must include fallback options (e.g., `RDB$DATABASE` for Firebird, `information_schema.TABLES` for MySQL). Fixed in Phase 17 investigation.
+8. **Hardcoded table names break real-driver testing.** Tests that reference `CUSTOMERS` or similar mock-driver tables fail silently against real databases. All SQL queries must include fallback options (e.g., `RDB$DATABASE` for Firebird, `information_schema.TABLES` for MySQL). Partially fixed in Phase 17 investigation; comprehensive fix in Phase 18.
 
-9. **DDL errors invalidate Firebird transactions.** When a `DROP TABLE` fails in Firebird with autocommit off, the transaction enters a broken state. A `ROLLBACK` is needed before subsequent DDL can succeed. Fixed by adding `SQLEndTran(ROLLBACK)` after failed DROP TABLE attempts in transaction tests.
+9. **DDL errors invalidate Firebird transactions.** When a `DROP TABLE` fails in Firebird with autocommit off, the transaction enters a broken state. A `ROLLBACK` is needed before subsequent DDL can succeed. Identified in Phase 18 (B18-16).
 
-10. **"Zero results" ≠ "unsupported function."** A catalog function like `SQLForeignKeys` returning `SQL_SUCCESS` with 0 rows means the function works but the database has no foreign keys. The test must distinguish "callable" from "has data." Fixed in the `test_foreign_keys` metadata test.
+10. **"Zero results" ≠ "unsupported function."** A catalog function like `SQLForeignKeys` returning `SQL_SUCCESS` with 0 rows means the function works but the database has no foreign keys. The test must distinguish "callable" from "has data." Identified in Phase 18 (B18-17).
+
+11. **Always validate against real drivers with source access.** Running odbc-crusher against the Firebird ODBC Debug driver and cross-referencing failures against the driver's C++ source revealed that 17 of 27 non-passing results were bugs in odbc-crusher, not the driver. The tool was falsely blaming the driver for its own test setup failures. This kind of validation is essential before trusting any ODBC test tool's output.
+
+12. **The mock driver is not enough.** Even with 131/131 tests passing against the mock driver (Phase 17), 17 tests still failed against a real driver due to assumptions baked into the mock driver's schema (pre-existing `CUSTOMERS`/`USERS` tables). Real-world testing exposes gaps that mock testing cannot.
 
 ---
 
