@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.6  
+**Version**: 2.7  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 8, 2026
 
@@ -482,7 +482,7 @@ After the mock driver rewrite, verify the consonant development rule:
 
 ---
 
-### Phase 18: Real-Driver Validation Bugs (Firebird Analysis) ✅
+### Phase 18: Real-Driver Validation Bugs — Round 1 (Firebird Analysis) ✅
 
 **Goal**: Fix all bugs discovered by running odbc-crusher against the Firebird ODBC driver (v03.00.0021) and cross-referencing against the driver's actual source code. These bugs cause false negatives (reporting failures or skips for features the driver actually supports) and undermine trust in the tool's output.
 
@@ -576,6 +576,143 @@ These tests have fallback query chains but the fallbacks may not work on all dri
 - Test results accurately reflect driver capabilities ✅
 - Reserved keyword conflicts resolved (VALUE → VAL) ✅
 - Truncation test uses dynamic buffer sizing ✅
+
+---
+
+### Phase 19: Real-Driver Validation Bugs — Round 2 (Firebird Re-analysis)
+
+**Goal**: Fix remaining bugs discovered by running odbc-crusher v0.3.1 against the Firebird ODBC Debug driver AFTER Phase 18 fixes. Phase 18 fixed many issues, but 20 skips + 1 failure remain. Cross-referencing each result against the Firebird ODBC driver source code revealed **14 odbc-crusher bugs** and **6 genuine driver issues** (documented in `FIREBIRD_ODBC_RECOMMENDATIONS.md`).
+
+**Discovery Date**: February 8, 2026  
+**Analysis Method**: Ran odbc-crusher against Firebird ODBC Debug driver (v03.00.0021 / ODBC 3.51 / Firebird 5.0), then read the driver's full C++ source code (`tmp/firebird-new-driver/`) to verify each failure.
+
+**Summary**: 110/131 passed (84.0%), 1 failed, 20 skipped. Of these 21 non-passing results:
+- **14 are odbc-crusher bugs** (false negatives)
+- **6 are genuine driver issues** (3 actionable, 1 optional feature, 2 environmental)
+- **1 is correct behavior** (async not supported = Level 2 optional)
+
+#### 19.1 `SQLExecDirectW` / `SQLPrepareW` Failures (8 tests)
+
+**Root Cause**: The Firebird driver exports W-functions in its `.def` file (`SQLExecDirectW`, `SQLPrepareW`, etc.), making it a "Unicode driver." When connected with `CHARSET=UTF8`, the `ConvertingString<>` class in `MainUnicode.cpp` uses the Firebird client library's charset converter (instead of `WideCharToMultiByte`) to convert SQLWCHAR → char. This converter may produce incorrect results for SQL text, causing `sqlExecDirect` / `sqlPrepare` to fail even for valid queries like `"SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE"`.
+
+Meanwhile, the same queries succeed through `SQLExecDirect` (ANSI), which skips the W→A conversion entirely. `SQLGetInfoW` also works because it uses a different code path (`returnStringInfo` with `returnStringInfoW` widening after the fact).
+
+**Evidence**: All tests that use `SQLExecDirectW` or `SQLPrepareW` skip with "Could not execute/prepare query," while ANSI equivalents pass. `test_getinfo_wchar_strings` and `test_string_truncation_wchar` (which use `SQLGetInfoW`) both pass.
+
+| Bug ID | Test | File | Uses | Issue |
+|--------|------|------|------|-------|
+| B19-01 | `test_describecol_wchar_names` | `unicode_tests.cpp` | `SQLExecDirectW` | All 3 query variants fail via W-function |
+| B19-02 | `test_getdata_sql_c_wchar` | `unicode_tests.cpp` | `SQLExecDirectW` | All 3 query variants fail via W-function |
+| B19-03 | `test_bindparam_wchar_input` | `param_binding_tests.cpp` | `SQLPrepareW` | All 3 query variants fail via W-function |
+| B19-04 | `test_bindparam_null_indicator` | `param_binding_tests.cpp` | `SQLPrepareW` | All 3 query variants fail via W-function |
+| B19-05 | `test_param_rebind_execute` | `param_binding_tests.cpp` | `SQLPrepareW` | All 3 query variants fail via W-function |
+| B19-06 | `test_unicode_types` | `datatype_tests.cpp` | `SQLExecDirect` (ANSI) + `SQLGetData(SQL_C_WCHAR)` | ANSI exec may work, but W-type conversion fails |
+| B19-07 | `test_columns_unicode_patterns` | `unicode_tests.cpp` | `SQLColumnsW` | Uses `CUSTOMERS` fallback (doesn't exist) |
+| B19-08 | `test_getdata_zero_buffer` | `boundary_tests.cpp` | `SQLExecDirect` (ANSI) + `SQLGetData(NULL,0)` | Driver's `ODBCCONVERT_CHECKNULL` macro skips indicator |
+
+**Fix Strategy**:
+- For B19-01 through B19-05: Tests should **fall back to ANSI functions** (`SQLExecDirect` / `SQLPrepare`) when W-functions fail. This allows the test to exercise the target feature (e.g., `SQLDescribeColW`, `SQL_C_WCHAR` binding) even when the W-function SQL execution path has a driver bug.
+- For B19-06: `test_unicode_types` already uses the ANSI `stmt.execute()`. The `SQL_C_WCHAR` retrieval via `SQLGetData` may fail because the Firebird ANSI driver doesn't properly support WCHAR conversion for data retrieved via ANSI entry points. This is a **genuine driver limitation** — document in `FIREBIRD_ODBC_RECOMMENDATIONS.md`.
+- For B19-07: `test_columns_unicode_patterns` discovers tables via `SQLTables` but falls back to `CUSTOMERS` if no user tables exist. On Firebird's test DB there are no user tables. Fix: include system tables like `RDB$DATABASE` in the fallback.
+- For B19-08: `test_getdata_zero_buffer` works through the ANSI path but `SQLGetData(NULL, 0)` fails because the driver's `ODBCCONVERT_CHECKNULL` macro returns `SQL_SUCCESS` without setting the indicator. The 1-byte buffer fallback (Strategy 2) should work but may also fail due to state after the failed Strategy 1 `SQLGetData` call. This is a **genuine driver bug** — documented in `FIREBIRD_ODBC_RECOMMENDATIONS.md`.
+
+- [ ] B19-01 through B19-05: Add ANSI function fallback path in unicode/param binding tests
+- [ ] B19-06: Mark as genuine driver limitation (WCHAR conversion via ANSI path)
+- [ ] B19-07: Include system tables in `test_columns_unicode_patterns` fallback
+- [ ] B19-08: Improve Strategy 2 robustness (fresh statement for retry)
+
+#### 19.2 DDL After Failed DDL Corrupts State (10 tests)
+
+**Root Cause**: Despite Phase 18 fixes (separate statement handles, autocommit ON), `create_test_table()` in both `transaction_tests.cpp` and `array_param_tests.cpp` still fails on Firebird. When `DROP TABLE <nonexistent>` fails, the Firebird driver corrupts the **connection-level** transaction state (not just the statement). Subsequent DDL on a new statement handle also fails.
+
+**Firebird-specific**: Firebird's internal architecture ties DDL to the connection's active transaction. A failed DDL with autocommit ON may not properly rollback the internal transaction, leaving the connection in a state where no further DDL can succeed.
+
+| Bug ID | Test | File | Root Cause |
+|--------|------|------|------------|
+| B19-09 | `test_manual_commit` | `transaction_tests.cpp` | `create_test_table()` fails — DROP corrupts connection state |
+| B19-10 | `test_manual_rollback` | `transaction_tests.cpp` | Same |
+| B19-11 | `test_column_wise_array_binding` | `array_param_tests.cpp` | `create_test_table()` fails — same root cause + uses single stmt |
+| B19-12 | `test_row_wise_array_binding` | `array_param_tests.cpp` | Same |
+| B19-13 | `test_param_status_array` | `array_param_tests.cpp` | Same |
+| B19-14 | `test_params_processed_count` | `array_param_tests.cpp` | Same |
+| B19-15 | `test_array_with_null_values` | `array_param_tests.cpp` | Same |
+| B19-16 | `test_param_operation_array` | `array_param_tests.cpp` | Same |
+| B19-17 | `test_paramset_size_one` | `array_param_tests.cpp` | Same |
+| B19-18 | `test_array_partial_error` | `array_param_tests.cpp` | Same |
+
+**Fix Strategy**:
+- **Don't DROP first**: Use `CREATE TABLE` directly. If it fails with "table already exists," THEN `DROP TABLE` + retry `CREATE TABLE`.
+- **Alternative**: Use Firebird's `RECREATE TABLE` syntax which atomically drops and creates.
+- **Connection cleanup**: After a failed DDL, issue `SQLEndTran(SQL_ROLLBACK)` to clean up the connection state before retrying.
+- **array_param_tests.cpp**: Also needs separate statement handles for DROP and CREATE (like `transaction_tests.cpp` already has).
+
+- [ ] Reverse DDL order: CREATE first, DROP+retry only on "table exists" error
+- [ ] Add `SQLEndTran(SQL_ROLLBACK)` after failed DDL to clean connection state
+- [ ] `array_param_tests.cpp`: Use separate statement handles for DROP and CREATE
+- [ ] Consider `RECREATE TABLE` as a Firebird-specific fallback
+
+#### 19.3 Foreign Keys Test Throws Exception (1 test)
+
+**Root Cause**: `test_foreign_keys` calls `SQLForeignKeys` with hardcoded table names `ORDERS`/`ORDER_ITEMS`. The Firebird driver's `sqlForeignKeys` implementation calls `getCrossReference()` which throws a `SQLException` when the table name doesn't match any `rdb$relation_constraints` record. The exception propagates through the `catch(SQLException)` in `sqlForeignKeys` as `SQL_ERROR/HY000`. Then the all-NULLs strategy also throws. Both strategies hit the `catch` in odbc-crusher, resulting in `SKIP_UNSUPPORTED`.
+
+**Driver behavior**: Per ODBC spec, catalog functions should return an empty result set for non-existent objects, not throw. This is documented as a driver recommendation in `FIREBIRD_ODBC_RECOMMENDATIONS.md`.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B19-19 | `test_foreign_keys` | `metadata_tests.cpp` | Driver throws on non-existent FK table; odbc-crusher should discover real tables first |
+
+**Fix Strategy**:
+- Discover actual user tables from `SQLTables` and try those for FK lookup
+- Accept `SQL_SUCCESS` with 0 rows as "callable" (already implemented but never reached because exception occurs first)
+- Add a broader catch that tries all-NULLs with `SQLForeignKeysW` as fallback
+
+- [ ] Discover real tables via `SQLTables` before calling `SQLForeignKeys`
+- [ ] Add `SQLForeignKeysW` as a fallback strategy
+
+#### 19.4 Truncation Test Uses DM-Intercepted Info Type (1 test — FAILED)
+
+**Root Cause**: The truncation indicators test uses `SQL_DRIVER_NAME` for probing. On Windows, the Driver Manager **intercepts** `SQL_DRIVER_NAME` and returns the driver DLL filename itself, never calling into the Firebird driver's `sqlGetInfo`. The DM's truncation behavior reports the **truncated length** (5 bytes for `"ODBC\0"`) in `pcbInfoValue`, not the full string length (12 bytes for `"FirebirdODBC"`). The Firebird driver's own `setString()` correctly reports the full length, but it's never called for this info type.
+
+**Evidence**: The test first probes `SQL_DRIVER_NAME` and gets length 12 (full `"FirebirdODBC"` from the driver — the DM passes through when buffer is large enough). Then with a 6-byte buffer, the DM intercepts, truncates to `"ODBCJ"` (5 chars), and reports `buffer_length = 5`, which is less than `small_buffer_size = 6`. The test sees `length < buffer_size despite truncation` and fails.
+
+The Firebird driver's `returnStringInfo` and `setString` both correctly set `*returnLength` to the **full untruncated string length** per ODBC spec. This is not a driver bug.
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B19-20 | Truncation Indicators Test | `buffer_validation_tests.cpp` | Uses `SQL_DRIVER_NAME` which DM intercepts; DM reports truncated length |
+
+**Fix Strategy**:
+- Use a **driver-handled** info type for the truncation test, such as `SQL_DBMS_NAME` or `SQL_DBMS_VER`, which the DM always passes through to the driver
+- Or try multiple info types and only fail if ALL exhibit incorrect truncation
+
+- [ ] Replace `SQL_DRIVER_NAME` with `SQL_DBMS_NAME` as primary info type for truncation test
+- [ ] Add fallback chain of info types if the primary type has a too-short string
+
+#### 19.5 Correctly-Reported Driver Limitations (1 test)
+
+| Test | Status | Verdict | Notes |
+|------|--------|---------|-------|
+| `test_async_capability` | SKIP_UNSUPPORTED | **CORRECT** | Firebird driver returns `HYC00` ("Optional feature not implemented") for `SQL_ATTR_ASYNC_ENABLE`. This is Level 2 optional. No fix needed. |
+
+#### 19.6 Summary Table
+
+| Category | Count | Bug IDs | Root Cause |
+|----------|-------|---------|------------|
+| W-function conversion failures | 5 | B19-01 to B19-05 | `ConvertingString<>` with `CHARSET=UTF8` breaks `SQLExecDirectW`/`SQLPrepareW` |
+| WCHAR data retrieval | 1 | B19-06 | Driver may not support `SQL_C_WCHAR` via ANSI entry point |
+| Hardcoded table fallback | 1 | B19-07 | No system table fallback in `test_columns_unicode_patterns` |
+| SQLGetData NULL buffer | 1 | B19-08 | Driver's `ODBCCONVERT_CHECKNULL` doesn't set indicator |
+| DDL after failed DDL | 10 | B19-09 to B19-18 | Failed DROP corrupts connection-level transaction state |
+| Foreign keys exception | 1 | B19-19 | Driver throws on non-existent table; odbc-crusher uses hardcoded names |
+| DM-intercepted info type | 1 | B19-20 | Truncation test uses `SQL_DRIVER_NAME` handled by DM |
+| Correct (no fix needed) | 1 | — | Async not supported (Level 2 optional) |
+
+**Deliverables**:
+- [ ] All 14 odbc-crusher bugs fixed
+- [ ] odbc-crusher accurately reports Firebird's 6 genuine issues
+- [ ] `FIREBIRD_ODBC_RECOMMENDATIONS.md` documents actionable driver fixes
+- [ ] Mock driver: 131/131 (100%) — unchanged
+- [ ] Unit tests pass on all platforms
 
 ---
 
@@ -689,6 +826,14 @@ Every test must:
 16. **Fallback query chains must include Firebird's `RDB$DATABASE`.** Firebird requires `SELECT ... FROM RDB$DATABASE` for table-less queries (similar to Oracle's `FROM DUAL`). Every query fallback chain should include both `SELECT expr` and `SELECT expr FROM RDB$DATABASE` variants to ensure cross-database compatibility.
 
 17. **SQLGetData with NULL buffer may not work via the Driver Manager.** Some DMs (especially the Windows DM with Unicode drivers) reject `SQLGetData(NULL, 0)` even though the ODBC spec allows it. A robust test should fall back to a 1-byte buffer to trigger truncation and get the data length from the indicator.
+
+18. **The Windows DM intercepts certain `SQLGetInfo` types.** Info types like `SQL_DRIVER_NAME` are handled by the Driver Manager itself, never reaching the driver. The DM's truncation behavior may differ from the driver's (e.g., reporting truncated length instead of full length). Tests should use driver-handled info types like `SQL_DBMS_NAME` when testing truncation behavior.
+
+19. **W-function exports determine Unicode driver classification.** If a driver exports `SQLExecDirectW` in its `.def` file, the Windows DM treats it as a Unicode driver and calls W-functions directly. This means the driver's W→A conversion code is exercised, not the DM's. If the driver's conversion has bugs (e.g., charset-specific converters for `CHARSET=UTF8`), W-function calls will fail while A-function calls succeed. Tests should fall back to ANSI functions when W-functions fail.
+
+20. **Failed DDL can corrupt connection-level state in Firebird.** Even with autocommit ON and separate statement handles, a failed `DROP TABLE <nonexistent>` on Firebird can corrupt the connection's transaction state, causing subsequent DDL to fail. The safest approach is: (1) try CREATE first, (2) only DROP+retry if CREATE fails with "table exists," (3) issue `SQLEndTran(SQL_ROLLBACK)` after any DDL failure, (4) consider database-specific DDL like `RECREATE TABLE` for Firebird.
+
+21. **Catalog functions should return empty result sets, not errors, for non-existent objects.** Per ODBC spec, `SQLForeignKeys` called with a non-existent table name should return `SQL_SUCCESS` with an empty result set. Some drivers (Firebird) throw exceptions instead. Tests should handle both behaviors and discover real table names before calling catalog functions.
 
 ---
 
