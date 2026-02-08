@@ -35,10 +35,27 @@ $Drivers = [ordered]@{
         RepoName = 'mysql-connector-odbc'
         Artifact = 'report-mysql'
     }
-    sqlite = @{
-        RepoUrl  = 'https://github.com/softace/sqliteodbc.git'
-        RepoName = 'sqliteodbc'
-        Artifact = 'report-sqlite'
+    duckdb = @{
+        RepoUrl  = 'https://github.com/duckdb/duckdb-odbc.git'
+        RepoName = 'duckdb-odbc'
+        Artifact = 'report-duckdb'
+    }
+    oracle = @{
+        # Oracle Instant Client ODBC is closed-source; link to docs instead
+        RepoUrl  = 'https://github.com/oracle/odpi.git'
+        RepoName = 'odpi'
+        Artifact = 'report-oracle'
+    }
+    db2 = @{
+        # IBM DB2 CLI/ODBC is closed-source; link to community samples
+        RepoUrl  = 'https://github.com/ibmdb/db2drivers.git'
+        RepoName = 'db2drivers'
+        Artifact = 'report-db2'
+    }
+    clickhouse = @{
+        RepoUrl  = 'https://github.com/ClickHouse/clickhouse-odbc.git'
+        RepoName = 'clickhouse-odbc'
+        Artifact = 'report-clickhouse'
     }
     firebird = @{
         RepoUrl  = 'https://github.com/FirebirdSQL/firebird-odbc-driver.git'
