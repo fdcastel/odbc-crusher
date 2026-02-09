@@ -1,503 +1,697 @@
-# DuckDB ODBC Driver — ODBC Crusher Analysis & Recommendations
+# DuckDB ODBC Driver — Recommendations from ODBC Crusher Analysis
 
-**Date:** February 8, 2026
-**Driver:** DuckDB ODBC 03.51.0000 (ODBC 3.51)
-**Tool:** ODBC Crusher v0.3.1
-
----
+**Driver**: DuckDB v03.51.0000 (ODBC 3.51)  
+**Database**: DuckDB (in-memory)  
+**Test Environment**: Linux (unixODBC 3.52 DM)  
+**Test Tool**: ODBC Crusher v0.4.5  
+**Analysis Date**: February 8, 2026  
+**Source Tag**: `v1.4.4.0`
 
 ## Summary
 
-| Metric | Count |
-|--------|-------|
-| Total tests | 131 |
-| Passed | 113 (86.3%) |
-| Failed | 9 |
-| Skipped | 8 |
-| Errors | 1 |
-| Total time | 99.73 ms |
+ODBC Crusher ran **131 tests** against the DuckDB ODBC driver.  
+Of the 123 tests that completed (8 were lost to driver crashes):
 
-The DuckDB ODBC driver passes the majority of ODBC conformance tests.
-However, several issues were identified — two of which are **crash-severity
-bugs** that can terminate the host process without any possibility of
-recovery via SEH or signal handlers.
+| Result | Count | Percentage |
+|--------|------:|------------|
+| PASS   |   108 |     87.8%  |
+| FAIL   |     7 |      5.7%  |
+| SKIP   |     5 |      4.1%  |
+| ERROR  |     3 |      2.4%  |
+
+The DuckDB ODBC driver has **2 crash-severity bugs** (SIGSEGV in Descriptor and
+Unicode test categories), **7 spec violations** of varying severity, and **5 unsupported
+features**. All findings were verified against the driver source code at tag `v1.4.4.0`.
 
 ---
 
-## Crash-Severity Issues (Process Termination)
+## Recommendation 1: Fix Descriptor API (SIGSEGV crash)
 
-### 1. `SQLDescribeParam` crashes on unresolved parameters
+**Severity**: CRITICAL  
+**Test affected**: Descriptor Tests (ERROR — SIGSEGV, all 5 tests lost)  
+**ODBC Functions**: `SQLGetStmtAttr`, `SQLGetDescField`, `SQLSetDescField`, `SQLCopyDesc`  
+**ODBC Spec**: ODBC 3.x §Descriptors  
+**Conformance**: Core  
 
-| Field | Value |
-|-------|-------|
-| **Test** | `test_describe_param` |
-| **Function** | `SQLDescribeParam` |
-| **Severity** | 🔴 CRITICAL — uncatchable process crash |
-| **ODBC Spec** | ODBC 3.x `SQLDescribeParam` |
-| **Exit Code** | `0xC0000005` (ACCESS_VIOLATION) |
+### Current behavior
 
-**Reproduction:**
+The entire Descriptor test category crashes with a segmentation fault. The driver has
+multiple bugs in its descriptor implementation:
 
-```c
-SQLPrepare(hstmt, "SELECT ?", SQL_NTS);   // returns SQL_SUCCESS_WITH_INFO
-SQLDescribeParam(hstmt, 1, ...);           // ACCESS VIOLATION
-```
+1. **`stmt_ptr` is always null for implicit descriptors.** In the `OdbcHandleStmt`
+   constructor, descriptors are created as `make_uniq<OdbcHandleDesc>(stmt->dbc)` —
+   the `stmt_ptr` parameter defaults to `nullptr`. This causes `IsID()`, `IsIRD()`,
+   and `IsIPD()` to always return `false`, so the driver cannot distinguish implicit
+   from explicit descriptors or enforce read-only rules on the IRD.
 
-**Root Cause:**
+2. **`SQLCopyDesc` does pointer assignment instead of object copy.** In `descriptor.cpp`,
+   the copy operation does `target_desc = source_desc` which reassigns a local pointer
+   variable rather than performing a deep copy of descriptor records.
 
-In `src/odbc_api/parameter_api.cpp` → `SQLDescribeParam`, line ~37:
+3. **Record management appends instead of replacing.** The `SetDescField` function
+   calls `Reset()` on individual records but then appends new records without clearing
+   existing ones, leading to data corruption.
 
-```cpp
-auto param_type_id = hstmt->stmt->data->GetType(identifier).id();
-```
-
-When `SQLPrepare` on `"SELECT ?"` returns `SQL_SUCCESS_WITH_INFO`, the
-statement's `bound_all_parameters` flag is `false`.  The code in
-`FinalizeStmt` clears `hstmt->stmt->data->types` and
-`hstmt->stmt->data->names` in this case.  `GetType(identifier)` then
-accesses an empty vector at an out-of-bounds index → access violation.
-
-The bounds check at line ~32 (`parameter_number > named_param_map.size()`)
-passes because the map IS populated — only the `data->types` vector is
-empty.
-
-**Fix:**
-
-Add a guard in `SQLDescribeParam` before accessing `data->GetType()`:
+### Suggested fix
 
 ```cpp
-if (!hstmt->stmt->data || identifier >= hstmt->stmt->data->types.size()) {
-    return duckdb::SetDiagnosticRecord(hstmt, SQL_ERROR, "SQLDescribeParam",
-        "Parameter type information not available",
-        SQLStateType::ST_HY000, ...);
+// 1. Pass stmt_ptr when creating implicit descriptors in OdbcHandleStmt constructor:
+ard = make_uniq<OdbcHandleDesc>(this->dbc, this);
+ird = make_uniq<OdbcHandleDesc>(this->dbc, this);
+
+// 2. Implement proper deep copy in SQLCopyDesc:
+SQLRETURN SQL_API SQLCopyDesc(SQLHDESC source, SQLHDESC target) {
+    auto *src = (OdbcHandleDesc *)source;
+    auto *tgt = (OdbcHandleDesc *)target;
+    tgt->header = src->header;
+    tgt->records = src->records;  // deep copy records vector
+    return SQL_SUCCESS;
 }
 ```
 
-Or better: if `bound_all_parameters` is `false`, return `SQL_ERROR` with
-`HY091` ("Invalid descriptor field identifier") since the parameter
-metadata is unavailable.
+### Impact
 
-**odbc-crusher workaround:** The tool now tries
-`"SELECT CAST(? AS INTEGER)"` before `"SELECT ?"` so that DuckDB can
-resolve the parameter type from the explicit cast.
+Critical. Applications that use descriptors (e.g., for efficient bulk operations,
+cursor libraries, or ORM frameworks) will crash. This blocks all descriptor-based
+functionality.
 
 ---
 
-### 2. Row-wise array binding corrupts memory → `__fastfail`
+## Recommendation 2: Fix Unicode/Wide-character handling (SIGSEGV crash)
 
-| Field | Value |
-|-------|-------|
-| **Test** | `test_row_wise_array_binding` |
-| **Function** | `SQLSetStmtAttr` / `SQLExecute` |
-| **Severity** | 🔴 CRITICAL — uncatchable process crash |
-| **ODBC Spec** | ODBC 3.x "Binding Arrays of Parameters" |
-| **Exit Code** | `0xC0000409` (STATUS_STACK_BUFFER_OVERRUN) on MSVC |
+**Severity**: CRITICAL  
+**Test affected**: Unicode Tests (ERROR — SIGSEGV, all 5 tests lost)  
+**ODBC Functions**: `SQLGetInfoW`, `SQLDescribeColW`, `SQLGetData(SQL_C_WCHAR)`, `SQLColumnsW`  
+**ODBC Spec**: ODBC 3.x §Unicode  
+**Conformance**: Core  
 
-**Reproduction:**
+### Current behavior
 
-```c
-struct ParamRow { SQLINTEGER id; SQLLEN ind; char name[51]; SQLLEN name_ind; };
-ParamRow rows[3] = {{1,0,"A",SQL_NTS}, {2,0,"B",SQL_NTS}, {3,0,"C",SQL_NTS}};
+The entire Unicode test category crashes with a segmentation fault. The driver's
+widechar layer (`src/widechar/`) hardcodes UTF-16 (2-byte) assumptions for `SQLWCHAR`,
+but on Linux with unixODBC, `SQLWCHAR` may be 4 bytes (`wchar_t`) unless
+`-DSQL_WCHART_CONVERT` is defined.
 
-SQLPrepare(hstmt, "INSERT INTO t (id, name) VALUES (?, ?)", SQL_NTS);
-SQLSetStmtAttr(hstmt, SQL_ATTR_PARAM_BIND_TYPE, sizeof(ParamRow), 0);  // SQL_SUCCESS
-SQLSetStmtAttr(hstmt, SQL_ATTR_PARAMSET_SIZE, 3, 0);
-SQLBindParameter(hstmt, 1, ..., &rows[0].id, 0, &rows[0].ind);
-SQLBindParameter(hstmt, 2, ..., rows[0].name, 51, &rows[0].name_ind);
-SQLExecute(hstmt);  // __fastfail — UNCATCHABLE
-```
+Key issues in the conversion functions:
+- `utf16_conv()` uses `char16_t` iterators on data that may be `wchar_t` (4 bytes),
+  causing misaligned reads and null-terminator detection failures.
+- Buffer size calculations mix byte counts and character counts.
+- `SqlWString::set_from_sqlwchar()` uses `char16_t` casting that is only correct
+  when `sizeof(SQLWCHAR) == 2`.
 
-**Root Cause:**
+### Suggested fix
 
-In `src/odbc_driver/parameter_descriptor.cpp` → `SetValue()`:
-
-- The `SQL_ATTR_PARAM_BIND_TYPE` is stored in
-  `apd->header.sql_desc_bind_type` (line 604 of `attribute_api.cpp`).
-
-- But `SetValue()` **never uses** `sql_desc_bind_type` for pointer
-  arithmetic.  For integer types it uses `Load<int32_t>(dataptr)` with
-  the **same base pointer** for every row (no offset at all).  For string
-  types it uses `(char*)sql_data_ptr + (val_idx * buff_size)` where
-  `buff_size` is the **column size**, not the struct size.
-
-- With row-wise binding, the correct offset for row `i` should be:
-  `(char*)sql_data_ptr + (i * sql_desc_bind_type)`.
-
-- Because the driver computes wrong offsets, it reads:
-  - **Integers:** always from the same address (row 0's value repeated).
-  - **Strings:** from `base + i * column_size` instead of
-    `base + i * struct_size`, reading past the buffer into unrelated
-    memory.  MSVC's `/GS` stack cookie detects this as a buffer overrun
-    and calls `__fastfail(FAST_FAIL_STACK_COOKIE_CHECK_FAILURE)`, which
-    is an **uncatchable** exception on Windows 8+.
-
-**Verified behavior:**
-
-odbc-crusher's safety probe inserts with `PARAMSET_SIZE=2` and integer
-parameters only (safe, since all reads come from offset 0 with no
-arithmetic).  Result: `{9991, 9991}` instead of `{9991, 9992}` — the
-second row gets row 0's value, confirming the offset bug.
-
-**Fix:**
-
-In `ParameterDescriptor::SetValue()`, use `sql_desc_bind_type` to
-compute the correct data pointer for each row:
+The widechar layer must detect `sizeof(SQLWCHAR)` at compile time and use the
+appropriate conversion:
 
 ```cpp
-auto bind_type = cur_apd->header.sql_desc_bind_type;
-auto sql_data_ptr = GetSQLDescDataPtr(*apd_record);
-
-if (bind_type != SQL_PARAM_BIND_BY_COLUMN && bind_type > 0) {
-    // Row-wise: offset by row index * struct size
-    sql_data_ptr = (SQLPOINTER)((char*)sql_data_ptr + val_idx * bind_type);
-} else {
-    // Column-wise: existing per-type offset logic
-    ...
-}
+#if SIZEOF_SQLWCHAR == 4
+    // UCS-4/UTF-32: wchar_t on Linux without SQL_WCHART_CONVERT
+    // Convert from UTF-32 to UTF-8
+#else
+    // UTF-16: Windows, or Linux with -DSQL_WCHART_CONVERT
+    // Current code path
+#endif
 ```
 
-The same offset logic must be applied to the indicator pointer
-(`sql_desc_indicator_ptr`).
+Alternatively, define `-DSQL_WCHART_CONVERT` in the CMakeLists.txt to ensure
+`SQLWCHAR` is always `char16_t` (2 bytes), matching the driver's expectations.
 
-**odbc-crusher workaround:** The tool probes with integer-only parameters
-at `PARAMSET_SIZE=2` before attempting the full row-wise test.  If the
-inserted values are wrong (duplicate row 0), it reports a `FAIL` with an
-explanation and **skips the string-parameter test** to avoid crashing.
+### Impact
+
+Critical. Any application using W-functions (the default for Unicode-aware ODBC
+applications on all platforms) will crash. This blocks Unicode support entirely
+on Linux.
 
 ---
 
-## Non-Crash Failures
+## Recommendation 3: Validate column index in `SQLGetData`
 
-### 3. `SQLEndTran(SQL_ROLLBACK)` fails — asymmetric autocommit guard + state desync
+**Severity**: HIGH  
+**Test affected**: `test_getdata_col_out_of_range` (ERROR — internal exception)  
+**ODBC Function**: `SQLGetData`  
+**ODBC Spec**: ODBC 3.x §SQLGetData — SQLSTATE 07009  
+**Conformance**: Core  
 
-| Field | Value |
-|-------|-------|
-| **Test** | `test_manual_rollback` |
-| **Severity** | INFO |
-| **SQLSTATE** | HY115 |
+### Current behavior
 
-**Root Cause (two bugs):**
+When `SQLGetData` is called with a column number greater than the number of columns
+in the result set (e.g., column 999 on a 1-column result), the driver throws a
+DuckDB internal exception:
 
-**Bug A — Missing autocommit guard on ROLLBACK path:**
-In `src/connect/connection.cpp` → `SQLEndTran`, the `SQL_COMMIT` branch
-checks `dbc->conn->IsAutoCommit()` and returns `SQL_SUCCESS` (no-op),
-but the `SQL_ROLLBACK` branch does not — it unconditionally calls
-`dbc->conn->Rollback()`, which throws `"cannot rollback - no
-transaction is active"` when no transaction exists.
+```
+Attempted to access index 998 within vector of size 1
+```
 
-**Bug B — Engine resets autocommit after every Commit/Rollback:**
-In `src/duckdb/src/transaction/transaction_context.cpp`, `Commit()`
-resets `auto_commit = true` and sets the context back to idle.
-This means after a successful `COMMIT`, the DuckDB engine silently
-reverts to autocommit mode **even if the ODBC layer has
-`SQL_ATTR_AUTOCOMMIT = SQL_AUTOCOMMIT_OFF`**.  The ODBC handle's
-`autocommit` flag still says `false`, but the underlying DuckDB
-connection has reverted.  The next SQL statement runs in autocommit
-mode (auto-begins and auto-commits immediately).  When the test
-then calls `SQLEndTran(SQL_ROLLBACK)`, there is no active
-transaction → throws → `SQL_ERROR`.
+This exception propagates as an unhandled error with a JSON stack trace instead of
+the ODBC-standard `SQL_ERROR` with SQLSTATE `07009`.
 
-Per the [ODBC specification](https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlendtran-function),
-`SQLEndTran(SQL_ROLLBACK)` when autocommit is enabled should be a
-no-op (same as `SQL_COMMIT`).  DuckDB violates this for the ROLLBACK
-case.
+### Root cause
 
-**Fix (immediate):** Add the same autocommit guard:
+In `odbc_fetch.cpp`, the `GetData` function decrements the column number
+(`col_or_param_num--`) and passes it directly to the result fetcher without validating
+that it falls within the result set's column count.
+
+### Suggested fix
+
+Add a bounds check before accessing the column data:
 
 ```cpp
-case SQL_ROLLBACK:
-    if (dbc->conn->IsAutoCommit()) {
-        return SQL_SUCCESS;  // no-op per ODBC spec
+SQLRETURN OdbcFetch::GetData(SQLUSMALLINT col_or_param_num, ...) {
+    if (col_or_param_num == 0) {
+        // Already handled — bookmark column
+        return SQL_ERROR;  // SQLSTATE 07009
     }
-    // ... existing rollback code
+    col_or_param_num--;
+    if (col_or_param_num >= hstmt->stmt->ColumnCount()) {
+        // Set SQLSTATE 07009 "Invalid descriptor index"
+        return SetDiagnosticRecord(hstmt, SQL_ERROR, "SQLGetData",
+            "Invalid column index", SQLStateType::ST_07009, "");
+    }
+    // ... proceed with data retrieval
+}
 ```
 
-**Fix (comprehensive):** After every `Commit()` or `Rollback()` on the
-engine side, re-apply `SetAutoCommit(false)` if the ODBC-level
-`SQL_ATTR_AUTOCOMMIT` is `SQL_AUTOCOMMIT_OFF`, to keep the engine
-and ODBC states synchronized.
+### Impact
+
+High. Any application that passes an incorrect column index will get an unstructured
+exception message instead of a standard ODBC error. This breaks error-handling code
+that expects `SQL_ERROR` and a valid SQLSTATE.
 
 ---
 
-### 4. `SQLGetInfo` returns `SQL_SUCCESS` for invalid info types
+## Recommendation 4: Fix `SQLEndTran(SQL_ROLLBACK)` in manual-commit mode
 
-| Field | Value |
-|-------|-------|
-| **Test** | `test_getinfo_invalid_type` |
-| **Severity** | WARNING |
-| **Expected SQLSTATE** | HY096 |
+**Severity**: HIGH  
+**Test affected**: `test_manual_rollback` (FAIL)  
+**ODBC Function**: `SQLEndTran(SQL_ROLLBACK)`  
+**ODBC Spec**: ODBC 3.x §SQLEndTran  
+**Conformance**: Core  
 
-**Root Cause:**
+### Current behavior
 
-The `default:` case in `SQLGetInfo` calls `SetDiagnosticRecord` with
-`SQL_SUCCESS` instead of `SQL_ERROR`:
+After disabling autocommit, executing DML statements, and committing, a subsequent
+`SQLEndTran(SQL_ROLLBACK)` fails with SQLSTATE `HY115`. The DuckDB transaction
+context resets its `auto_commit` flag to `true` after `Commit()`, causing the next
+statement to auto-commit. The subsequent `ROLLBACK` then finds no active transaction
+and throws an error.
+
+### Root cause
+
+In DuckDB's transaction lifecycle (`transaction_context.cpp`), `Commit()` resets the
+context such that subsequent statements run in auto-commit mode regardless of the
+ODBC connection's `SQL_ATTR_AUTOCOMMIT` setting. The ODBC layer in `connection.cpp`
+does not re-synchronize the transaction context after each commit.
+
+### Suggested fix
+
+After calling `connection->Commit()`, the ODBC layer should ensure the transaction
+context respects the current `SQL_ATTR_AUTOCOMMIT` setting:
+
+```cpp
+case SQL_ROLLBACK: {
+    if (dbc->conn->HasActiveTransaction()) {
+        dbc->conn->Rollback();
+    }
+    // If autocommit is OFF, start a new transaction for the next statement
+    if (!dbc->autocommit) {
+        dbc->conn->BeginTransaction();
+    }
+    return SQL_SUCCESS;
+}
+```
+
+### Impact
+
+High. Applications using manual transaction control (autocommit OFF) cannot perform
+rollbacks, which is a fundamental ODBC operation. This breaks any transactional
+workflow that needs rollback capability.
+
+---
+
+## Recommendation 5: Fix `SQLBindParameter` with `nullptr` `StrLen_or_IndPtr`
+
+**Severity**: HIGH  
+**Test affected**: `test_parameter_binding` (SKIP — inconclusive)  
+**ODBC Function**: `SQLBindParameter`  
+**ODBC Spec**: ODBC 3.x §SQLBindParameter — `StrLen_or_IndPtr`  
+**Conformance**: Core  
+
+### Current behavior
+
+When `SQLBindParameter` is called with `StrLen_or_IndPtr = nullptr` and a valid data
+pointer (e.g., for a fixed-length `SQL_C_SLONG` parameter), the driver treats the
+parameter as `NULL`. In `parameter_descriptor.cpp`, the `SetValue` function checks:
+
+```cpp
+if (sql_data_ptr == nullptr || sql_ind_ptr == nullptr || *sql_ind_ptr_val_set == SQL_NULL_DATA) {
+    Value val_null(nullptr);
+    SetValue(val_null, rec_idx);
+    return SQL_SUCCESS;
+}
+```
+
+The `sql_ind_ptr == nullptr` condition incorrectly treats a missing indicator as
+"data is NULL".
+
+### Expected behavior
+
+Per the ODBC specification, when `StrLen_or_IndPtr` is a null pointer:
+- For **fixed-length types** (SQL_C_SLONG, SQL_C_DOUBLE, etc.): the driver should
+  use the data pointer directly — the data is always non-null.
+- For **variable-length types** (SQL_C_CHAR, SQL_C_BINARY): the driver assumes the
+  data is null-terminated or uses the buffer length.
+
+A null `StrLen_or_IndPtr` only means "no indicator is provided" — it does NOT mean
+the data is null.
+
+### Suggested fix
+
+```cpp
+if (sql_data_ptr == nullptr && sql_ind_ptr == nullptr) {
+    return SQL_ERROR;  // Both null — no data at all
+}
+
+// Check for explicit NULL via indicator
+if (sql_ind_ptr != nullptr && *sql_ind_ptr_val_set == SQL_NULL_DATA) {
+    Value val_null(nullptr);
+    SetValue(val_null, rec_idx);
+    return SQL_SUCCESS;
+}
+
+// If sql_data_ptr is null but indicator is not SQL_NULL_DATA, error
+if (sql_data_ptr == nullptr) {
+    return SQL_ERROR;
+}
+
+// Otherwise, proceed with the data — it's valid
+```
+
+### Impact
+
+High. Many ODBC applications pass `nullptr` for `StrLen_or_IndPtr` when binding
+fixed-length parameters, which is the most common pattern for integer/float bindings.
+This causes all such parameters to be treated as NULL, producing incorrect query
+results.
+
+---
+
+## Recommendation 6: Implement row-wise array parameter binding
+
+**Severity**: MEDIUM  
+**Test affected**: `test_row_wise_array_binding` (FAIL)  
+**ODBC Function**: `SQLSetStmtAttr(SQL_ATTR_PARAM_BIND_TYPE)` / `SQLBindParameter`  
+**ODBC Spec**: ODBC 3.x §Arrays of Parameter Values — Row-wise binding  
+**Conformance**: Level 1  
+
+### Current behavior
+
+The driver stores `SQL_ATTR_PARAM_BIND_TYPE` when set via `SQLSetStmtAttr` but never
+uses it during parameter value extraction. In `parameter_descriptor.cpp`, the
+`SetValue` function:
+
+- For **string types**: uses `val_idx * buff_size` (column-wise offset)
+- For **numeric types**: uses no offset at all — always reads from the base pointer
+
+A TODO comment in the code confirms this is known:
+```cpp
+// TODO need to check it param_value_ptr is an array of parameters
+// and get the right parameter using the index
+```
+
+This causes row-wise array binding to insert duplicate values from row 0,
+and executing with string parameters in a struct layout would cause memory
+corruption and a process crash (as the driver reads from incorrect addresses).
+
+### Suggested fix
+
+When `SQL_ATTR_PARAM_BIND_TYPE != SQL_PARAM_BIND_BY_COLUMN`, use the bind type as
+stride:
+
+```cpp
+duckdb::const_data_ptr_t dataptr;
+if (apd->header.sql_desc_bind_type == SQL_PARAM_BIND_BY_COLUMN) {
+    // Column-wise: offset by element size
+    dataptr = (duckdb::const_data_ptr_t)sql_data_ptr + (val_idx * element_size);
+} else {
+    // Row-wise: offset by struct stride
+    dataptr = (duckdb::const_data_ptr_t)sql_data_ptr + (val_idx * apd->header.sql_desc_bind_type);
+}
+```
+
+### Impact
+
+Medium. Applications using row-wise array binding (common in batch insert scenarios
+with struct layouts) will get incorrect data. This is a Level 1 conformance feature.
+
+---
+
+## Recommendation 7: Implement `SQL_ATTR_PARAM_OPERATION_PTR`
+
+**Severity**: MEDIUM  
+**Test affected**: `test_param_operation_array` (FAIL), `test_array_partial_error` (FAIL)  
+**ODBC Function**: `SQLSetStmtAttr(SQL_ATTR_PARAM_OPERATION_PTR)`  
+**ODBC Spec**: ODBC 3.x §Using Arrays of Parameters — Parameter Operation Array  
+**Conformance**: Level 1  
+
+### Current behavior
+
+The driver silently accepts `SQL_ATTR_PARAM_OPERATION_PTR` via the default handler
+in `SQLSetStmtAttr` (which returns `SQL_SUCCESS_WITH_INFO` / `01S02` for any
+unrecognized attribute) but never reads or honors the operation array during
+execution. In `parameter_descriptor.cpp`, the execution loop iterates all parameter
+sets unconditionally, without checking if any rows are marked `SQL_PARAM_IGNORE`.
+
+### Expected behavior
+
+Per the ODBC spec, during array parameter execution:
+1. Check the operation array for each row index
+2. Skip rows marked `SQL_PARAM_IGNORE`
+3. Set the status of skipped rows to `SQL_PARAM_UNUSED`
+4. Only execute rows marked `SQL_PARAM_PROCEED`
+
+### Suggested fix
+
+In the parameter execution loop in `parameter_descriptor.cpp`:
+
+```cpp
+for (idx_t i = 0; i < paramset_size; i++) {
+    // Check operation array
+    if (param_operation_ptr && param_operation_ptr[i] == SQL_PARAM_IGNORE) {
+        if (param_status_ptr) {
+            param_status_ptr[i] = SQL_PARAM_UNUSED;
+        }
+        continue;  // Skip this row
+    }
+    // Execute this row...
+    auto ret = SetValue(rec_idx);
+    if (param_status_ptr) {
+        param_status_ptr[i] = SQL_SUCCEEDED(ret) ? SQL_PARAM_SUCCESS : SQL_PARAM_ERROR;
+    }
+}
+```
+
+### Impact
+
+Medium. Applications that use operation arrays for selective batch execution (e.g.,
+to skip rows that failed validation) will execute all rows regardless, potentially
+causing data integrity issues.
+
+---
+
+## Recommendation 8: Return `SQL_ERROR` for invalid `SQLGetInfo` info types
+
+**Severity**: LOW  
+**Test affected**: `test_getinfo_invalid_type` (FAIL)  
+**ODBC Function**: `SQLGetInfo`  
+**ODBC Spec**: ODBC 3.x §SQLGetInfo — SQLSTATE HY096  
+**Conformance**: Core  
+
+### Current behavior
+
+When `SQLGetInfo` is called with an unrecognized info type (e.g., 65535), the driver's
+`default:` case in `api_info.cpp` returns `SQL_SUCCESS` with a diagnostic record
+using SQLSTATE `HY092`:
 
 ```cpp
 default:
-    return duckdb::SetDiagnosticRecord(dbc, SQL_SUCCESS, "SQLGetInfo", ...);
-    //                                       ^^^^^^^^^^ should be SQL_ERROR
+    std::string msg = "Unrecognized attribute: " + std::to_string(info_type);
+    return SetDiagnosticRecord(dbc, SQL_SUCCESS, "SQLGetInfo", msg,
+                               SQLStateType::ST_HY092, dbc->GetDataSourceName());
 ```
 
-**Fix:** Change `SQL_SUCCESS` to `SQL_ERROR` and SQLSTATE to `HY096`.
+### Expected behavior
 
----
+Per the ODBC specification:
+- Return code should be `SQL_ERROR` (not `SQL_SUCCESS`)
+- SQLSTATE should be `HY096` ("Information type out of range"), not `HY092`
 
-### 5. `SQLSetConnectAttr` accepts invalid attributes silently
-
-| Field | Value |
-|-------|-------|
-| **Test** | `test_setconnattr_invalid_attr` |
-| **Severity** | WARNING |
-| **Expected SQLSTATE** | HY092 |
-
-**Root Cause:**
-
-The `default:` case in `SQLSetConnectAttr` returns
-`SQL_SUCCESS_WITH_INFO` with `01S02` for ALL unrecognized attributes.
-
-**Fix:** Return `SQL_ERROR` with `HY092` ("Invalid attribute/option
-identifier").
-
-**Note:** The same pattern exists in `SQLSetStmtAttr`, where the
-`default:` case also returns `SQL_SUCCESS_WITH_INFO` for unknown
-attributes.  This caused test confusion with `SQL_ATTR_PARAM_BIND_TYPE`
-(row-wise binding appeared accepted but was not implemented).
-
----
-
-### 6. `SQLCloseCursor` succeeds when no cursor is open
-
-| Field | Value |
-|-------|-------|
-| **Test** | `test_closecursor_no_cursor` |
-| **Severity** | WARNING |
-| **Expected SQLSTATE** | 24000 |
-
-**Root Cause:**
-
-`CloseStmt()` unconditionally calls `hstmt->Close()` and returns
-`SQL_SUCCESS`, without checking whether a cursor is actually open.
-
-**Fix:** Check the statement's `open` flag:
+### Suggested fix
 
 ```cpp
-SQLRETURN duckdb::CloseStmt(OdbcHandleStmt *hstmt) {
-    if (!hstmt->open) {
-        return SetDiagnosticRecord(hstmt, SQL_ERROR, "SQLCloseCursor",
-            "Invalid cursor state", SQLStateType::ST_24000, ...);
+default:
+    std::string msg = "Information type out of range: " + std::to_string(info_type);
+    return SetDiagnosticRecord(dbc, SQL_ERROR, "SQLGetInfo", msg,
+                               SQLStateType::ST_HY096, dbc->GetDataSourceName());
+```
+
+### Impact
+
+Low. Applications that query unsupported info types receive misleading success instead
+of an error. Error-handling code that checks for `SQL_ERROR` will miss this condition.
+
+---
+
+## Recommendation 9: Return `SQL_ERROR` for invalid `SQLSetConnectAttr` attributes
+
+**Severity**: LOW  
+**Test affected**: `test_setconnattr_invalid_attr` (FAIL)  
+**ODBC Function**: `SQLSetConnectAttr`  
+**ODBC Spec**: ODBC 3.x §SQLSetConnectAttr — SQLSTATE HY092  
+**Conformance**: Core  
+
+### Current behavior
+
+When `SQLSetConnectAttr` is called with an unrecognized attribute (e.g., 99999), the
+`default:` case returns `SQL_SUCCESS_WITH_INFO` with SQLSTATE `01S02`:
+
+```cpp
+default:
+    return SetDiagnosticRecord(dbc, SQL_SUCCESS_WITH_INFO, "SQLSetConnectAttr",
+        "Option value changed:" + std::to_string(attribute),
+        SQLStateType::ST_01S02, dbc->GetDataSourceName());
+```
+
+### Expected behavior
+
+Per the ODBC specification, unrecognized attributes must return `SQL_ERROR` with
+SQLSTATE `HY092` ("Invalid attribute/option identifier").
+
+### Suggested fix
+
+```cpp
+default:
+    return SetDiagnosticRecord(dbc, SQL_ERROR, "SQLSetConnectAttr",
+        "Invalid attribute/option identifier: " + std::to_string(attribute),
+        SQLStateType::ST_HY092, dbc->GetDataSourceName());
+```
+
+### Impact
+
+Low. Applications cannot distinguish between valid and invalid attribute settings.
+The `SQL_SUCCESS_WITH_INFO` return code is misleading — it implies the driver accepted
+a substituted value, when in reality it ignored the call entirely.
+
+---
+
+## Recommendation 10: Report required buffer length in `SQLGetInfo` with zero-length buffer
+
+**Severity**: LOW  
+**Test affected**: `test_getinfo_zero_buffer` (FAIL)  
+**ODBC Function**: `SQLGetInfo`  
+**ODBC Spec**: ODBC 3.x §SQLGetInfo — Buffer Length  
+**Conformance**: Core  
+
+### Current behavior
+
+When `SQLGetInfo` is called with `BufferLength = 0`, the driver's `WriteString`
+template function in `odbc_utils.hpp` returns `written_chars = 0` in the output
+length pointer:
+
+```cpp
+if (out_buf != nullptr) {
+    written_chars = (INT_TYPE)snprintf((char *)out_buf, buf_len, "%s", s.c_str());
+}
+if (out_len != nullptr) {
+    *out_len = written_chars;
+}
+```
+
+When `out_buf` is non-null but `buf_len` is 0, `snprintf` returns the number of
+characters that *would have been written*, which is correct. However, when `out_buf`
+is null (the standard length-probing pattern), `written_chars` stays at 0 and the
+caller never learns the required buffer size. Additionally, the calling code in
+`api_info.cpp` never returns `SQL_SUCCESS_WITH_INFO` for truncation — it always
+returns `SQL_SUCCESS`.
+
+### Expected behavior
+
+Per the ODBC specification:
+1. When `BufferLength = 0` and `InfoValuePtr` is non-null: return
+   `SQL_SUCCESS_WITH_INFO` with SQLSTATE `01004`, and set `*StringLengthPtr` to the
+   total length of the data (excluding null terminator).
+2. When `InfoValuePtr` is null: return `SQL_SUCCESS` and set `*StringLengthPtr` to
+   the total length.
+
+### Suggested fix
+
+```cpp
+template <typename INT_TYPE, typename CHAR_TYPE=SQLCHAR>
+static SQLRETURN WriteString(const std::string &s, CHAR_TYPE *out_buf,
+                             SQLLEN buf_len, INT_TYPE *out_len) {
+    INT_TYPE total_len = (INT_TYPE)s.length();
+    if (out_len) {
+        *out_len = total_len;  // Always report full length
     }
-    hstmt->Close();
+    if (out_buf != nullptr && buf_len > 0) {
+        snprintf((char *)out_buf, buf_len, "%s", s.c_str());
+    }
+    if (out_buf != nullptr && total_len >= buf_len) {
+        return SQL_SUCCESS_WITH_INFO;  // Truncation occurred
+    }
     return SQL_SUCCESS;
 }
 ```
 
----
+### Impact
 
-### 7. `SQLGetInfo` with zero-length buffer returns required length 0
-
-| Field | Value |
-|-------|-------|
-| **Test** | `test_getinfo_zero_buffer` |
-| **Severity** | WARNING |
-
-**Root Cause:**
-
-When `buffer_length=0` and a non-null `InfoValuePtr` is passed,
-`OdbcUtils::WriteStringUtf8` computes `buf_len - 1` which underflows
-to `SIZE_MAX`.  It then copies the full string without truncation and
-returns `SQL_SUCCESS`, but the `string_length_ptr` output may not be
-set correctly depending on the code path.
-
-When `buffer_length=0` and `InfoValuePtr=NULL`, the function returns 0
-written bytes and the string length should be set — but the edge case
-causes the required length to appear as 0.
-
-**Fix:** Handle `buffer_length == 0` as a special case in
-`WriteStringUtf8`:
-
-```cpp
-if (buf_len == 0) {
-    if (string_length) *string_length = str.length();
-    return SQL_SUCCESS_WITH_INFO;  // indicates truncation
-}
-```
+Low. Applications that probe for required buffer sizes (the standard two-pass pattern:
+first call with null buffer to get length, then allocate and call again) will get
+incorrect lengths and may allocate zero-byte buffers.
 
 ---
 
-### 8. `SQLGetDiagField(SQL_DIAG_NUMBER)` returns 0 after errors
+## Recommendation 11: Implement `SQLNativeSql`
 
-| Field | Value |
-|-------|-------|
-| **Test** | `test_diagfield_record_count` |
-| **Severity** | INFO |
+**Severity**: LOW (INFO)  
+**Test affected**: `test_native_sql` (SKIP)  
+**ODBC Function**: `SQLNativeSql`  
+**ODBC Spec**: ODBC 3.x §SQLNativeSql  
+**Conformance**: Core  
 
-**Root Cause:**
+### Current behavior
 
-`OdbcDiagnostic::AddDiagRecord()` adds records to `diag_records` but
-**never increments** `header.sql_diag_number`.  The header field stays at
-its initial value of `0`.  When `SQLGetDiagField(SQL_DIAG_NUMBER)` reads
-it, it returns `0`.
+`SQLNativeSql` is stubbed in `empty_stubs.cpp` and returns `SQL_ERROR` with SQLSTATE
+`HYC00` ("Optional feature not implemented"). However, the driver reports it as
+supported via `SQLGetFunctions`.
 
-**Fix:**
+### Expected behavior
 
-```cpp
-void OdbcDiagnostic::AddDiagRecord(DiagRecord &diag_record) {
-    diag_records.emplace_back(diag_record);
-    vec_record_idx.emplace_back(static_cast<SQLSMALLINT>(diag_records.size() - 1));
-    header.sql_diag_number = static_cast<SQLINTEGER>(diag_records.size());
-}
-```
-
----
-
-### 9. `SQLGetData` with out-of-range column throws internal exception
-
-| Field | Value |
-|-------|-------|
-| **Test** | `test_getdata_col_out_of_range` |
-| **Severity** | INFO (should be ERROR) |
-| **Expected SQLSTATE** | 07009 |
-
-**Root Cause:**
-
-`OdbcFetch::GetValue()` does not validate that `col_idx` is within the
-result set's column count.  It calls
-`current_chunk->GetValue(col_idx, chunk_row)` directly, which throws a
-DuckDB internal C++ exception when `col_idx >= ColumnCount()`.
-
-This exception escapes the ODBC layer and shows up as:
-```
-{"exception_type":"INTERNAL","exception_message":"Attempted to access
-index 998 within vector of size 1"}
-```
-
-**Fix:** Add a bounds check before accessing the chunk:
+Per the ODBC specification, `SQLNativeSql` is a Core conformance function. A minimal
+implementation for DuckDB (which uses standard SQL) would simply copy the input SQL
+to the output buffer unchanged:
 
 ```cpp
-SQLRETURN OdbcFetch::GetValue(SQLUSMALLINT col_idx, Value &value) {
-    if (!current_chunk || col_idx >= current_chunk->ColumnCount()) {
-        return SQL_ERROR;  // caller sets SQLSTATE 07009
+SQLRETURN SQL_API SQLNativeSql(SQLHDBC hdbc, SQLCHAR *in_sql, SQLINTEGER in_len,
+                               SQLCHAR *out_sql, SQLINTEGER buf_len, SQLINTEGER *out_len) {
+    std::string sql(in_sql, in_len == SQL_NTS ? strlen((char*)in_sql) : in_len);
+    if (out_len) *out_len = (SQLINTEGER)sql.length();
+    if (out_sql && buf_len > 0) {
+        snprintf((char*)out_sql, buf_len, "%s", sql.c_str());
     }
-    value = current_chunk->GetValue(col_idx, chunk_row);
     return SQL_SUCCESS;
 }
 ```
 
----
+### Impact
 
-### 10. `SQL_ATTR_PARAM_OPERATION_PTR` not implemented
-
-| Field | Value |
-|-------|-------|
-| **Test** | `test_param_operation_array` |
-| **Severity** | INFO |
-
-**Root Cause:**
-
-`SQLSetStmtAttr` has **no case** for `SQL_ATTR_PARAM_OPERATION_PTR`.
-It falls through to the `default:` handler which returns
-`SQL_SUCCESS_WITH_INFO` (see issue #5) without storing the pointer.
-
-Even if the pointer were stored, `ParameterDescriptor::GetParamValues()`
-never checks the operation array to skip rows marked `SQL_PARAM_IGNORE`.
-
-**Fix:**
-
-1. Add a case in `SQLSetStmtAttr`:
-   ```cpp
-   case SQL_ATTR_PARAM_OPERATION_PTR:
-       hstmt->param_desc->GetAPD()->header.sql_desc_array_status_ptr =
-           (SQLUSMALLINT*)value_ptr;
-       return SQL_SUCCESS;
-   ```
-
-2. In `HasParamSetToProcess()` / `GetParamValues()`, skip rows where
-   `operation_ptr[paramset_idx] == SQL_PARAM_IGNORE`:
-   ```cpp
-   if (operation_ptr && operation_ptr[paramset_idx] == SQL_PARAM_IGNORE) {
-       ipd->header.sql_desc_array_status_ptr[paramset_idx] = SQL_PARAM_UNUSED;
-       continue;  // skip this row
-   }
-   ```
+Low. Most applications don't call `SQLNativeSql`, but reporting it as supported via
+`SQLGetFunctions` while returning `HYC00` is misleading.
 
 ---
 
-### 11. `test_array_partial_error` — no mixed status on partial failures
+## Recommendation 12: Handle `SQL_ATTR_ASYNC_ENABLE` consistently
 
-| Field | Value |
-|-------|-------|
-| **Test** | `test_array_partial_error` |
-| **Severity** | WARNING |
+**Severity**: LOW (INFO)  
+**Test affected**: `test_async_capability` (SKIP — inconclusive)  
+**ODBC Function**: `SQLSetStmtAttr(SQL_ATTR_ASYNC_ENABLE)` / `SQLGetStmtAttr`  
+**ODBC Spec**: ODBC 3.x §SQL_ATTR_ASYNC_ENABLE  
+**Conformance**: Level 2 (optional)  
 
-This test uses `SQL_ATTR_PARAM_OPERATION_PTR` to mark the middle row
-of a 3-row array INSERT as `SQL_PARAM_IGNORE`, expecting rows 0 and 2
-to have status `SQL_PARAM_SUCCESS` and row 1 to have `SQL_PARAM_UNUSED`.
+### Current behavior
 
-DuckDB processes all 3 rows as SUCCESS because
-`SQL_ATTR_PARAM_OPERATION_PTR` is unimplemented (issue #10).  The
-driver's `default:` case in `SQLSetStmtAttr` silently accepts the
-pointer with `SQL_SUCCESS_WITH_INFO` but never stores or consults it.
+The driver is inconsistent between set and get:
+- **Set**: `SQL_ATTR_ASYNC_ENABLE` falls through to the `default:` case in
+  `SQLSetStmtAttr`, which returns `SQL_SUCCESS_WITH_INFO` with `01S02`.
+- **Get**: `SQL_ATTR_ASYNC_ENABLE` falls through to the error handler in
+  `SQLGetStmtAttr`, which returns `SQL_ERROR` with "Unsupported attribute type".
 
-Additionally, even if `SQL_ATTR_PARAM_OPERATION_PTR` were implemented,
-the batch execution loop in `src/statement/statement.cpp` aborts
-immediately on the first per-row error instead of continuing to
-process remaining parameter sets and reporting `SQL_SUCCESS_WITH_INFO`
-with a mixed status array — a separate but related spec violation.
+DuckDB does not support async execution (confirmed by `SQLGetInfo(SQL_ASYNC_MODE)`
+returning `SQL_AM_NONE` at the connection level).
 
----
+### Suggested fix
 
-## Skipped Tests (Not Bugs)
+Add an explicit case for `SQL_ATTR_ASYNC_ENABLE` in `SQLSetStmtAttr` that returns
+`SQL_ERROR` with `HYC00`:
 
-| Test | Reason |
-|------|--------|
-| `test_connection_timeout` | `SQL_ATTR_CONNECTION_TIMEOUT` not supported |
-| `test_parameter_binding` | First query variant failed, fallback succeeded |
-| `test_columns_catalog` | Non-standard result columns |
-| `test_async_capability` | Async not supported |
-| `test_apd_fields` | `SQLSetDescField` not supported (1 of 52 functions missing) |
-| `test_columns_unicode_patterns` | Pattern matching differences |
-| `test_string_truncation_wchar` | WCHAR truncation edge case |
-| `test_native_sql` | `SQLNativeSql` returns SQL_ERROR |
+```cpp
+case SQL_ATTR_ASYNC_ENABLE:
+    return SetDiagnosticRecord(hstmt, SQL_ERROR, "SQLSetStmtAttr",
+        "Asynchronous execution is not supported",
+        SQLStateType::ST_HYC00, "");
+```
 
-These are expected limitations, not bugs.
+### Impact
+
+Minimal. Async execution is a Level 2 optional feature. The fix is for consistency —
+both set and get should agree that the feature is unsupported.
 
 ---
 
-## Recommendations by Priority
+## Recommendation 13: Support `SQL_ATTR_CONNECTION_TIMEOUT`
 
-### 🔴 Must Fix (Process Crash)
+**Severity**: LOW (INFO)  
+**Test affected**: `test_connection_timeout` (SKIP)  
+**ODBC Function**: `SQLGetConnectAttr(SQL_ATTR_CONNECTION_TIMEOUT)`  
+**ODBC Spec**: ODBC 3.x §SQLGetConnectAttr  
+**Conformance**: Core (optional attribute)  
 
-1. **Guard `SQLDescribeParam`** against empty parameter type vectors
-2. **Implement row-wise parameter binding arithmetic** in
-   `ParameterDescriptor::SetValue()` using `sql_desc_bind_type`
+### Current behavior
 
-### 🟠 Should Fix (Spec Violations)
+`SQL_ATTR_CONNECTION_TIMEOUT` falls through to a block of unsupported attributes that
+returns `SQL_NO_DATA` in `connection.cpp`. This means the attribute is not recognized.
 
-3. Return `SQL_ERROR` from `SQLGetInfo` default case (not `SQL_SUCCESS`)
-4. Return `SQL_ERROR` from `SQLSetConnectAttr` default case (not
-   `SQL_SUCCESS_WITH_INFO`)
-5. Return `SQL_ERROR` from `SQLSetStmtAttr` default case (not
-   `SQL_SUCCESS_WITH_INFO`)
-6. Return `SQL_ERROR` with `24000` from `SQLCloseCursor` when no cursor open
-7. Increment `sql_diag_number` in `AddDiagRecord()`
-8. Add bounds check in `OdbcFetch::GetValue()`
-9. Handle `buffer_length=0` in `WriteStringUtf8`
+### Expected behavior
 
-### 🟡 Nice to Have
+Even if DuckDB doesn't enforce a connection timeout (as an embedded database, it has
+no network timeouts), it should return a default value of 0 (meaning "no timeout")
+rather than indicating the attribute is unrecognized:
 
-10. Add autocommit guard to `SQLEndTran(SQL_ROLLBACK)`
-11. Implement `SQL_ATTR_PARAM_OPERATION_PTR`
+```cpp
+case SQL_ATTR_CONNECTION_TIMEOUT:
+    *(SQLUINTEGER *)value_ptr = 0;  // No timeout
+    return SQL_SUCCESS;
+```
 
----
+### Impact
 
-## Test Environment
-
-- **OS:** Windows 10/11 x64
-- **Compiler:** MSVC 2022 (v17.14)
-- **ODBC DM:** Microsoft ODBC Driver Manager 03.80
-- **DuckDB ODBC:** v03.51.0000
-- **Test tool:** ODBC Crusher v0.3.1
+Minimal. Applications that query the connection timeout get an unexpected error
+instead of the standard default value of 0.
 
 ---
-*Generated by ODBC Crusher -- https://github.com/fdcastel/odbc-crusher/*
 
+## Overall Assessment
+
+The DuckDB ODBC driver (v1.4.4.0) has significant issues that need attention:
+
+**Critical (crash-severity):**
+- ❌ Descriptor API crashes with SIGSEGV (Recommendation 1)
+- ❌ Unicode/W-functions crash with SIGSEGV on Linux (Recommendation 2)
+
+**High (incorrect behavior):**
+- ❌ `SQLGetData` with out-of-range column throws exception (Recommendation 3)
+- ❌ `SQLEndTran(ROLLBACK)` fails in manual-commit mode (Recommendation 4)
+- ❌ `SQLBindParameter` with nullptr indicator treats data as NULL (Recommendation 5)
+- ❌ Row-wise array binding ignores struct stride (Recommendation 6)
+- ❌ `SQL_ATTR_PARAM_OPERATION_PTR` silently ignored (Recommendation 7)
+
+**Low (spec conformance):**
+- ⚠️ Invalid `SQLGetInfo` types return `SQL_SUCCESS` (Recommendation 8)
+- ⚠️ Invalid `SQLSetConnectAttr` attributes return `SQL_SUCCESS_WITH_INFO` (Recommendation 9)
+- ⚠️ Zero-buffer `SQLGetInfo` reports length=0 (Recommendation 10)
+- ℹ️ `SQLNativeSql` stubbed but reported as supported (Recommendation 11)
+- ℹ️ Async enable set/get inconsistency (Recommendation 12)
+- ℹ️ Connection timeout not recognized (Recommendation 13)
+
+**What works well:**
+- ✅ Core statement lifecycle (prepare, execute, fetch, close)
+- ✅ Column-wise array parameter binding with status arrays
+- ✅ Data type handling (all 9 type categories pass, including GUID)
+- ✅ Scrollable cursors (static, forward-only, absolute positioning)
+- ✅ Error queue management (6/6 tests pass)
+- ✅ State machine validation (6/6 tests pass)
+- ✅ Cancellation support
+- ✅ Boundary value handling (except zero-buffer)
+
+---
+Generated by ODBC Crusher -- https://github.com/fdcastel/odbc-crusher/

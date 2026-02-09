@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.11  
+**Version**: 2.12  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 8, 2026
 
@@ -1045,6 +1045,65 @@ A comprehensive recommendations document was written to `tmp/DUCKDB_ODBC_RECOMME
 - [x] `recommendations/postgresql_ODBC_RECOMMENDATIONS.md` rewritten for v0.4.5 results (4 recommendations: 2 skipped features + 2 SQLSTATE mapping issues)
 - [x] No new odbc-crusher bugs identified
 - [x] PostgreSQL: 129/131 passed (98.5%) — **best result among all tested drivers**
+
+---
+
+### Phase 25: Real-Driver Validation — DuckDB ODBC v1.4.4.0 Analysis ✅
+
+**Goal**: Run odbc-crusher v0.4.5 against the DuckDB ODBC driver (v1.4.4.0 / ODBC 3.51) and cross-reference each non-passing result against the driver source code at tag `v1.4.4.0` (`tmp/external/duckdb-odbc/`).
+
+**Discovery Date**: February 8, 2026
+**Analysis Method**: Ran odbc-crusher v0.4.5 against DuckDB ODBC on Linux, then reviewed the driver's C++ source code to verify each failure, skip, and crash.
+
+**Summary**: 123 tests completed (8 lost to crashes), 108 passed (87.8%), 7 failed, 5 skipped, 3 errors. Of the 15 non-passing results:
+- **13 are genuine driver deficiencies** (documented in `recommendations/duckdb_ODBC_RECOMMENDATIONS.md`)
+- **1 is an odbc-crusher limitation** (`test_columns_catalog` — fresh DuckDB has no tables of type TABLE)
+- **1 straddles both** (`test_parameter_binding` — driver misinterprets nullptr indicator, but test could be more robust)
+
+#### 25.1 Crash-Severity Driver Bugs (2 categories — 10 tests lost)
+
+| Category | Status | Root Cause |
+|----------|--------|------------|
+| Descriptor Tests | SIGSEGV | `stmt_ptr` always null in implicit descriptors; `SQLCopyDesc` does pointer assignment instead of object copy; record management corrupts state |
+| Unicode Tests | SIGSEGV | Hardcoded UTF-16 (2-byte) `SQLWCHAR` assumptions in `src/widechar/`; crashes on Linux where `sizeof(SQLWCHAR)` may be 4 |
+
+#### 25.2 Driver Spec Violations (7 failed tests)
+
+| Test | Status | Root Cause |
+|------|--------|------------|
+| `test_manual_rollback` | FAIL | `Commit()` resets internal auto-commit flag, causing next INSERT to auto-commit; subsequent ROLLBACK finds no active transaction |
+| `test_getdata_col_out_of_range` | ERROR | No bounds check on column index in `odbc_fetch.cpp`; DuckDB throws internal exception instead of SQL_ERROR/07009 |
+| `test_getinfo_invalid_type` | FAIL | `default:` case in `api_info.cpp` returns `SQL_SUCCESS` with `HY092` instead of `SQL_ERROR` with `HY096` |
+| `test_setconnattr_invalid_attr` | FAIL | `default:` case returns `SQL_SUCCESS_WITH_INFO` / `01S02` instead of `SQL_ERROR` / `HY092` |
+| `test_getinfo_zero_buffer` | FAIL | `WriteString` reports `written_chars=0` when buffer is null; no truncation detection |
+| `test_row_wise_array_binding` | FAIL | Driver stores `SQL_ATTR_PARAM_BIND_TYPE` but never uses it in `SetValue()` pointer arithmetic |
+| `test_param_operation_array` | FAIL | `SQL_ATTR_PARAM_OPERATION_PTR` silently accepted but never consulted during execution |
+| `test_array_partial_error` | FAIL | Same root cause as `test_param_operation_array` |
+
+#### 25.3 Correctly Skipped Features (3 tests)
+
+| Test | Status | Root Cause |
+|------|--------|------------|
+| `test_native_sql` | SKIP | Stubbed as `HYC00` in `empty_stubs.cpp`; reported as supported via `SQLGetFunctions` |
+| `test_connection_timeout` | SKIP | Falls through to unsupported attribute block returning `SQL_NO_DATA` |
+| `test_async_capability` | SKIP | Set falls to default (success); get falls to error handler; inconsistent but genuinely unsupported |
+
+#### 25.4 Driver Bug Causing Inconclusive Test (1 test)
+
+| Test | Status | Root Cause |
+|------|--------|------------|
+| `test_parameter_binding` | SKIP | `parameter_descriptor.cpp` line 248: `sql_ind_ptr == nullptr` condition incorrectly treats missing indicator as NULL data. Per ODBC spec, nullptr `StrLen_or_IndPtr` for fixed-length types means "data is always non-null" |
+
+#### 25.5 Odbc-Crusher Limitation (1 test)
+
+| Bug ID | Test | File | Issue |
+|--------|------|------|-------|
+| B25-01 | `test_columns_catalog` | `metadata_tests.cpp` | Fresh DuckDB database has no tables of type `TABLE`; test's dynamic discovery via `SQLTables(TABLE)` returns 0 rows and static fallback table names don't exist in DuckDB. Test should create a temporary table first or also try type `VIEW`. |
+
+**Deliverables**:
+- [x] `recommendations/duckdb_ODBC_RECOMMENDATIONS.md` with 13 recommendations (2 critical, 5 high, 6 low)
+- [x] B25-01: Identified crusher limitation for empty databases — deferred to future fix
+- [x] DuckDB v1.4.4.0: 108/123 passed (87.8%), 7 failed, 5 skipped, 3 errors — **0 crashes** (crash guard caught both SIGSEGVs)
 
 ---
 
