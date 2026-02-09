@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.10  
+**Version**: 2.11  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 8, 2026
 
@@ -1009,6 +1009,42 @@ A comprehensive recommendations document was written to `tmp/DUCKDB_ODBC_RECOMME
 - [x] DuckDB: 113/131 passed (86.3%), 9 failed, 8 skipped, 1 error — **0 crashes**
 - [x] Mock driver: 131/131 (100%) — unchanged
 - [x] Unit tests: 60/60 (100%) — pass on all platforms
+
+---
+
+### Phase 24: Real-Driver Re-Validation — PostgreSQL psqlodbc v0.4.5 Re-Analysis ✅
+
+**Goal**: Re-run odbc-crusher v0.4.5 against the PostgreSQL ODBC driver (psqlodbcw.so v16.00.0000 / ODBC 3.51 / PostgreSQL 16.0.11) and verify that the 4 odbc-crusher bugs fixed in Phase 22 are resolved. Cross-reference remaining non-passing results against the driver source code at tag `REL-16_00_0000`.
+
+**Discovery Date**: February 8, 2026  
+**Analysis Method**: Ran odbc-crusher v0.4.5 against psqlodbc on Linux, then reviewed the driver's C source code (`tmp/external/psqlodbc/`) to verify each remaining skip.
+
+**Summary**: 129/131 passed (98.5%), 0 failed, 2 skipped. All 4 odbc-crusher bugs from Phase 22 are confirmed fixed. The remaining 2 skips are genuine driver conformance gaps — **no new odbc-crusher bugs found**.
+
+**Improvement over Phase 22**: 125/131 (95.4%) → 129/131 (98.5%). The 4 previously-skipped tests now pass:
+- `test_special_columns` — fixed by dynamic table discovery (B22-01)
+- `test_binary_types` — fixed by PostgreSQL `decode()/bytea` syntax (B22-02)
+- `test_columns_unicode_patterns` — fixed by filtering `information_schema` views (B22-03)
+- `test_tables_search_patterns` — fixed by passing empty strings instead of nullptr (B22-04)
+
+#### 24.1 Confirmed Driver Gaps (2 tests — no odbc-crusher bug)
+
+| Test | Status | Driver Code | Conclusion |
+|------|--------|-------------|------------|
+| `test_cursor_scrollable_attr` | SKIP | `pgapi30.c`: `PGAPI_SetStmtAttr` unconditionally rejects `SQL_ATTR_CURSOR_SCROLLABLE` with `HYC00`, grouping it with `SQL_ATTR_CURSOR_SENSITIVITY` and `SQL_ATTR_AUTO_IPD`. The getter in `PGAPI_GetStmtAttr` works correctly, deriving `SQL_SCROLLABLE`/`SQL_NONSCROLLABLE` from `cursor_type`. | **Crusher CORRECT** — driver supports scrollable cursors via `SQL_ATTR_CURSOR_TYPE` but not via the `SQL_ATTR_CURSOR_SCROLLABLE` setter |
+| `test_async_capability` | SKIP | `options.c`: `set_statement_option` silently ignores `SQL_ASYNC_ENABLE` (returns `SQL_SUCCESS` without storing). `PGAPI_GetStmtOption` always returns `SQL_ASYNC_ENABLE_OFF`. `SQLGetInfo` reports `SQL_AM_NONE`. | **Crusher CORRECT** — driver has no async support; silently accepting the set is a minor spec violation |
+
+#### 24.2 Passed Tests with Non-Standard SQLSTATEs (2 tests — informational)
+
+| Test | SQLSTATE Returned | SQLSTATE Expected | Driver Code |
+|------|-------------------|-------------------|-------------|
+| `test_getinfo_invalid_type` | `HYC00` | `HY096` | `info.c`: uses `CONN_NOT_IMPLEMENTED_ERROR` which maps to `HYC00` |
+| `test_setconnattr_invalid_attr` | `HY000` | `HY092` | `connection.c`: `CONN_OPTION_NOT_FOR_THE_DRIVER` has no explicit SQLSTATE mapping, falls to `HY000` |
+
+**Deliverables**:
+- [x] `recommendations/postgresql_ODBC_RECOMMENDATIONS.md` rewritten for v0.4.5 results (4 recommendations: 2 skipped features + 2 SQLSTATE mapping issues)
+- [x] No new odbc-crusher bugs identified
+- [x] PostgreSQL: 129/131 passed (98.5%) — **best result among all tested drivers**
 
 ---
 
