@@ -146,29 +146,43 @@ int main(int argc, char** argv) {
         conn.connect(connection_string);
         
         // Phase 1: Collect driver information (for all output formats)
+        // Wrapped in crash guard because some drivers (e.g. DuckDB on Linux)
+        // can SIGSEGV during SQLGetTypeInfo or SQLGetInfo.
         discovery::DriverInfo driver_info(conn);
-        driver_info.collect();
-        
         discovery::TypeInfo type_info(conn);
-        type_info.collect();
-        
         discovery::FunctionInfo func_info(conn);
-        func_info.collect();
         
-        if (output_format == "console") {
-            auto* console_rep = dynamic_cast<reporting::ConsoleReporter*>(reporter.get());
-            if (console_rep) {
-                console_rep->report_driver_info(driver_info.get_properties());
-                console_rep->report_type_info(type_info.get_types());
-                console_rep->report_function_info(func_info.get_support());
-                std::cout << std::flush;
-            }
-        } else if (output_format == "json") {
-            auto* json_rep = dynamic_cast<reporting::JsonReporter*>(reporter.get());
-            if (json_rep) {
-                json_rep->report_driver_info(driver_info.get_properties());
-                json_rep->report_type_info(type_info.get_types());
-                json_rep->report_function_info(func_info.get_support());
+        bool discovery_ok = true;
+        auto discovery_guard = core::execute_with_crash_guard([&]() {
+            driver_info.collect();
+            type_info.collect();
+            func_info.collect();
+        });
+        
+        if (discovery_guard.crashed) {
+            discovery_ok = false;
+            std::cerr << "\nWARNING: Driver crashed during discovery phase: " 
+                      << discovery_guard.description << "\n"
+                      << "Continuing with limited information...\n\n";
+            std::cerr << std::flush;
+        }
+        
+        if (discovery_ok) {
+            if (output_format == "console") {
+                auto* console_rep = dynamic_cast<reporting::ConsoleReporter*>(reporter.get());
+                if (console_rep) {
+                    console_rep->report_driver_info(driver_info.get_properties());
+                    console_rep->report_type_info(type_info.get_types());
+                    console_rep->report_function_info(func_info.get_support());
+                    std::cout << std::flush;
+                }
+            } else if (output_format == "json") {
+                auto* json_rep = dynamic_cast<reporting::JsonReporter*>(reporter.get());
+                if (json_rep) {
+                    json_rep->report_driver_info(driver_info.get_properties());
+                    json_rep->report_type_info(type_info.get_types());
+                    json_rep->report_function_info(func_info.get_support());
+                }
             }
         }
         
