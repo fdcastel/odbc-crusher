@@ -161,6 +161,7 @@ int main(int argc, char** argv) {
                 console_rep->report_driver_info(driver_info.get_properties());
                 console_rep->report_type_info(type_info.get_types());
                 console_rep->report_function_info(func_info.get_support());
+                std::cout << std::flush;
             }
         } else if (output_format == "json") {
             auto* json_rep = dynamic_cast<reporting::JsonReporter*>(reporter.get());
@@ -171,7 +172,7 @@ int main(int argc, char** argv) {
             }
         }
         
-        std::cout << "Phase 2: Running ODBC tests...\n\n";
+        std::cout << "Phase 2: Running ODBC tests...\n\n" << std::flush;
         
         // Track overall statistics
         size_t total_tests = 0;
