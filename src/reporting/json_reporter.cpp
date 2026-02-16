@@ -142,4 +142,27 @@ void JsonReporter::report_function_info(const discovery::FunctionInfo::FunctionS
     root_["function_info"] = func_info;
 }
 
+void JsonReporter::report_scalar_functions(const discovery::DriverInfo::ScalarFunctionSupport& sf) {
+    nlohmann::json scalar;
+    scalar["string_functions"] = sf.string_functions;
+    scalar["numeric_functions"] = sf.numeric_functions;
+    scalar["timedate_functions"] = sf.timedate_functions;
+    scalar["system_functions"] = sf.system_functions;
+    scalar["string_bitmask"] = sf.string_bitmask;
+    scalar["numeric_bitmask"] = sf.numeric_bitmask;
+    scalar["timedate_bitmask"] = sf.timedate_bitmask;
+    scalar["system_bitmask"] = sf.system_bitmask;
+    scalar["convert_functions_bitmask"] = sf.convert_functions_bitmask;
+    scalar["oj_capabilities"] = sf.oj_capabilities;
+    scalar["datetime_literals"] = sf.datetime_literals;
+
+    nlohmann::json convert_matrix;
+    for (const auto& [name, mask] : sf.convert_matrix) {
+        convert_matrix[name] = mask;
+    }
+    scalar["convert_matrix"] = convert_matrix;
+
+    root_["scalar_functions"] = scalar;
+}
+
 } // namespace odbc_crusher::reporting

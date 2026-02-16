@@ -6,6 +6,7 @@
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
 #include <cstring>
+#include <cmath>
 
 using namespace mock_odbc;
 
@@ -82,6 +83,17 @@ static CellValue read_param_value(
             return static_cast<double>(*reinterpret_cast<const SQLDOUBLE*>(data_ptr));
         case SQL_C_FLOAT:
             return static_cast<double>(*reinterpret_cast<const SQLREAL*>(data_ptr));
+        case SQL_C_NUMERIC: {
+            // Read SQL_NUMERIC_STRUCT and convert to double
+            const SQL_NUMERIC_STRUCT* ns = reinterpret_cast<const SQL_NUMERIC_STRUCT*>(data_ptr);
+            unsigned long long int_val = 0;
+            for (int b = SQL_MAX_NUMERIC_LEN - 1; b >= 0; --b) {
+                int_val = (int_val << 8) | ns->val[b];
+            }
+            double result = static_cast<double>(int_val) / std::pow(10.0, ns->scale);
+            if (ns->sign == 0) result = -result;
+            return result;
+        }
         case SQL_C_CHAR:
         default: {
             SQLLEN len = pb.buffer_length;
@@ -634,11 +646,19 @@ SQLRETURN SQL_API SQLGetData(
         return SQL_SUCCESS;
     }
     
+    // Handle SQL_C_DEFAULT: map to appropriate type based on cell content
+    SQLSMALLINT effective_type = fCType;
+    if (fCType == SQL_C_DEFAULT || fCType == SQL_ARD_TYPE) {
+        if (std::holds_alternative<long long>(cell)) effective_type = SQL_C_SBIGINT;
+        else if (std::holds_alternative<double>(cell)) effective_type = SQL_C_DOUBLE;
+        else effective_type = SQL_C_CHAR;
+    }
+
     // Convert based on target type
     if (std::holds_alternative<long long>(cell)) {
         long long value = std::get<long long>(cell);
         
-        switch (fCType) {
+        switch (effective_type) {
             case SQL_C_SLONG:
             case SQL_C_LONG:
                 if (rgbValue) *static_cast<SQLINTEGER*>(rgbValue) = static_cast<SQLINTEGER>(value);
@@ -654,6 +674,30 @@ SQLRETURN SQL_API SQLGetData(
                 if (rgbValue) *static_cast<SQLSMALLINT*>(rgbValue) = static_cast<SQLSMALLINT>(value);
                 if (pcbValue) *pcbValue = sizeof(SQLSMALLINT);
                 break;
+            
+            case SQL_C_DOUBLE:
+                if (rgbValue) *static_cast<SQLDOUBLE*>(rgbValue) = static_cast<SQLDOUBLE>(value);
+                if (pcbValue) *pcbValue = sizeof(SQLDOUBLE);
+                break;
+                
+            case SQL_C_NUMERIC: {
+                // Convert integer to SQL_NUMERIC_STRUCT
+                if (rgbValue) {
+                    SQL_NUMERIC_STRUCT* ns = static_cast<SQL_NUMERIC_STRUCT*>(rgbValue);
+                    std::memset(ns, 0, sizeof(SQL_NUMERIC_STRUCT));
+                    ns->precision = 18;
+                    ns->scale = 0;
+                    ns->sign = (value >= 0) ? 1 : 0;
+                    unsigned long long abs_val = (value >= 0) ? static_cast<unsigned long long>(value)
+                                                              : static_cast<unsigned long long>(-value);
+                    for (int b = 0; b < SQL_MAX_NUMERIC_LEN && abs_val > 0; ++b) {
+                        ns->val[b] = static_cast<SQLCHAR>(abs_val & 0xFF);
+                        abs_val >>= 8;
+                    }
+                }
+                if (pcbValue) *pcbValue = sizeof(SQL_NUMERIC_STRUCT);
+                break;
+            }
                 
             case SQL_C_WCHAR:
                 break;  // Handled by SQL_C_WCHAR catch-all below
@@ -673,7 +717,7 @@ SQLRETURN SQL_API SQLGetData(
     } else if (std::holds_alternative<double>(cell)) {
         double value = std::get<double>(cell);
         
-        switch (fCType) {
+        switch (effective_type) {
             case SQL_C_DOUBLE:
                 if (rgbValue) *static_cast<SQLDOUBLE*>(rgbValue) = value;
                 if (pcbValue) *pcbValue = sizeof(SQLDOUBLE);
@@ -683,6 +727,42 @@ SQLRETURN SQL_API SQLGetData(
                 if (rgbValue) *static_cast<SQLREAL*>(rgbValue) = static_cast<SQLREAL>(value);
                 if (pcbValue) *pcbValue = sizeof(SQLREAL);
                 break;
+                
+            case SQL_C_NUMERIC: {
+                // Convert double to SQL_NUMERIC_STRUCT
+                if (rgbValue) {
+                    SQL_NUMERIC_STRUCT* ns = static_cast<SQL_NUMERIC_STRUCT*>(rgbValue);
+                    std::memset(ns, 0, sizeof(SQL_NUMERIC_STRUCT));
+                    ns->sign = (value >= 0) ? 1 : 0;
+                    double abs_val = std::abs(value);
+                    // Determine scale from decimal places
+                    ns->scale = 0;
+                    ns->precision = 18;
+                    // Use provided descriptor scale if available (via descriptor)
+                    // Default: detect decimal digits
+                    double int_part;
+                    double frac_part = std::modf(abs_val, &int_part);
+                    SQLSCHAR scale = 0;
+                    if (frac_part > 0.0) {
+                        // Find appropriate scale (up to 10)
+                        for (scale = 1; scale <= 10; ++scale) {
+                            double scaled = abs_val * std::pow(10.0, scale);
+                            double rounded = std::round(scaled);
+                            if (std::abs(scaled - rounded) < 1e-6) break;
+                        }
+                    }
+                    ns->scale = scale;
+                    // Compute val[] = abs_val * 10^scale as little-endian integer
+                    unsigned long long int_val = static_cast<unsigned long long>(
+                        std::round(abs_val * std::pow(10.0, scale)));
+                    for (int b = 0; b < SQL_MAX_NUMERIC_LEN && int_val > 0; ++b) {
+                        ns->val[b] = static_cast<SQLCHAR>(int_val & 0xFF);
+                        int_val >>= 8;
+                    }
+                }
+                if (pcbValue) *pcbValue = sizeof(SQL_NUMERIC_STRUCT);
+                break;
+            }
                 
             case SQL_C_WCHAR:
                 break;  // Handled by SQL_C_WCHAR catch-all below
@@ -702,7 +782,7 @@ SQLRETURN SQL_API SQLGetData(
     } else if (std::holds_alternative<std::string>(cell)) {
         const std::string& value = std::get<std::string>(cell);
         
-        if (fCType == SQL_C_WCHAR) {
+        if (effective_type == SQL_C_WCHAR) {
             // Convert UTF-8 string to UTF-16 (SQLWCHAR)
             SQLSMALLINT wbytes = 0;
             SQLRETURN r = copy_string_to_wbuffer(value,
@@ -715,7 +795,7 @@ SQLRETURN SQL_API SQLGetData(
                                     "String data, right truncated");
                 return SQL_SUCCESS_WITH_INFO;
             }
-        } else if (fCType == SQL_C_TYPE_DATE) {
+        } else if (effective_type == SQL_C_TYPE_DATE) {
             // Parse date string "YYYY-MM-DD" into SQL_DATE_STRUCT
             SQL_DATE_STRUCT ds = {0, 0, 0};
             if (value.length() >= 10 && value[4] == '-' && value[7] == '-') {
@@ -727,7 +807,7 @@ SQLRETURN SQL_API SQLGetData(
             }
             if (rgbValue) *static_cast<SQL_DATE_STRUCT*>(rgbValue) = ds;
             if (pcbValue) *pcbValue = sizeof(SQL_DATE_STRUCT);
-        } else if (fCType == SQL_C_TYPE_TIME) {
+        } else if (effective_type == SQL_C_TYPE_TIME) {
             // Parse time string "HH:MM:SS" into SQL_TIME_STRUCT
             SQL_TIME_STRUCT ts = {0, 0, 0};
             if (value.length() >= 8 && value[2] == ':' && value[5] == ':') {
@@ -739,7 +819,7 @@ SQLRETURN SQL_API SQLGetData(
             }
             if (rgbValue) *static_cast<SQL_TIME_STRUCT*>(rgbValue) = ts;
             if (pcbValue) *pcbValue = sizeof(SQL_TIME_STRUCT);
-        } else if (fCType == SQL_C_TYPE_TIMESTAMP) {
+        } else if (effective_type == SQL_C_TYPE_TIMESTAMP) {
             // Parse timestamp string "YYYY-MM-DD HH:MM:SS" into SQL_TIMESTAMP_STRUCT
             SQL_TIMESTAMP_STRUCT tss = {0, 0, 0, 0, 0, 0, 0};
             if (value.length() >= 19) {

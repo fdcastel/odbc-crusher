@@ -6,8 +6,132 @@
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
 #include <cstring>
+#include <algorithm>
+#include <cctype>
+#include <regex>
 
 using namespace mock_odbc;
+
+namespace {
+
+// Helper: uppercase a string
+std::string str_to_upper(const std::string& s) {
+    std::string result = s;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return std::toupper(c); });
+    return result;
+}
+
+// Helper: trim whitespace
+std::string str_trim(const std::string& s) {
+    auto start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
+}
+
+// Find the matching closing brace for an opening brace at position pos
+size_t find_matching_brace(const std::string& sql, size_t pos) {
+    int depth = 1;
+    bool in_sq = false;
+    for (size_t i = pos + 1; i < sql.length(); ++i) {
+        if (sql[i] == '\'' && !in_sq) { in_sq = true; continue; }
+        if (sql[i] == '\'' && in_sq) { 
+            if (i + 1 < sql.length() && sql[i + 1] == '\'') { ++i; continue; }
+            in_sq = false; continue; 
+        }
+        if (in_sq) continue;
+        if (sql[i] == '{') ++depth;
+        else if (sql[i] == '}') { --depth; if (depth == 0) return i; }
+    }
+    return std::string::npos;
+}
+
+// Translate ODBC escape sequences to native SQL
+// Handles: {fn ...}, {d '...'}, {t '...'}, {ts '...'}, {oj ...}, {CALL ...}, {?=CALL ...}, {escape '...'}, {INTERVAL ...}
+std::string translate_escape_sequences(const std::string& sql) {
+    std::string result;
+    result.reserve(sql.length());
+    
+    for (size_t i = 0; i < sql.length(); ++i) {
+        if (sql[i] == '{') {
+            size_t close = find_matching_brace(sql, i);
+            if (close == std::string::npos) {
+                result += sql[i];
+                continue;
+            }
+            
+            std::string inner = sql.substr(i + 1, close - i - 1);
+            std::string trimmed_inner = str_trim(inner);
+            std::string upper_inner = str_to_upper(trimmed_inner);
+            
+            if (upper_inner.find("FN ") == 0) {
+                // {fn FUNC(...)} -> translate known functions
+                std::string func_body = str_trim(trimmed_inner.substr(3));
+                // Recursively translate any nested escape sequences
+                func_body = translate_escape_sequences(func_body);
+                
+                std::string upper_func = str_to_upper(func_body);
+                // Map ODBC scalar function names to native equivalents
+                if (upper_func.find("UCASE(") == 0) {
+                    result += "UPPER" + func_body.substr(5);
+                } else if (upper_func.find("LCASE(") == 0) {
+                    result += "LOWER" + func_body.substr(5);
+                } else if (upper_func.find("DATABASE()") == 0) {
+                    result += "CURRENT_DATABASE()";
+                } else if (upper_func.find("USER()") == 0) {
+                    result += "CURRENT_USER";
+                } else if (upper_func.find("IFNULL(") == 0) {
+                    result += "COALESCE" + func_body.substr(6);
+                } else {
+                    // Most scalar functions have the same name in native SQL
+                    result += func_body;
+                }
+            } else if (upper_inner.find("D '") == 0 || upper_inner.find("D '") == 0) {
+                // {d 'yyyy-mm-dd'} -> DATE 'yyyy-mm-dd'
+                std::string date_str = str_trim(trimmed_inner.substr(2));
+                result += "DATE " + date_str;
+            } else if (upper_inner.find("T '") == 0) {
+                // {t 'hh:mm:ss'} -> TIME 'hh:mm:ss'
+                std::string time_str = str_trim(trimmed_inner.substr(2));
+                result += "TIME " + time_str;
+            } else if (upper_inner.find("TS '") == 0) {
+                // {ts 'yyyy-mm-dd hh:mm:ss'} -> TIMESTAMP 'yyyy-mm-dd hh:mm:ss'
+                std::string ts_str = str_trim(trimmed_inner.substr(3));
+                result += "TIMESTAMP " + ts_str;
+            } else if (upper_inner.find("OJ ") == 0) {
+                // {oj table1 LEFT OUTER JOIN table2 ON ...} -> table1 LEFT OUTER JOIN table2 ON ...
+                result += str_trim(trimmed_inner.substr(3));
+            } else if (upper_inner.find("CALL ") == 0) {
+                // {CALL proc(...)} -> EXEC proc(...)
+                std::string call_body = str_trim(trimmed_inner.substr(5));
+                result += "EXEC " + call_body;
+            } else if (upper_inner.find("?=CALL ") == 0 || upper_inner.find("? = CALL ") == 0) {
+                // {?=CALL func(...)} -> EXEC ? = func(...)
+                size_t call_pos = upper_inner.find("CALL ");
+                std::string func = str_trim(trimmed_inner.substr(call_pos + 5));
+                result += "EXEC ? = " + func;
+            } else if (upper_inner.find("ESCAPE ") == 0) {
+                // {escape '\'} -> ESCAPE '\'
+                result += trimmed_inner;
+            } else if (upper_inner.find("INTERVAL ") == 0) {
+                // {INTERVAL '5' DAY} -> INTERVAL '5' DAY
+                result += str_trim(trimmed_inner);
+            } else {
+                // Unknown escape — pass through as-is
+                result += sql.substr(i, close - i + 1);
+            }
+            
+            i = close;
+        } else {
+            result += sql[i];
+        }
+    }
+    
+    return result;
+}
+
+} // anonymous namespace
 
 extern "C" {
 
@@ -237,7 +361,8 @@ SQLRETURN SQL_API SQLGetInfo(
         // String Functions
         case SQL_STRING_FUNCTIONS:
             RETURN_ULONG(SQL_FN_STR_CONCAT | SQL_FN_STR_LENGTH | SQL_FN_STR_LTRIM |
-                        SQL_FN_STR_RTRIM | SQL_FN_STR_SUBSTRING);
+                        SQL_FN_STR_RTRIM | SQL_FN_STR_SUBSTRING | SQL_FN_STR_UCASE |
+                        SQL_FN_STR_LCASE);
             
         // System Functions
         case SQL_SYSTEM_FUNCTIONS:
@@ -245,7 +370,8 @@ SQLRETURN SQL_API SQLGetInfo(
             
         // Timedate Functions
         case SQL_TIMEDATE_FUNCTIONS:
-            RETURN_ULONG(SQL_FN_TD_NOW | SQL_FN_TD_CURDATE | SQL_FN_TD_CURTIME);
+            RETURN_ULONG(SQL_FN_TD_NOW | SQL_FN_TD_CURDATE | SQL_FN_TD_CURTIME |
+                        SQL_FN_TD_YEAR | SQL_FN_TD_MONTH | SQL_FN_TD_DAYOFWEEK);
             
         // Convert Functions
         case SQL_CONVERT_FUNCTIONS:
@@ -267,6 +393,87 @@ SQLRETURN SQL_API SQLGetInfo(
         case SQL_ASYNC_MODE:
             RETURN_ULONG(SQL_AM_NONE);
             
+        // Outer Join capabilities
+        case SQL_OJ_CAPABILITIES:
+            RETURN_ULONG(SQL_OJ_LEFT | SQL_OJ_RIGHT | SQL_OJ_NOT_ORDERED |
+                        SQL_OJ_ALL_COMPARISON_OPS);
+
+        // LIKE escape clause
+        case SQL_LIKE_ESCAPE_CLAUSE:
+            RETURN_STRING("Y");
+
+        // Datetime literals
+        case SQL_DATETIME_LITERALS:
+            RETURN_ULONG(SQL_DL_SQL92_DATE | SQL_DL_SQL92_TIME | SQL_DL_SQL92_TIMESTAMP);
+
+        // Timedate add/diff intervals
+        case SQL_TIMEDATE_ADD_INTERVALS:
+            RETURN_ULONG(SQL_FN_TSI_DAY | SQL_FN_TSI_MONTH | SQL_FN_TSI_YEAR |
+                        SQL_FN_TSI_HOUR | SQL_FN_TSI_MINUTE | SQL_FN_TSI_SECOND);
+
+        case SQL_TIMEDATE_DIFF_INTERVALS:
+            RETURN_ULONG(SQL_FN_TSI_DAY | SQL_FN_TSI_MONTH | SQL_FN_TSI_YEAR |
+                        SQL_FN_TSI_HOUR | SQL_FN_TSI_MINUTE | SQL_FN_TSI_SECOND);
+
+        // SQL_CONVERT_* types — support basic conversions
+        case SQL_CONVERT_CHAR:
+        case SQL_CONVERT_VARCHAR:
+        case SQL_CONVERT_LONGVARCHAR:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_INTEGER |
+                        SQL_CVT_DOUBLE | SQL_CVT_DATE | SQL_CVT_TIMESTAMP);
+
+        case SQL_CONVERT_INTEGER:
+        case SQL_CONVERT_SMALLINT:
+        case SQL_CONVERT_BIGINT:
+        case SQL_CONVERT_TINYINT:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_INTEGER |
+                        SQL_CVT_SMALLINT | SQL_CVT_BIGINT | SQL_CVT_DOUBLE |
+                        SQL_CVT_DECIMAL | SQL_CVT_NUMERIC);
+
+        case SQL_CONVERT_DECIMAL:
+        case SQL_CONVERT_NUMERIC:
+        case SQL_CONVERT_DOUBLE:
+        case SQL_CONVERT_FLOAT:
+        case SQL_CONVERT_REAL:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_INTEGER |
+                        SQL_CVT_DOUBLE | SQL_CVT_DECIMAL | SQL_CVT_NUMERIC |
+                        SQL_CVT_FLOAT | SQL_CVT_REAL);
+
+        case SQL_CONVERT_DATE:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_DATE |
+                        SQL_CVT_TIMESTAMP);
+
+        case SQL_CONVERT_TIME:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_TIME |
+                        SQL_CVT_TIMESTAMP);
+
+        case SQL_CONVERT_TIMESTAMP:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_DATE |
+                        SQL_CVT_TIME | SQL_CVT_TIMESTAMP);
+
+        case SQL_CONVERT_BIT:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_INTEGER |
+                        SQL_CVT_BIT);
+
+        case SQL_CONVERT_BINARY:
+        case SQL_CONVERT_VARBINARY:
+        case SQL_CONVERT_LONGVARBINARY:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_BINARY |
+                        SQL_CVT_VARBINARY | SQL_CVT_LONGVARBINARY);
+
+        case SQL_CONVERT_WCHAR:
+        case SQL_CONVERT_WVARCHAR:
+        case SQL_CONVERT_WLONGVARCHAR:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_WCHAR |
+                        SQL_CVT_WVARCHAR | SQL_CVT_INTEGER | SQL_CVT_DOUBLE);
+
+        case SQL_CONVERT_GUID:
+            RETURN_ULONG(SQL_CVT_CHAR | SQL_CVT_VARCHAR | SQL_CVT_GUID);
+
+        // ODBC Interface Conformance
+        case SQL_ODBC_INTERFACE_CONFORMANCE:
+            RETURN_ULONG(SQL_OIC_CORE);
+
         // SQL92 Features
         case SQL_SQL92_PREDICATES:
             RETURN_ULONG(SQL_SP_BETWEEN | SQL_SP_COMPARISON | SQL_SP_EXISTS |
@@ -494,19 +701,21 @@ SQLRETURN SQL_API SQLNativeSql(
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
     
-    // Mock: just return the input SQL unchanged
     std::string sql = sql_to_string(szSqlStrIn, static_cast<SQLSMALLINT>(cbSqlStrIn));
     
+    // Translate ODBC escape sequences to native SQL
+    std::string translated = translate_escape_sequences(sql);
+    
     if (pcbSqlStr) {
-        *pcbSqlStr = static_cast<SQLINTEGER>(sql.length());
+        *pcbSqlStr = static_cast<SQLINTEGER>(translated.length());
     }
     
     if (szSqlStr && cbSqlStrMax > 0) {
-        size_t copy_len = std::min(sql.length(), static_cast<size_t>(cbSqlStrMax - 1));
-        std::memcpy(szSqlStr, sql.c_str(), copy_len);
+        size_t copy_len = std::min(translated.length(), static_cast<size_t>(cbSqlStrMax - 1));
+        std::memcpy(szSqlStr, translated.c_str(), copy_len);
         szSqlStr[copy_len] = '\0';
         
-        if (static_cast<SQLINTEGER>(sql.length()) >= cbSqlStrMax) {
+        if (static_cast<SQLINTEGER>(translated.length()) >= cbSqlStrMax) {
             return SQL_SUCCESS_WITH_INFO;
         }
     }

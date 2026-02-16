@@ -4,6 +4,7 @@
 #include <string>
 #include <map>
 #include <optional>
+#include <vector>
 
 namespace odbc_crusher::discovery {
 
@@ -27,6 +28,25 @@ public:
         std::string table_term;
         std::string procedure_term;
         std::string identifier_quote_char;
+    };
+
+    // Scalar function support info
+    struct ScalarFunctionSupport {
+        std::vector<std::string> string_functions;
+        std::vector<std::string> numeric_functions;
+        std::vector<std::string> timedate_functions;
+        std::vector<std::string> system_functions;
+        SQLUINTEGER string_bitmask = 0;
+        SQLUINTEGER numeric_bitmask = 0;
+        SQLUINTEGER timedate_bitmask = 0;
+        SQLUINTEGER system_bitmask = 0;
+        SQLUINTEGER convert_functions_bitmask = 0;
+        SQLUINTEGER oj_capabilities = 0;
+        SQLUINTEGER datetime_literals = 0;
+        SQLUINTEGER timedate_add_intervals = 0;
+        SQLUINTEGER timedate_diff_intervals = 0;
+        // Type conversion matrix: info_type -> bitmask
+        std::map<std::string, SQLUINTEGER> convert_matrix;
     };
     
     explicit DriverInfo(core::OdbcConnection& conn);
@@ -52,6 +72,9 @@ public:
     
     // Get structured properties for reporting
     Properties get_properties() const;
+
+    // Get scalar function support info
+    const ScalarFunctionSupport& get_scalar_functions() const { return scalar_functions_; }
     
     // Display summary
     std::string format_summary() const;
@@ -68,6 +91,9 @@ private:
     std::optional<std::string> sql_conformance_;
     std::optional<std::string> odbc_interface_conformance_;
     
+    // Scalar function support
+    ScalarFunctionSupport scalar_functions_;
+    
     // All collected info
     std::map<std::string, std::string> info_map_;
     
@@ -76,6 +102,9 @@ private:
     
     // Helper to get integer info
     std::optional<SQLUINTEGER> get_info_uint(SQLUSMALLINT info_type);
+
+    // Collect scalar function capabilities
+    void collect_scalar_functions();
 };
 
 } // namespace odbc_crusher::discovery

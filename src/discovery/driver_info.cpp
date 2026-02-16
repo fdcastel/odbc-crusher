@@ -2,6 +2,7 @@
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <iomanip>
+#include <sqlext.h>
 
 namespace odbc_crusher::discovery {
 
@@ -114,6 +115,9 @@ void DriverInfo::collect() {
     if (auto ident_quote = get_info_string(SQL_IDENTIFIER_QUOTE_CHAR)) {
         info_map_["Identifier Quote Char"] = *ident_quote;
     }
+
+    // Collect scalar function capabilities (Phase 26)
+    collect_scalar_functions();
 }
 
 std::optional<std::string> DriverInfo::get_info_string(SQLUSMALLINT info_type) {
@@ -192,5 +196,162 @@ DriverInfo::Properties DriverInfo::get_properties() const {
     props.identifier_quote_char = (it != info_map_.end()) ? it->second : "";
     
     return props;
+}
+
+void DriverInfo::collect_scalar_functions() {
+    // String functions
+    if (auto v = get_info_uint(SQL_STRING_FUNCTIONS)) {
+        scalar_functions_.string_bitmask = *v;
+        if (*v & SQL_FN_STR_ASCII) scalar_functions_.string_functions.push_back("ASCII");
+        if (*v & SQL_FN_STR_BIT_LENGTH) scalar_functions_.string_functions.push_back("BIT_LENGTH");
+        if (*v & SQL_FN_STR_CHAR) scalar_functions_.string_functions.push_back("CHAR");
+        if (*v & SQL_FN_STR_CHAR_LENGTH) scalar_functions_.string_functions.push_back("CHAR_LENGTH");
+        if (*v & SQL_FN_STR_CHARACTER_LENGTH) scalar_functions_.string_functions.push_back("CHARACTER_LENGTH");
+        if (*v & SQL_FN_STR_CONCAT) scalar_functions_.string_functions.push_back("CONCAT");
+        if (*v & SQL_FN_STR_DIFFERENCE) scalar_functions_.string_functions.push_back("DIFFERENCE");
+        if (*v & SQL_FN_STR_INSERT) scalar_functions_.string_functions.push_back("INSERT");
+        if (*v & SQL_FN_STR_LCASE) scalar_functions_.string_functions.push_back("LCASE");
+        if (*v & SQL_FN_STR_LEFT) scalar_functions_.string_functions.push_back("LEFT");
+        if (*v & SQL_FN_STR_LENGTH) scalar_functions_.string_functions.push_back("LENGTH");
+        if (*v & SQL_FN_STR_LOCATE) scalar_functions_.string_functions.push_back("LOCATE");
+        if (*v & SQL_FN_STR_LOCATE_2) scalar_functions_.string_functions.push_back("LOCATE_2");
+        if (*v & SQL_FN_STR_LTRIM) scalar_functions_.string_functions.push_back("LTRIM");
+        if (*v & SQL_FN_STR_OCTET_LENGTH) scalar_functions_.string_functions.push_back("OCTET_LENGTH");
+        if (*v & SQL_FN_STR_POSITION) scalar_functions_.string_functions.push_back("POSITION");
+        if (*v & SQL_FN_STR_REPEAT) scalar_functions_.string_functions.push_back("REPEAT");
+        if (*v & SQL_FN_STR_REPLACE) scalar_functions_.string_functions.push_back("REPLACE");
+        if (*v & SQL_FN_STR_RIGHT) scalar_functions_.string_functions.push_back("RIGHT");
+        if (*v & SQL_FN_STR_RTRIM) scalar_functions_.string_functions.push_back("RTRIM");
+        if (*v & SQL_FN_STR_SOUNDEX) scalar_functions_.string_functions.push_back("SOUNDEX");
+        if (*v & SQL_FN_STR_SPACE) scalar_functions_.string_functions.push_back("SPACE");
+        if (*v & SQL_FN_STR_SUBSTRING) scalar_functions_.string_functions.push_back("SUBSTRING");
+        if (*v & SQL_FN_STR_UCASE) scalar_functions_.string_functions.push_back("UCASE");
+    }
+
+    // Numeric functions
+    if (auto v = get_info_uint(SQL_NUMERIC_FUNCTIONS)) {
+        scalar_functions_.numeric_bitmask = *v;
+        if (*v & SQL_FN_NUM_ABS) scalar_functions_.numeric_functions.push_back("ABS");
+        if (*v & SQL_FN_NUM_ACOS) scalar_functions_.numeric_functions.push_back("ACOS");
+        if (*v & SQL_FN_NUM_ASIN) scalar_functions_.numeric_functions.push_back("ASIN");
+        if (*v & SQL_FN_NUM_ATAN) scalar_functions_.numeric_functions.push_back("ATAN");
+        if (*v & SQL_FN_NUM_ATAN2) scalar_functions_.numeric_functions.push_back("ATAN2");
+        if (*v & SQL_FN_NUM_CEILING) scalar_functions_.numeric_functions.push_back("CEILING");
+        if (*v & SQL_FN_NUM_COS) scalar_functions_.numeric_functions.push_back("COS");
+        if (*v & SQL_FN_NUM_COT) scalar_functions_.numeric_functions.push_back("COT");
+        if (*v & SQL_FN_NUM_DEGREES) scalar_functions_.numeric_functions.push_back("DEGREES");
+        if (*v & SQL_FN_NUM_EXP) scalar_functions_.numeric_functions.push_back("EXP");
+        if (*v & SQL_FN_NUM_FLOOR) scalar_functions_.numeric_functions.push_back("FLOOR");
+        if (*v & SQL_FN_NUM_LOG) scalar_functions_.numeric_functions.push_back("LOG");
+        if (*v & SQL_FN_NUM_LOG10) scalar_functions_.numeric_functions.push_back("LOG10");
+        if (*v & SQL_FN_NUM_MOD) scalar_functions_.numeric_functions.push_back("MOD");
+        if (*v & SQL_FN_NUM_PI) scalar_functions_.numeric_functions.push_back("PI");
+        if (*v & SQL_FN_NUM_POWER) scalar_functions_.numeric_functions.push_back("POWER");
+        if (*v & SQL_FN_NUM_RADIANS) scalar_functions_.numeric_functions.push_back("RADIANS");
+        if (*v & SQL_FN_NUM_RAND) scalar_functions_.numeric_functions.push_back("RAND");
+        if (*v & SQL_FN_NUM_ROUND) scalar_functions_.numeric_functions.push_back("ROUND");
+        if (*v & SQL_FN_NUM_SIGN) scalar_functions_.numeric_functions.push_back("SIGN");
+        if (*v & SQL_FN_NUM_SIN) scalar_functions_.numeric_functions.push_back("SIN");
+        if (*v & SQL_FN_NUM_SQRT) scalar_functions_.numeric_functions.push_back("SQRT");
+        if (*v & SQL_FN_NUM_TAN) scalar_functions_.numeric_functions.push_back("TAN");
+        if (*v & SQL_FN_NUM_TRUNCATE) scalar_functions_.numeric_functions.push_back("TRUNCATE");
+    }
+
+    // Timedate functions
+    if (auto v = get_info_uint(SQL_TIMEDATE_FUNCTIONS)) {
+        scalar_functions_.timedate_bitmask = *v;
+        if (*v & SQL_FN_TD_CURDATE) scalar_functions_.timedate_functions.push_back("CURDATE");
+        if (*v & SQL_FN_TD_CURTIME) scalar_functions_.timedate_functions.push_back("CURTIME");
+        if (*v & SQL_FN_TD_DAYNAME) scalar_functions_.timedate_functions.push_back("DAYNAME");
+        if (*v & SQL_FN_TD_DAYOFMONTH) scalar_functions_.timedate_functions.push_back("DAYOFMONTH");
+        if (*v & SQL_FN_TD_DAYOFWEEK) scalar_functions_.timedate_functions.push_back("DAYOFWEEK");
+        if (*v & SQL_FN_TD_DAYOFYEAR) scalar_functions_.timedate_functions.push_back("DAYOFYEAR");
+        if (*v & SQL_FN_TD_EXTRACT) scalar_functions_.timedate_functions.push_back("EXTRACT");
+        if (*v & SQL_FN_TD_HOUR) scalar_functions_.timedate_functions.push_back("HOUR");
+        if (*v & SQL_FN_TD_MINUTE) scalar_functions_.timedate_functions.push_back("MINUTE");
+        if (*v & SQL_FN_TD_MONTH) scalar_functions_.timedate_functions.push_back("MONTH");
+        if (*v & SQL_FN_TD_MONTHNAME) scalar_functions_.timedate_functions.push_back("MONTHNAME");
+        if (*v & SQL_FN_TD_NOW) scalar_functions_.timedate_functions.push_back("NOW");
+        if (*v & SQL_FN_TD_QUARTER) scalar_functions_.timedate_functions.push_back("QUARTER");
+        if (*v & SQL_FN_TD_SECOND) scalar_functions_.timedate_functions.push_back("SECOND");
+        if (*v & SQL_FN_TD_TIMESTAMPADD) scalar_functions_.timedate_functions.push_back("TIMESTAMPADD");
+        if (*v & SQL_FN_TD_TIMESTAMPDIFF) scalar_functions_.timedate_functions.push_back("TIMESTAMPDIFF");
+        if (*v & SQL_FN_TD_WEEK) scalar_functions_.timedate_functions.push_back("WEEK");
+        if (*v & SQL_FN_TD_YEAR) scalar_functions_.timedate_functions.push_back("YEAR");
+    }
+
+    // System functions
+    if (auto v = get_info_uint(SQL_SYSTEM_FUNCTIONS)) {
+        scalar_functions_.system_bitmask = *v;
+        if (*v & SQL_FN_SYS_DBNAME) scalar_functions_.system_functions.push_back("DATABASE");
+        if (*v & SQL_FN_SYS_IFNULL) scalar_functions_.system_functions.push_back("IFNULL");
+        if (*v & SQL_FN_SYS_USERNAME) scalar_functions_.system_functions.push_back("USER");
+    }
+
+    // Convert functions
+    if (auto v = get_info_uint(SQL_CONVERT_FUNCTIONS)) {
+        scalar_functions_.convert_functions_bitmask = *v;
+    }
+
+    // OJ capabilities
+    if (auto v = get_info_uint(SQL_OJ_CAPABILITIES)) {
+        scalar_functions_.oj_capabilities = *v;
+    }
+
+    // Datetime literals
+    if (auto v = get_info_uint(SQL_DATETIME_LITERALS)) {
+        scalar_functions_.datetime_literals = *v;
+    }
+
+    // Timedate add/diff intervals
+    if (auto v = get_info_uint(SQL_TIMEDATE_ADD_INTERVALS)) {
+        scalar_functions_.timedate_add_intervals = *v;
+    }
+    if (auto v = get_info_uint(SQL_TIMEDATE_DIFF_INTERVALS)) {
+        scalar_functions_.timedate_diff_intervals = *v;
+    }
+
+    // Conversion matrix
+    struct ConvertEntry {
+        SQLUSMALLINT info_type;
+        const char* name;
+    };
+    static const ConvertEntry convert_entries[] = {
+        {SQL_CONVERT_CHAR, "CHAR"},
+        {SQL_CONVERT_VARCHAR, "VARCHAR"},
+        {SQL_CONVERT_LONGVARCHAR, "LONGVARCHAR"},
+        {SQL_CONVERT_WCHAR, "WCHAR"},
+        {SQL_CONVERT_WVARCHAR, "WVARCHAR"},
+        {SQL_CONVERT_WLONGVARCHAR, "WLONGVARCHAR"},
+        {SQL_CONVERT_INTEGER, "INTEGER"},
+        {SQL_CONVERT_SMALLINT, "SMALLINT"},
+        {SQL_CONVERT_BIGINT, "BIGINT"},
+        {SQL_CONVERT_TINYINT, "TINYINT"},
+        {SQL_CONVERT_DECIMAL, "DECIMAL"},
+        {SQL_CONVERT_NUMERIC, "NUMERIC"},
+        {SQL_CONVERT_DOUBLE, "DOUBLE"},
+        {SQL_CONVERT_FLOAT, "FLOAT"},
+        {SQL_CONVERT_REAL, "REAL"},
+        {SQL_CONVERT_DATE, "DATE"},
+        {SQL_CONVERT_TIME, "TIME"},
+        {SQL_CONVERT_TIMESTAMP, "TIMESTAMP"},
+        {SQL_CONVERT_BIT, "BIT"},
+        {SQL_CONVERT_BINARY, "BINARY"},
+        {SQL_CONVERT_VARBINARY, "VARBINARY"},
+        {SQL_CONVERT_LONGVARBINARY, "LONGVARBINARY"},
+        {SQL_CONVERT_GUID, "GUID"},
+    };
+
+    for (const auto& entry : convert_entries) {
+        if (auto v = get_info_uint(entry.info_type)) {
+            scalar_functions_.convert_matrix[entry.name] = *v;
+        }
+    }
+
+    // Add summary to info_map for console display
+    info_map_["String Functions"] = std::to_string(scalar_functions_.string_functions.size()) + " supported";
+    info_map_["Numeric Functions"] = std::to_string(scalar_functions_.numeric_functions.size()) + " supported";
+    info_map_["Timedate Functions"] = std::to_string(scalar_functions_.timedate_functions.size()) + " supported";
+    info_map_["System Functions"] = std::to_string(scalar_functions_.system_functions.size()) + " supported";
 }
 } // namespace odbc_crusher::discovery

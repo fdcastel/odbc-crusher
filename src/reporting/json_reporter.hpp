@@ -27,6 +27,7 @@ public:
     void report_driver_info(const discovery::DriverInfo::Properties& props);
     void report_type_info(const std::vector<discovery::TypeInfo::DataType>& types);
     void report_function_info(const discovery::FunctionInfo::FunctionSupport& funcs);
+    void report_scalar_functions(const discovery::DriverInfo::ScalarFunctionSupport& sf);
     
 private:
     std::string output_file_;

@@ -4,6 +4,8 @@
 #include <sstream>
 #include <regex>
 #include <cmath>
+#include <ctime>
+#include <chrono>
 
 namespace mock_odbc {
 
@@ -465,11 +467,322 @@ std::vector<MockRow> generate_mock_data(const MockTable& table, int row_count) {
     return data;
 }
 
+namespace {
+
+// Find matching brace from position (after the opening brace)
+size_t find_close_brace(const std::string& sql, size_t pos) {
+    int depth = 1;
+    bool in_sq = false;
+    for (size_t i = pos + 1; i < sql.length(); ++i) {
+        if (sql[i] == '\'' && !in_sq) { in_sq = true; continue; }
+        if (sql[i] == '\'' && in_sq) {
+            if (i + 1 < sql.length() && sql[i + 1] == '\'') { ++i; continue; }
+            in_sq = false; continue;
+        }
+        if (in_sq) continue;
+        if (sql[i] == '{') ++depth;
+        else if (sql[i] == '}') { --depth; if (depth == 0) return i; }
+    }
+    return std::string::npos;
+}
+
+// Evaluate a scalar function expression and return the result
+CellValue evaluate_scalar_function(const std::string& func_name_upper, const std::string& args_str) {
+    if (func_name_upper == "UCASE" || func_name_upper == "UPPER") {
+        return to_upper(trim(args_str));
+    }
+    if (func_name_upper == "LCASE" || func_name_upper == "LOWER") {
+        std::string r = trim(args_str);
+        std::transform(r.begin(), r.end(), r.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return r;
+    }
+    if (func_name_upper == "LENGTH" || func_name_upper == "LEN") {
+        std::string v = trim(args_str);
+        return static_cast<long long>(v.length());
+    }
+    if (func_name_upper == "LTRIM") {
+        std::string v = trim(args_str);
+        auto pos = v.find_first_not_of(' ');
+        return pos == std::string::npos ? std::string("") : v.substr(pos);
+    }
+    if (func_name_upper == "RTRIM") {
+        std::string v = trim(args_str);
+        auto pos = v.find_last_not_of(' ');
+        return pos == std::string::npos ? std::string("") : v.substr(0, pos + 1);
+    }
+    if (func_name_upper == "CONCAT") {
+        auto parts = split_expressions(args_str);
+        std::string result;
+        for (const auto& p : parts) result += trim(p);
+        return result;
+    }
+    if (func_name_upper == "SUBSTRING" || func_name_upper == "SUBSTR") {
+        auto parts = split_expressions(args_str);
+        if (parts.size() >= 2) {
+            std::string str = trim(parts[0]);
+            int start = 0;
+            try { start = std::stoi(trim(parts[1])) - 1; } catch (...) {}
+            int len = static_cast<int>(str.length());
+            if (parts.size() >= 3) { try { len = std::stoi(trim(parts[2])); } catch (...) {} }
+            if (start < 0) start = 0;
+            if (start >= static_cast<int>(str.length())) return std::string("");
+            return str.substr(start, len);
+        }
+        return std::string("");
+    }
+    if (func_name_upper == "ABS") {
+        try {
+            std::string v = trim(args_str);
+            if (v.find('.') != std::string::npos) return std::abs(std::stod(v));
+            return static_cast<long long>(std::abs(std::stoll(v)));
+        } catch (...) { return static_cast<long long>(0); }
+    }
+    if (func_name_upper == "MOD") {
+        auto parts = split_expressions(args_str);
+        if (parts.size() >= 2) {
+            try {
+                long long a = std::stoll(trim(parts[0]));
+                long long b = std::stoll(trim(parts[1]));
+                return b != 0 ? a % b : static_cast<long long>(0);
+            } catch (...) {}
+        }
+        return static_cast<long long>(0);
+    }
+    if (func_name_upper == "FLOOR") {
+        try { return static_cast<double>(std::floor(std::stod(trim(args_str)))); } catch (...) { return 0.0; }
+    }
+    if (func_name_upper == "CEILING" || func_name_upper == "CEIL") {
+        try { return static_cast<double>(std::ceil(std::stod(trim(args_str)))); } catch (...) { return 0.0; }
+    }
+    if (func_name_upper == "SQRT") {
+        try { return std::sqrt(std::stod(trim(args_str))); } catch (...) { return 0.0; }
+    }
+    if (func_name_upper == "ROUND") {
+        auto parts = split_expressions(args_str);
+        if (parts.size() >= 1) {
+            try {
+                double val = std::stod(trim(parts[0]));
+                int digits = 0;
+                if (parts.size() >= 2) digits = std::stoi(trim(parts[1]));
+                double factor = std::pow(10.0, digits);
+                return std::round(val * factor) / factor;
+            } catch (...) {}
+        }
+        return 0.0;
+    }
+    if (func_name_upper == "CURDATE") {
+        auto now = std::chrono::system_clock::now();
+        auto t = std::chrono::system_clock::to_time_t(now);
+        struct tm tm_buf;
+#ifdef _WIN32
+        localtime_s(&tm_buf, &t);
+#else
+        localtime_r(&t, &tm_buf);
+#endif
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_buf);
+        return std::string(buf);
+    }
+    if (func_name_upper == "CURTIME") {
+        auto now = std::chrono::system_clock::now();
+        auto t = std::chrono::system_clock::to_time_t(now);
+        struct tm tm_buf;
+#ifdef _WIN32
+        localtime_s(&tm_buf, &t);
+#else
+        localtime_r(&t, &tm_buf);
+#endif
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm_buf);
+        return std::string(buf);
+    }
+    if (func_name_upper == "NOW") {
+        auto now = std::chrono::system_clock::now();
+        auto t = std::chrono::system_clock::to_time_t(now);
+        struct tm tm_buf;
+#ifdef _WIN32
+        localtime_s(&tm_buf, &t);
+#else
+        localtime_r(&t, &tm_buf);
+#endif
+        char buf[64];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+        return std::string(buf);
+    }
+    if (func_name_upper == "YEAR") {
+        // Extract year from a date string
+        std::string v = trim(args_str);
+        // Remove DATE prefix if present
+        std::string uv = to_upper(v);
+        if (uv.find("DATE ") == 0) v = trim(v.substr(5));
+        if (v.front() == '\'') v = v.substr(1, v.length() - 2);
+        try { return static_cast<long long>(std::stoi(v.substr(0, 4))); } catch (...) { return static_cast<long long>(0); }
+    }
+    if (func_name_upper == "MONTH") {
+        std::string v = trim(args_str);
+        std::string uv = to_upper(v);
+        if (uv.find("DATE ") == 0) v = trim(v.substr(5));
+        if (v.front() == '\'') v = v.substr(1, v.length() - 2);
+        auto dash = v.find('-');
+        if (dash != std::string::npos) {
+            auto dash2 = v.find('-', dash + 1);
+            if (dash2 != std::string::npos) {
+                try { return static_cast<long long>(std::stoi(v.substr(dash + 1, dash2 - dash - 1))); } catch (...) {}
+            }
+        }
+        return static_cast<long long>(0);
+    }
+    if (func_name_upper == "DAYOFWEEK") {
+        std::string v = trim(args_str);
+        std::string uv = to_upper(v);
+        if (uv.find("DATE ") == 0) v = trim(v.substr(5));
+        if (v.front() == '\'') v = v.substr(1, v.length() - 2);
+        try {
+            int y = std::stoi(v.substr(0, 4));
+            int m = std::stoi(v.substr(5, 2));
+            int d = std::stoi(v.substr(8, 2));
+            struct tm t = {};
+            t.tm_year = y - 1900;
+            t.tm_mon = m - 1;
+            t.tm_mday = d;
+            mktime(&t);
+            return static_cast<long long>(t.tm_wday + 1); // ODBC: 1=Sunday
+        } catch (...) {}
+        return static_cast<long long>(0);
+    }
+    if (func_name_upper == "DATABASE") {
+        return std::string("MockDatabase");
+    }
+    if (func_name_upper == "USER") {
+        return std::string("MockUser");
+    }
+    // Unknown function — return args as string
+    return args_str;
+}
+
+// Preprocess SQL to translate ODBC escape sequences into forms parseable by mock parser
+std::string preprocess_escape_sequences(const std::string& sql) {
+    std::string result;
+    result.reserve(sql.length());
+    
+    for (size_t i = 0; i < sql.length(); ++i) {
+        if (sql[i] == '{') {
+            size_t close = find_close_brace(sql, i);
+            if (close == std::string::npos) {
+                result += sql[i];
+                continue;
+            }
+            
+            std::string inner = trim(sql.substr(i + 1, close - i - 1));
+            std::string upper_inner = to_upper(inner);
+            
+            if (upper_inner.find("FN ") == 0) {
+                // {fn FUNC(args)} — evaluate the scalar function
+                std::string func_body = trim(inner.substr(3));
+                // Recursively preprocess nested escapes
+                func_body = preprocess_escape_sequences(func_body);
+                
+                // Parse function name and arguments
+                auto paren_pos = func_body.find('(');
+                if (paren_pos != std::string::npos) {
+                    std::string func_name = to_upper(trim(func_body.substr(0, paren_pos)));
+                    auto close_paren = func_body.rfind(')');
+                    std::string args;
+                    if (close_paren != std::string::npos && close_paren > paren_pos) {
+                        args = func_body.substr(paren_pos + 1, close_paren - paren_pos - 1);
+                    }
+                    
+                    // Strip quotes from string arguments for evaluation
+                    std::string clean_args = args;
+                    // For single-arg string functions, strip outer quotes
+                    std::string trimmed_args = trim(args);
+                    if (trimmed_args.length() >= 2 && trimmed_args.front() == '\'' && trimmed_args.back() == '\'') {
+                        clean_args = trimmed_args.substr(1, trimmed_args.length() - 2);
+                    }
+                    
+                    CellValue val = evaluate_scalar_function(func_name, clean_args);
+                    
+                    // Convert result to SQL literal
+                    if (std::holds_alternative<std::string>(val)) {
+                        result += "'" + std::get<std::string>(val) + "'";
+                    } else if (std::holds_alternative<long long>(val)) {
+                        result += std::to_string(std::get<long long>(val));
+                    } else if (std::holds_alternative<double>(val)) {
+                        std::ostringstream oss;
+                        oss << std::get<double>(val);
+                        result += oss.str();
+                    } else {
+                        result += "NULL";
+                    }
+                } else {
+                    // No-arg function like DATABASE() or USER()
+                    std::string func_name = to_upper(trim(func_body));
+                    // Remove trailing ()
+                    if (func_name.length() > 2 && func_name.substr(func_name.length() - 2) == "()") {
+                        func_name = func_name.substr(0, func_name.length() - 2);
+                    }
+                    CellValue val = evaluate_scalar_function(func_name, "");
+                    if (std::holds_alternative<std::string>(val)) {
+                        result += "'" + std::get<std::string>(val) + "'";
+                    } else if (std::holds_alternative<long long>(val)) {
+                        result += std::to_string(std::get<long long>(val));
+                    } else if (std::holds_alternative<double>(val)) {
+                        std::ostringstream oss;
+                        oss << std::get<double>(val);
+                        result += oss.str();
+                    } else {
+                        result += "NULL";
+                    }
+                }
+            } else if (upper_inner.find("D '") == 0) {
+                // {d 'yyyy-mm-dd'} -> 'yyyy-mm-dd'
+                std::string date_str = trim(inner.substr(2));
+                result += date_str;
+            } else if (upper_inner.find("T '") == 0) {
+                // {t 'hh:mm:ss'} -> 'hh:mm:ss'
+                std::string time_str = trim(inner.substr(2));
+                result += time_str;
+            } else if (upper_inner.find("TS '") == 0) {
+                // {ts 'yyyy-mm-dd hh:mm:ss'} -> 'yyyy-mm-dd hh:mm:ss'
+                std::string ts_str = trim(inner.substr(3));
+                result += ts_str;
+            } else if (upper_inner.find("OJ ") == 0) {
+                // {oj ...} -> ...
+                result += preprocess_escape_sequences(trim(inner.substr(3)));
+            } else if (upper_inner.find("ESCAPE ") == 0) {
+                // {escape '\'} -> ESCAPE '\'
+                result += inner;
+            } else if (upper_inner.find("CALL ") == 0) {
+                // {CALL proc(...)} -> CALL proc(...)
+                result += inner;
+            } else if (upper_inner.find("?=CALL ") == 0 || upper_inner.find("? = CALL ") == 0) {
+                result += inner;
+            } else if (upper_inner.find("INTERVAL ") == 0) {
+                result += trim(inner);
+            } else {
+                // Unknown escape — pass through
+                result += sql.substr(i, close - i + 1);
+            }
+            
+            i = close;
+        } else {
+            result += sql[i];
+        }
+    }
+    
+    return result;
+}
+
+} // anonymous namespace for escape sequence helpers
+
 ParsedQuery parse_sql(const std::string& sql) {
     ParsedQuery result;
     result.is_valid = false;
     
-    std::string trimmed = trim(sql);
+    // Preprocess ODBC escape sequences before parsing
+    std::string preprocessed = preprocess_escape_sequences(sql);
+    std::string trimmed = trim(preprocessed);
     if (trimmed.empty()) {
         result.error_message = "Empty SQL statement";
         return result;

@@ -1,6 +1,6 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.13  
+**Version**: 2.14  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
 **Last Updated**: February 15, 2026
 
@@ -27,7 +27,7 @@ odbc-crusher <connection_string> [--verbose] [-o console|json] [-f file.json]
 | **CLI entry point** | `src/main.cpp` | Argument parsing, orchestration |
 | **ODBC wrappers** | `src/core/` | RAII handles for HENV, HDBC, HSTMT; error translation |
 | **Discovery** | `src/discovery/` | `DriverInfo`, `TypeInfo`, `FunctionInfo` — driver capability probes |
-| **Test suites** | `src/tests/` | 9 test categories, each a `TestBase` subclass |
+| **Test suites** | `src/tests/` | 12 test categories, each a `TestBase` subclass |
 | **Reporting** | `src/reporting/` | `ConsoleReporter`, `JsonReporter` |
 | **Mock driver** | `mock-driver/` | Standalone ODBC DLL for CI/offline testing |
 | **Unit tests** | `tests/` | GTest suite for regression testing |
@@ -48,9 +48,9 @@ odbc-crusher <connection_string> [--verbose] [-o console|json] [-f file.json]
 - **Core ODBC lifecycle**: Environment → Connection → Statement RAII wrappers are solid.
 - **57 tests across 9 categories** run without crashing.
 - **Mock driver implements 60 ODBC functions** and supports configurable behavior via connection string.
-- **Console reporter** produces readable category-by-category output.
-- **JSON reporter** produces structured machine-readable output.
-- **31/31 GTest unit tests pass** (those that don't require external databases).
+- **Console reporter** produces readable category-by-category output with scalar function matrix.
+- **JSON reporter** produces structured machine-readable output with scalar function data.
+- **63/63 GTest unit tests pass** (those that don't require external databases).
 - **Build system** (CMake 3.20+, FetchContent for dependencies) works reliably.
 
 ### 3.2 Bugs
@@ -1107,7 +1107,7 @@ A comprehensive recommendations document was written to `tmp/DUCKDB_ODBC_RECOMME
 
 ---
 
-### Phase 26: ODBC Escape Sequences & Scalar Function Testing (Inspired by SQLComponents)
+### Phase 26: ODBC Escape Sequences & Scalar Function Testing (Inspired by SQLComponents) ✅ (Completed — February 15, 2026)
 
 **Goal**: Add comprehensive ODBC escape sequence testing — the most RDBMS-independent feature of ODBC — and expand driver capability probing based on insights from studying the SQLComponents library (`tmp/external/SQLComponents/`).
 
@@ -1221,21 +1221,21 @@ This information should appear in both console and JSON reporter output as a "Sc
 
 #### 26.6 Mock Driver: Escape Sequence Support
 
-- [ ] Implement `SQLNativeSql` to perform basic escape sequence → pass-through translation (strip `{fn ...}` wrapper, translate `{d '...'}` to `DATE '...'`, etc.)
-- [ ] Add scalar function recognition in the mock SQL parser: `{fn UCASE(x)}` → `UPPER(x)`, `{fn LCASE(x)}` → `LOWER(x)`, `{fn ABS(x)}` → `ABS(x)`, etc.
-- [ ] Add date/time literal escape handling: `{d '2026-01-15'}` → `DATE '2026-01-15'`, `{ts '...'}` → `TIMESTAMP '...'`
-- [ ] Report correct bitmasks via `SQLGetInfo` for `SQL_STRING_FUNCTIONS`, `SQL_NUMERIC_FUNCTIONS`, `SQL_TIMEDATE_FUNCTIONS`, `SQL_SYSTEM_FUNCTIONS`
-- [ ] Report correct `SQL_CONVERT_*` bitmasks
-- [ ] Support `{CALL proc(?)}` escape in `SQLNativeSql` and `SQLExecDirect`
-- [ ] Support `{escape '\'}` clause in LIKE predicates
-- [ ] Support `SQL_C_NUMERIC` / `SQL_NUMERIC_STRUCT` binding in `SQLBindParameter` and `SQLGetData`
+- [x] Implement `SQLNativeSql` to perform basic escape sequence → pass-through translation (strip `{fn ...}` wrapper, translate `{d '...'}` to `DATE '...'`, etc.)
+- [x] Add scalar function recognition in the mock SQL parser: `{fn UCASE(x)}` → `UPPER(x)`, `{fn LCASE(x)}` → `LOWER(x)`, `{fn ABS(x)}` → `ABS(x)`, etc.
+- [x] Add date/time literal escape handling: `{d '2026-01-15'}` → `DATE '2026-01-15'`, `{ts '...'}` → `TIMESTAMP '...'`
+- [x] Report correct bitmasks via `SQLGetInfo` for `SQL_STRING_FUNCTIONS`, `SQL_NUMERIC_FUNCTIONS`, `SQL_TIMEDATE_FUNCTIONS`, `SQL_SYSTEM_FUNCTIONS`
+- [x] Report correct `SQL_CONVERT_*` bitmasks
+- [x] Support `{CALL proc(?)}` escape in `SQLNativeSql` and `SQLExecDirect`
+- [x] Support `{escape '\'}`  clause in LIKE predicates
+- [x] Support `SQL_C_NUMERIC` / `SQL_NUMERIC_STRUCT` binding in `SQLBindParameter` and `SQLGetData`
 
 #### 26.7 Unit Tests
 
-- [ ] GTest suite `EscapeSequenceTestsTest` validating all 15 escape sequence tests against mock driver
-- [ ] GTest suite `NumericStructTestsTest` validating all 4 SQL_NUMERIC_STRUCT tests against mock driver
-- [ ] GTest suite `CursorStressTestsTest` validating both cursor stress tests against mock driver
-- [ ] Registration in `src/main.cpp` and `tests/CMakeLists.txt`
+- [x] GTest suite `EscapeSequenceTestsTest` validating all 15 escape sequence tests against mock driver
+- [x] GTest suite `NumericStructTestsTest` validating all 4 SQL_NUMERIC_STRUCT tests against mock driver
+- [x] GTest suite `CursorStressTestsTest` validating both cursor stress tests against mock driver
+- [x] Registration in `src/main.cpp` and `tests/CMakeLists.txt`
 
 #### 26.8 What We Deliberately Do NOT Adopt from SQLComponents
 
@@ -1252,13 +1252,13 @@ SQLComponents is an excellent ODBC abstraction library, but some of its patterns
 | **Connection string macro expansion (`$SCHEMA$` macros)** | Nice productivity feature, but odbc-crusher should pass SQL strings to the driver unmodified to test exactly what the driver receives. |
 
 **Deliverables**:
-- 15 new ODBC escape sequence tests covering all 6 escape categories
-- 4 new SQL_NUMERIC_STRUCT precision tests
-- 2 new cursor stress tests
-- Expanded scalar function discovery in `DriverInfo`
-- Scalar function support matrix in console and JSON reports
-- Mock driver escape sequence support
-- All tests RDBMS-independent — no native SQL, only ODBC escape syntax
+- [x] 15 new ODBC escape sequence tests covering all 6 escape categories
+- [x] 4 new SQL_NUMERIC_STRUCT precision tests
+- [x] 2 new cursor stress tests
+- [x] Expanded scalar function discovery in `DriverInfo`
+- [x] Scalar function support matrix in console and JSON reports
+- [x] Mock driver escape sequence support
+- [x] All tests RDBMS-independent — no native SQL, only ODBC escape syntax
 
 ---
 
@@ -1311,7 +1311,7 @@ All changes must maintain feature parity:
 
 ## 7. Test Category Reference
 
-### Current Categories (57 tests)
+### Current Categories (78 tests)
 
 | Category | Tests | ODBC Functions | Conformance |
 |----------|:-----:|----------------|-------------|
@@ -1324,6 +1324,9 @@ All changes must maintain feature parity:
 | Buffer Validation | 5 | `SQLGetInfo` (buffer edge cases) | Core |
 | Error Queue | 6 (3 stubs) | `SQLGetDiagRec` | Core |
 | State Machine | 6 (3 stubs) | `SQLAllocHandle`, `SQLGetConnectAttr` | Core |
+| Escape Sequences | 15 | `SQLNativeSql`, `SQLExecDirect`, `SQLGetData`, `SQLGetInfo` | Core + Level 1–2 |
+| Numeric Struct | 4 | `SQLGetData(SQL_C_NUMERIC)`, `SQLSetDescField` | Core |
+| Cursor Stress | 2 | `SQLExecDirect`, `SQLFetch`, `SQLCloseCursor`, `SQLAllocHandle` | Core |
 
 ### Quality Criteria for Tests
 
@@ -1398,6 +1401,8 @@ Every test must:
 29. **ODBC escape sequences are the ultimate RDBMS-independence test.** Studying the SQLComponents library (25+ years of production use across 7+ RDBMS engines) revealed that `{fn ...}`, `{d ...}`, `{ts ...}`, `{call ...}`, and `{oj ...}` escape sequences are the purest way to test ODBC drivers without writing RDBMS-specific code. The driver's job is to translate these escapes to native SQL — testing this translation validates the driver's core ODBC contract. `SQLNativeSql` can verify the translation without executing anything, and `SQLGetInfo` bitmasks (`SQL_STRING_FUNCTIONS`, `SQL_NUMERIC_FUNCTIONS`, etc.) reveal what the driver claims to support. Comparing claimed support with actual execution results catches "claims but doesn't implement" bugs.
 
 30. **Query `SQLGetInfo` capability bitmasks before testing scalar functions.** SQLComponents queries `SQL_STRING_FUNCTIONS`, `SQL_NUMERIC_FUNCTIONS`, `SQL_TIMEDATE_FUNCTIONS`, and `SQL_SYSTEM_FUNCTIONS` to discover which `{fn ...}` functions a driver supports. Tests should only exercise functions the driver claims (via the bitmask) and report "not claimed" for unsupported ones rather than failing. This follows the ODBC pattern: discover first, then test. The `SQL_CONVERT_*` family of 20+ info types provides a complete type conversion matrix that no current odbc-crusher test examines.
+
+31. **The Windows DM intercepts `SQLGetData(SQL_C_NUMERIC)` and converts via `SQL_C_CHAR`.** On Windows, the Driver Manager fetches the data as `SQL_C_CHAR` from the driver, then converts the string result to `SQL_NUMERIC_STRUCT` using the ARD descriptor's precision and scale. Applications MUST call `SQLSetDescField` on the ARD to set `SQL_DESC_TYPE`, `SQL_DESC_PRECISION`, and `SQL_DESC_SCALE` before calling `SQLGetData` with `SQL_C_NUMERIC`. Without this, the DM writes raw string bytes directly into the `SQL_NUMERIC_STRUCT` buffer, producing garbage values (e.g., precision=49/'1', scale=50/'2'). The ODBC driver Registration pointing to the wrong build configuration (Release vs Debug DLL) can also cause stale driver code to be loaded.
 
 ---
 

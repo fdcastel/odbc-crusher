@@ -28,6 +28,9 @@ add_executable(odbc_crusher_tests
     test_cursor_behavior_tests.cpp
     test_param_binding_tests.cpp
     test_array_param_tests.cpp
+    test_escape_sequence_tests.cpp
+    test_numeric_struct_tests.cpp
+    test_cursor_stress_tests.cpp
     test_crash_guard.cpp
 )
 

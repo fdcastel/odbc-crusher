@@ -255,4 +255,43 @@ void ConsoleReporter::report_function_info(const discovery::FunctionInfo::Functi
     }
 }
 
+void ConsoleReporter::report_scalar_functions(const discovery::DriverInfo::ScalarFunctionSupport& sf) {
+    out_ << "SCALAR FUNCTIONS:\n";
+    
+    auto print_list = [&](const char* label, const std::vector<std::string>& funcs) {
+        if (funcs.empty()) return;
+        out_ << "  " << label << " (" << funcs.size() << "): ";
+        for (size_t i = 0; i < funcs.size(); ++i) {
+            if (i > 0) out_ << ", ";
+            out_ << funcs[i];
+        }
+        out_ << "\n";
+    };
+    
+    print_list("String", sf.string_functions);
+    print_list("Numeric", sf.numeric_functions);
+    print_list("Date/Time", sf.timedate_functions);
+    print_list("System", sf.system_functions);
+    
+    // OJ capabilities
+    if (sf.oj_capabilities) {
+        out_ << "  Outer Join: ";
+        if (sf.oj_capabilities & SQL_OJ_LEFT) out_ << "LEFT ";
+        if (sf.oj_capabilities & SQL_OJ_RIGHT) out_ << "RIGHT ";
+        if (sf.oj_capabilities & SQL_OJ_FULL) out_ << "FULL ";
+        out_ << "\n";
+    }
+    
+    // Convert matrix summary
+    if (!sf.convert_matrix.empty()) {
+        int supported = 0;
+        for (const auto& [name, mask] : sf.convert_matrix) {
+            if (mask != 0) ++supported;
+        }
+        out_ << "  Type Conversions: " << supported << "/" << sf.convert_matrix.size() << " types have conversion support\n";
+    }
+    
+    out_ << "\n";
+}
+
 } // namespace odbc_crusher::reporting

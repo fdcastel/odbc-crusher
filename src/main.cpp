@@ -26,6 +26,9 @@
 #include "tests/cursor_behavior_tests.hpp"
 #include "tests/param_binding_tests.hpp"
 #include "tests/array_param_tests.hpp"
+#include "tests/escape_sequence_tests.hpp"
+#include "tests/numeric_struct_tests.hpp"
+#include "tests/cursor_stress_tests.hpp"
 #include "discovery/driver_info.hpp"
 #include "discovery/type_info.hpp"
 #include "discovery/function_info.hpp"
@@ -174,6 +177,7 @@ int main(int argc, char** argv) {
                     console_rep->report_driver_info(driver_info.get_properties());
                     console_rep->report_type_info(type_info.get_types());
                     console_rep->report_function_info(func_info.get_support());
+                    console_rep->report_scalar_functions(driver_info.get_scalar_functions());
                     std::cout << std::flush;
                 }
             } else if (output_format == "json") {
@@ -182,6 +186,7 @@ int main(int argc, char** argv) {
                     json_rep->report_driver_info(driver_info.get_properties());
                     json_rep->report_type_info(type_info.get_types());
                     json_rep->report_function_info(func_info.get_support());
+                    json_rep->report_scalar_functions(driver_info.get_scalar_functions());
                 }
             }
         }
@@ -256,6 +261,15 @@ int main(int argc, char** argv) {
         
         tests::ArrayParamTests array_param_tests(conn);
         run_test_category(array_param_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::EscapeSequenceTests escape_tests(conn);
+        run_test_category(escape_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::NumericStructTests numeric_tests(conn);
+        run_test_category(numeric_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        
+        tests::CursorStressTests cursor_stress_tests(conn);
+        run_test_category(cursor_stress_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
         
         auto overall_end = std::chrono::high_resolution_clock::now();
         auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(
