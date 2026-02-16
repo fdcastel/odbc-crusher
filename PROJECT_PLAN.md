@@ -1,8 +1,8 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 2.12  
+**Version**: 2.13  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
-**Last Updated**: February 8, 2026
+**Last Updated**: February 15, 2026
 
 ---
 
@@ -1107,6 +1107,161 @@ A comprehensive recommendations document was written to `tmp/DUCKDB_ODBC_RECOMME
 
 ---
 
+### Phase 26: ODBC Escape Sequences & Scalar Function Testing (Inspired by SQLComponents)
+
+**Goal**: Add comprehensive ODBC escape sequence testing — the most RDBMS-independent feature of ODBC — and expand driver capability probing based on insights from studying the SQLComponents library (`tmp/external/SQLComponents/`).
+
+**Discovery Date**: February 15, 2026  
+**Analysis Method**: Studied the SQLComponents library by ir. W.E. Huisman (MIT License, 1998–2025). It is a mature (25+ year) C++ ODBC abstraction layer supporting Oracle, SQL Server, PostgreSQL, MySQL, Firebird, Informix, and MS Access. Its test suite (`TestSQL/`, `UnitTest/`) and internal APIs (`SQLInfo`, `SQLFilter`, `SQLQuery`, `SQLFunction.h`) reveal deep ODBC escape sequence knowledge and test patterns that odbc-crusher currently does not exercise at all.
+
+**Why this matters for odbc-crusher**: ODBC escape sequences (`{fn ...}`, `{d ...}`, `{t ...}`, `{ts ...}`, `{oj ...}`, `{call ...}`) are the **most RDBMS-independent feature of ODBC** — they are the whole point of the ODBC abstraction layer. The driver is responsible for translating escape sequences into native SQL. Testing these sequences is pure ODBC spec validation — no RDBMS-specific code is needed in odbc-crusher. SQLComponents' `FilterTest.cpp` demonstrates exhaustive testing of all ODBC scalar functions via escape syntax, and its `SQLInfo.cpp` shows how to discover which functions a driver claims to support via `SQLGetInfo`. odbc-crusher currently tests none of this.
+
+**RDBMS Independence Principle**: All tests in this phase use ODBC escape sequence syntax exclusively. The driver is responsible for converting `{fn UCASE('hello')}` into `UPPER('hello')` (PostgreSQL), `UCASE('hello')` (MySQL), etc. We test the ODBC contract, never the native SQL.
+
+**ODBC Spec References**:
+- [Escape Sequences in ODBC](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/escape-sequences-in-odbc)
+- [Scalar Function Escape Sequence](https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/scalar-function-escape-sequence)
+- [Date, Time, and Timestamp Escape Sequences](https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/date-time-and-timestamp-escape-sequences)
+- [Outer Join Escape Sequence](https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/outer-join-escape-sequence)
+- [Procedure Call Escape Sequence](https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/procedure-call-escape-sequence)
+- [LIKE Escape Sequence](https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/like-escape-sequence)
+- [Interval Escape Sequence](https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/interval-escape-sequence)
+- [SQLGetInfo — String Functions](https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlgetinfo-function)
+- [SQLNativeSql Function](https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlnativesql-function)
+- [Appendix E: Scalar Functions](https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/appendix-e-scalar-functions)
+
+#### 26.1 Key Insights from SQLComponents
+
+| SQLComponents Feature | What it does | What odbc-crusher can learn |
+|----------------------|--------------|----------------------------|
+| **`SQLInfo::GetInfo()`** queries `SQL_NUMERIC_FUNCTIONS`, `SQL_STRING_FUNCTIONS`, `SQL_TIMEDATE_FUNCTIONS`, `SQL_SYSTEM_FUNCTIONS`, `SQL_CONVERT_FUNCTIONS` | Discovers which scalar functions the driver claims via bitmask flags | odbc-crusher should query these and cross-reference with actual execution results |
+| **`SQLInfo::NativeSQL()`** calls `SQLNativeSql()` | Translates ODBC escape sequences to native SQL without executing | odbc-crusher should test `SQLNativeSql` to verify escape translation works (currently untested despite mock driver support) |
+| **`SQLFunction.h`** enumerates 90+ ODBC scalar functions | Comprehensive catalog: 25 string, 20 numeric, 21 date/time, 3 system functions | odbc-crusher should test each category of scalar functions via `{fn ...}` escapes |
+| **`FilterTest.cpp`** tests ODBC function escapes in WHERE clauses | Validates `{fn ASCII(x)}`, `{fn UCASE(x)}`, `{fn SUBSTRING(x,?,?)}`, `{fn TIMESTAMPADD(...)}`, `{fn EXTRACT(YEAR FROM x)}`, etc. | odbc-crusher should execute these via `SQLExecDirect` and verify the driver processes them |
+| **`SQLQuery::ConstructSQLForCall()`** builds `{CALL proc(?,...)}` and `{?=CALL func(?,...)}` | Tests ODBC procedure/function call escape sequences | odbc-crusher should test `{CALL}` escape processing via `SQLNativeSql` |
+| **`SQLQuery::DoSQLCallODBCEscape()`** handles `SQLMoreResults` after `{CALL}` | Properly drains result sets from procedure calls | odbc-crusher should test `SQLMoreResults` after escape-based calls |
+| **`SQLInfo::GetConvert*()` queries 20+ `SQL_CONVERT_*` info types** | Discovers data type conversion capabilities | odbc-crusher should report the full conversion matrix |
+| **`SQLInfo::ReadingDataTypes()` calls `SQLGetTypeInfo(SQL_ALL_TYPES)`** | Enumerates all supported data types with literal prefixes/suffixes | The literal prefix/suffix (`{ts'`...`'}`) is the key to ODBC escape sequence literal support |
+| **`TestClosingCursor.cpp`** runs 1500 SELECT+close cycles | Stress test for cursor/statement handle leak detection | odbc-crusher should have a rapid cursor lifecycle test |
+| **`TestNumeric.cpp`** tests `SQL_NUMERIC_STRUCT` ↔ BCD conversions | Round-trip precision testing for `SQL_NUMERIC_STRUCT` | odbc-crusher should test `SQL_C_NUMERIC` binding with precision/scale validation |
+| **`TransactionTest.cpp`** tests commit, rollback, RAII scope rollback | Transaction isolation with verification reads | odbc-crusher already tests transactions but could add RAII-scope rollback testing |
+
+#### 26.2 New Test Category: Escape Sequence Tests (15 tests)
+
+All tests are RDBMS-independent. They send ODBC escape syntax and verify the driver processes it. The driver does the native SQL translation.
+
+**Discovery Phase** (2 tests):
+| Test | Description | ODBC Functions | Conformance |
+|------|-------------|----------------|-------------|
+| `test_scalar_function_capabilities` | Query `SQL_STRING_FUNCTIONS`, `SQL_NUMERIC_FUNCTIONS`, `SQL_TIMEDATE_FUNCTIONS`, `SQL_SYSTEM_FUNCTIONS` via `SQLGetInfo` and report the full bitmask of claimed scalar functions | `SQLGetInfo` | Core |
+| `test_convert_function_capabilities` | Query all 20+ `SQL_CONVERT_*` info types and `SQL_CONVERT_FUNCTIONS` to build a type conversion matrix | `SQLGetInfo` | Core |
+
+**SQLNativeSql Translation Tests** (3 tests):
+| Test | Description | ODBC Functions | Conformance |
+|------|-------------|----------------|-------------|
+| `test_native_sql_scalar_functions` | Pass `SELECT {fn UCASE('hello')}` to `SQLNativeSql` and verify it returns a non-empty native translation (or the same string if driver does pass-through) | `SQLNativeSql` | Core |
+| `test_native_sql_datetime_literals` | Pass `SELECT {d '2026-01-15'}`, `{t '14:30:00'}`, `{ts '2026-01-15 14:30:00'}` to `SQLNativeSql` and verify valid translations | `SQLNativeSql` | Core |
+| `test_native_sql_call_escape` | Pass `{CALL proc(?)}` and `{?=CALL func(?)}` to `SQLNativeSql` and verify translation (e.g., to `EXEC proc ?` on SQL Server, `SELECT proc(?)` on PostgreSQL) | `SQLNativeSql` | Core |
+
+**Scalar Function Execution Tests** (6 tests):
+| Test | Description | ODBC Functions | Conformance |
+|------|-------------|----------------|-------------|
+| `test_string_scalar_functions` | Execute `SELECT {fn UCASE('hello')}`, `{fn LCASE('HELLO')}`, `{fn LENGTH('test')}`, `{fn LTRIM(' hi')}`, `{fn RTRIM('hi ')}`, `{fn CONCAT('a','b')}` and verify results. Only test functions the driver claims via `SQL_STRING_FUNCTIONS` | `SQLExecDirect`, `SQLGetData`, `SQLGetInfo` | Core |
+| `test_numeric_scalar_functions` | Execute `SELECT {fn ABS(-5)}`, `{fn MOD(10,3)}`, `{fn FLOOR(3.7)}`, `{fn CEILING(3.2)}`, `{fn SQRT(9)}`, `{fn ROUND(3.14159,2)}` and verify results. Only test functions the driver claims via `SQL_NUMERIC_FUNCTIONS` | `SQLExecDirect`, `SQLGetData`, `SQLGetInfo` | Core |
+| `test_datetime_scalar_functions` | Execute `SELECT {fn CURDATE()}`, `{fn CURTIME()}`, `{fn NOW()}`, `{fn DAYOFWEEK({d '2026-01-15'})}`, `{fn MONTH({d '2026-06-15'})}`, `{fn YEAR({d '2026-01-15'})}` and verify results. Only test functions the driver claims via `SQL_TIMEDATE_FUNCTIONS` | `SQLExecDirect`, `SQLGetData`, `SQLGetInfo` | Core |
+| `test_system_scalar_functions` | Execute `SELECT {fn DATABASE()}`, `SELECT {fn USER()}` and verify non-empty results. Only test functions the driver claims via `SQL_SYSTEM_FUNCTIONS` | `SQLExecDirect`, `SQLGetData`, `SQLGetInfo` | Core |
+| `test_datetime_literal_escapes` | Execute `SELECT {d '2026-01-15'}`, `SELECT {t '14:30:00'}`, `SELECT {ts '2026-01-15 14:30:00'}` as date/time/timestamp literals and verify the driver returns the correct temporal values | `SQLExecDirect`, `SQLGetData` | Core |
+| `test_like_escape_sequence` | Execute `SELECT 1 WHERE 'abc%def' LIKE 'abc\%def' {escape '\'}` and verify the LIKE escape clause works. Also check `SQLGetInfo(SQL_LIKE_ESCAPE_CLAUSE)` | `SQLExecDirect`, `SQLGetData`, `SQLGetInfo` | Level 1 |
+
+**Outer Join & Interval Tests** (2 tests):
+| Test | Description | ODBC Functions | Conformance |
+|------|-------------|----------------|-------------|
+| `test_outer_join_escape` | Check `SQLGetInfo(SQL_OJ_CAPABILITIES)` for outer join support flags, then if a writable table exists, test `SELECT * FROM {oj T1 LEFT OUTER JOIN T2 ON T1.id = T2.id}` escape syntax | `SQLGetInfo`, `SQLExecDirect` | Level 1 |
+| `test_interval_literal_escape` | Execute `SELECT {INTERVAL '5' DAY}` or `SELECT {INTERVAL '2-3' YEAR TO MONTH}` and verify the driver handles interval escape sequences. Check `SQLGetInfo(SQL_DATETIME_LITERALS)` first | `SQLGetInfo`, `SQLExecDirect` | Level 2 |
+
+**Procedure Call Escape Tests** (2 tests):
+| Test | Description | ODBC Functions | Conformance |
+|------|-------------|----------------|-------------|
+| `test_call_escape_translation` | Verify `SQLNativeSql` correctly translates `{CALL proc(?,?)}` and `{?=CALL func(?)}` escape syntax. No actual procedure execution needed — tests the driver's escape parser | `SQLNativeSql` | Core |
+| `test_call_escape_format_variants` | Test all 5 CALL escape format variants from ODBC spec: `{CALL proc}`, `{CALL proc()}`, `{CALL proc(?,?)}`, `{?=CALL func(?,?)}`, `{?=CALL func}` via `SQLNativeSql` | `SQLNativeSql` | Core |
+
+#### 26.3 New Test Category: SQL_NUMERIC_STRUCT Tests (4 tests)
+
+Inspired by SQLComponents' `TestNumeric.cpp` and `TestBcd.cpp`, which demonstrate that `SQL_NUMERIC_STRUCT` handling is one of the most error-prone areas in ODBC drivers.
+
+| Test | Description | ODBC Functions | Conformance |
+|------|-------------|----------------|-------------|
+| `test_numeric_struct_binding` | Bind a parameter as `SQL_C_NUMERIC` with explicit precision/scale, execute an INSERT or SELECT-literal, and retrieve the result. Verify precision, scale, sign, and val[] bytes round-trip correctly | `SQLBindParameter`, `SQLSetDescField`, `SQLExecute`, `SQLGetData` | Core |
+| `test_numeric_struct_precision_scale` | Bind `SQL_NUMERIC_STRUCT` with precision=6, scale=4, value=10.001 (val={0xAA, 0x86, 0x01}), execute, retrieve, and verify the struct fields match | `SQLBindParameter`, `SQLSetDescField`, `SQLGetData` | Core |
+| `test_numeric_positive_negative` | Test both positive (sign=1) and negative (sign=0) numeric values round-trip correctly | `SQLBindParameter`, `SQLGetData` | Core |
+| `test_numeric_zero_and_extremes` | Test zero, maximum precision numeric, and minimum scale values | `SQLBindParameter`, `SQLGetData` | Core |
+
+#### 26.4 New Test Category: Cursor Stress Tests (2 tests)
+
+Inspired by SQLComponents' `TestClosingCursor.cpp` which runs 1500 sequential SELECT+close cycles.
+
+| Test | Description | ODBC Functions | Conformance |
+|------|-------------|----------------|-------------|
+| `test_rapid_cursor_lifecycle` | Execute SELECT → Fetch → Close cycle N times (configurable, default 100) to detect handle leaks, cursor exhaustion, or performance degradation. Report timing per iteration | `SQLExecDirect`, `SQLFetch`, `SQLCloseCursor` | Core |
+| `test_concurrent_statements` | Allocate multiple statement handles on the same connection, execute independent queries on each, fetch results interleaved. Check `SQLGetInfo(SQL_MAX_CONCURRENT_ACTIVITIES)` first | `SQLAllocHandle`, `SQLExecDirect`, `SQLFetch`, `SQLGetInfo` | Core |
+
+#### 26.5 Expanded Discovery: Scalar Function Matrix
+
+Extend `DriverInfo` to collect and report:
+- `SQL_STRING_FUNCTIONS` bitmask → enumerate which of the 25 ODBC string functions the driver claims
+- `SQL_NUMERIC_FUNCTIONS` bitmask → enumerate which of the 20 ODBC numeric functions the driver claims  
+- `SQL_TIMEDATE_FUNCTIONS` bitmask → enumerate which of the 21 ODBC date/time functions the driver claims
+- `SQL_SYSTEM_FUNCTIONS` bitmask → enumerate which of the 3 ODBC system functions the driver claims
+- `SQL_TIMEDATE_ADD_INTERVALS` and `SQL_TIMEDATE_DIFF_INTERVALS` bitmasks
+- All 20+ `SQL_CONVERT_*` info types → build a "from type → to type" conversion support matrix
+- `SQL_OJ_CAPABILITIES` bitmask → outer join support
+- `SQL_DATETIME_LITERALS` bitmask → supported literal types
+
+This information should appear in both console and JSON reporter output as a "Scalar Function Support" section.
+
+#### 26.6 Mock Driver: Escape Sequence Support
+
+- [ ] Implement `SQLNativeSql` to perform basic escape sequence → pass-through translation (strip `{fn ...}` wrapper, translate `{d '...'}` to `DATE '...'`, etc.)
+- [ ] Add scalar function recognition in the mock SQL parser: `{fn UCASE(x)}` → `UPPER(x)`, `{fn LCASE(x)}` → `LOWER(x)`, `{fn ABS(x)}` → `ABS(x)`, etc.
+- [ ] Add date/time literal escape handling: `{d '2026-01-15'}` → `DATE '2026-01-15'`, `{ts '...'}` → `TIMESTAMP '...'`
+- [ ] Report correct bitmasks via `SQLGetInfo` for `SQL_STRING_FUNCTIONS`, `SQL_NUMERIC_FUNCTIONS`, `SQL_TIMEDATE_FUNCTIONS`, `SQL_SYSTEM_FUNCTIONS`
+- [ ] Report correct `SQL_CONVERT_*` bitmasks
+- [ ] Support `{CALL proc(?)}` escape in `SQLNativeSql` and `SQLExecDirect`
+- [ ] Support `{escape '\'}` clause in LIKE predicates
+- [ ] Support `SQL_C_NUMERIC` / `SQL_NUMERIC_STRUCT` binding in `SQLBindParameter` and `SQLGetData`
+
+#### 26.7 Unit Tests
+
+- [ ] GTest suite `EscapeSequenceTestsTest` validating all 15 escape sequence tests against mock driver
+- [ ] GTest suite `NumericStructTestsTest` validating all 4 SQL_NUMERIC_STRUCT tests against mock driver
+- [ ] GTest suite `CursorStressTestsTest` validating both cursor stress tests against mock driver
+- [ ] Registration in `src/main.cpp` and `tests/CMakeLists.txt`
+
+#### 26.8 What We Deliberately Do NOT Adopt from SQLComponents
+
+SQLComponents is an excellent ODBC abstraction library, but some of its patterns are outside odbc-crusher's scope or violate our RDBMS-independence principle:
+
+| SQLComponents Feature | Why we skip it |
+|----------------------|----------------|
+| **Per-RDBMS `SQLInfoDB` subclasses** (`SQLInfoOracle`, `SQLInfoFirebird`, `SQLInfoMySQL`, etc.) | odbc-crusher is RDBMS-independent by design. We test the ODBC contract, not native SQL dialects. The driver does the translation — that's the whole point of escape sequences. |
+| **Custom `bcd`/`icd` (Binary/Integer Coded Decimal)** | We use standard `SQL_NUMERIC_STRUCT` directly. No need for a custom decimal library when we're testing driver conformance, not implementing an application. |
+| **`SQLVariant` / `SQLVariantOperator`** | Interesting abstraction (variant type with cross-type operators), but odbc-crusher tests need to be explicit about data types to validate driver behavior. Wrapping everything in a variant would hide the very behavior we're testing. |
+| **`SQLDataSet` / `SQLFilter`** | High-level query builder abstractions. odbc-crusher works at the raw ODBC API level by design. |
+| **`SQLTransaction` RAII wrapper** | Nice pattern, but odbc-crusher's transaction tests need to test `SQLEndTran` behavior directly, including failure paths. A RAII wrapper would prevent testing rollback-on-failure scenarios. |
+| **Date/time formatting (`SQLDate`, `SQLTime`, `SQLTimestamp` classes)** | We test ODBC's `DATE_STRUCT`, `TIME_STRUCT`, `TIMESTAMP_STRUCT` directly. Custom temporal classes add abstraction that hides driver behavior. |
+| **Connection string macro expansion (`$SCHEMA$` macros)** | Nice productivity feature, but odbc-crusher should pass SQL strings to the driver unmodified to test exactly what the driver receives. |
+
+**Deliverables**:
+- 15 new ODBC escape sequence tests covering all 6 escape categories
+- 4 new SQL_NUMERIC_STRUCT precision tests
+- 2 new cursor stress tests
+- Expanded scalar function discovery in `DriverInfo`
+- Scalar function support matrix in console and JSON reports
+- Mock driver escape sequence support
+- All tests RDBMS-independent — no native SQL, only ODBC escape syntax
+
+---
+
 ## 5. Technical Stack
 | Language | C++17 | Direct ODBC API access, `std::optional`, `std::string_view` |
 | Build | CMake 3.20+ | Industry standard, CTest integration |
@@ -1232,6 +1387,18 @@ Every test must:
 
 24. **Sentinel values / buffer overwrite tests may detect DM behavior, not driver behavior.** On Windows and Linux, the Driver Manager intercepts ANSI calls, converts to Wide, calls the driver, then converts back. This conversion process may modify buffer bytes beyond the null terminator. A sentinel-values test that fills unused buffer bytes with a marker and checks for preservation may detect DM-caused overwrites, not driver bugs. To isolate driver behavior, call W-functions directly or accept DM-caused modifications as informational.
 
+25. **Row-wise array binding must be probed before execution.** Some drivers (DuckDB) accept `SQL_ATTR_PARAM_BIND_TYPE` via `SQLSetStmtAttr` and even store the value correctly in the APD, but never use it for pointer arithmetic. The only safe way to detect this is a trial execution with integer-only parameters at `PARAMSET_SIZE=2` — verifying the second row's data matches expectations before attempting string parameters that would cause memory corruption.
+
+26. **Windows `/GS` stack cookie failures are uncatchable.** When a buggy driver corrupts the stack (e.g., reading past buffer bounds during row-wise binding), MSVC's `/GS` security mitigation calls `__fastfail()` which raises `STATUS_STACK_BUFFER_OVERRUN` (`0xC0000409`). This exception bypasses all user-mode exception handling — SEH `__try/__except`, VEH (`AddVectoredExceptionHandler`), `SetUnhandledExceptionFilter`, and C++ `catch(...)` all fail to catch it. The only defense is to avoid triggering the corruption in the first place.
+
+27. **`SQLSetStmtAttr` default cases that return SQL_SUCCESS are dangerous.** DuckDB's `SQLSetStmtAttr` returns `SQL_SUCCESS_WITH_INFO` (with `01S02`) for ALL unrecognized attributes. This means odbc-crusher cannot distinguish "attribute accepted and implemented" from "attribute silently ignored." Read-back verification via `SQLGetStmtAttr` is insufficient because DuckDB may store the value without implementing the behavior. The ODBC spec requires `SQL_ERROR` with `HY092` for unrecognized attributes.
+
+28. **Prefer `CAST(? AS type)` over bare `?` in parameter queries.** Some drivers (DuckDB) cannot infer parameter types from bare `SELECT ?` and may crash on subsequent `SQLDescribeParam` calls. `SELECT CAST(? AS INTEGER)` is more portable and gives the driver explicit type information.
+
+29. **ODBC escape sequences are the ultimate RDBMS-independence test.** Studying the SQLComponents library (25+ years of production use across 7+ RDBMS engines) revealed that `{fn ...}`, `{d ...}`, `{ts ...}`, `{call ...}`, and `{oj ...}` escape sequences are the purest way to test ODBC drivers without writing RDBMS-specific code. The driver's job is to translate these escapes to native SQL — testing this translation validates the driver's core ODBC contract. `SQLNativeSql` can verify the translation without executing anything, and `SQLGetInfo` bitmasks (`SQL_STRING_FUNCTIONS`, `SQL_NUMERIC_FUNCTIONS`, etc.) reveal what the driver claims to support. Comparing claimed support with actual execution results catches "claims but doesn't implement" bugs.
+
+30. **Query `SQLGetInfo` capability bitmasks before testing scalar functions.** SQLComponents queries `SQL_STRING_FUNCTIONS`, `SQL_NUMERIC_FUNCTIONS`, `SQL_TIMEDATE_FUNCTIONS`, and `SQL_SYSTEM_FUNCTIONS` to discover which `{fn ...}` functions a driver supports. Tests should only exercise functions the driver claims (via the bitmask) and report "not claimed" for unsupported ones rather than failing. This follows the ODBC pattern: discover first, then test. The `SQL_CONVERT_*` family of 20+ info types provides a complete type conversion matrix that no current odbc-crusher test examines.
+
 ---
 
 ## 9. ODBC Specification References
@@ -1244,6 +1411,13 @@ Every test must:
 | SQLSTATE Reference | https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/appendix-a-odbc-error-codes |
 | Function Transition Tables | https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/appendix-b-odbc-state-transition-tables |
 | Data Type Identifiers | https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/appendix-d-data-types |
+| Scalar Functions (Appendix E) | https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/appendix-e-scalar-functions |
+| Escape Sequences in ODBC | https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/escape-sequences-in-odbc |
+| SQLNativeSql Function | https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlnativesql-function |
+| Date/Time/Timestamp Escapes | https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/date-time-and-timestamp-escape-sequences |
+| Outer Join Escape Sequence | https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/outer-join-escape-sequence |
+| LIKE Escape Sequence | https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/like-escape-sequence |
+| Procedure Call Escape Sequence | https://learn.microsoft.com/en-us/sql/odbc/reference/appendixes/procedure-call-escape-sequence |
 | unixODBC | http://www.unixodbc.org/ |
 
 ---
