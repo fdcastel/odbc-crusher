@@ -11,7 +11,7 @@ This document contains critical instructions for maintaining consistency and qua
 
 **RULE #0**: Always ensure the work is complete and verified for all platforms.
 
-Whenever you’re asked to do something, follow this process after completing the task:
+Whenever you’re asked to change something in the code, follow this process after completing the task:
 - Build the project and run all tests.
   - If anything fails, fix the issues and repeat until all tests pass.
 - Once all tests are green:
@@ -20,6 +20,7 @@ Whenever you’re asked to do something, follow this process after completing th
   - Monitor the workflow run using the `gh` command.
     - Avoid `gh` commands that require interactive input; provide all required information via CLI flags.
   - If the workflow fails, fix the issue and repeat this step until the workflow completes successfully.
+- This rule MUST be ignored when the task is limited to reviewing and updating the project plan only (i.e., no modifications to any compilable code—documentation changes only).
 
 
 ## 📋 MANDATORY: Update PROJECT_PLAN.md
