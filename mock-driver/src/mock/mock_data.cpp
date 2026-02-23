@@ -486,41 +486,60 @@ size_t find_close_brace(const std::string& sql, size_t pos) {
     return std::string::npos;
 }
 
+// Strip surrounding single-quotes from a SQL string literal, e.g. 'hello' -> hello
+std::string unquote_sql_string(const std::string& s) {
+    std::string t = trim(s);
+    if (t.length() >= 2 && t.front() == '\'' && t.back() == '\'') {
+        std::string inner = t.substr(1, t.length() - 2);
+        // Unescape doubled single quotes: '' -> '
+        std::string result;
+        for (size_t i = 0; i < inner.length(); ++i) {
+            if (inner[i] == '\'' && i + 1 < inner.length() && inner[i + 1] == '\'') {
+                result += '\''; ++i;
+            } else {
+                result += inner[i];
+            }
+        }
+        return result;
+    }
+    return t;
+}
+
 // Evaluate a scalar function expression and return the result
 CellValue evaluate_scalar_function(const std::string& func_name_upper, const std::string& args_str) {
     if (func_name_upper == "UCASE" || func_name_upper == "UPPER") {
-        return to_upper(trim(args_str));
+        return to_upper(unquote_sql_string(args_str));
     }
     if (func_name_upper == "LCASE" || func_name_upper == "LOWER") {
-        std::string r = trim(args_str);
+        std::string r = unquote_sql_string(args_str);
         std::transform(r.begin(), r.end(), r.begin(),
                        [](unsigned char c) { return std::tolower(c); });
         return r;
     }
-    if (func_name_upper == "LENGTH" || func_name_upper == "LEN") {
-        std::string v = trim(args_str);
+    if (func_name_upper == "LENGTH" || func_name_upper == "LEN" || func_name_upper == "CHAR_LENGTH") {
+        std::string v = unquote_sql_string(args_str);
         return static_cast<long long>(v.length());
     }
     if (func_name_upper == "LTRIM") {
-        std::string v = trim(args_str);
+        std::string v = unquote_sql_string(args_str);
         auto pos = v.find_first_not_of(' ');
         return pos == std::string::npos ? std::string("") : v.substr(pos);
     }
     if (func_name_upper == "RTRIM") {
-        std::string v = trim(args_str);
+        std::string v = unquote_sql_string(args_str);
         auto pos = v.find_last_not_of(' ');
         return pos == std::string::npos ? std::string("") : v.substr(0, pos + 1);
     }
     if (func_name_upper == "CONCAT") {
         auto parts = split_expressions(args_str);
         std::string result;
-        for (const auto& p : parts) result += trim(p);
+        for (const auto& p : parts) result += unquote_sql_string(p);
         return result;
     }
     if (func_name_upper == "SUBSTRING" || func_name_upper == "SUBSTR") {
         auto parts = split_expressions(args_str);
         if (parts.size() >= 2) {
-            std::string str = trim(parts[0]);
+            std::string str = unquote_sql_string(parts[0]);
             int start = 0;
             try { start = std::stoi(trim(parts[1])) - 1; } catch (...) {}
             int len = static_cast<int>(str.length());
@@ -693,15 +712,7 @@ std::string preprocess_escape_sequences(const std::string& sql) {
                         args = func_body.substr(paren_pos + 1, close_paren - paren_pos - 1);
                     }
                     
-                    // Strip quotes from string arguments for evaluation
-                    std::string clean_args = args;
-                    // For single-arg string functions, strip outer quotes
-                    std::string trimmed_args = trim(args);
-                    if (trimmed_args.length() >= 2 && trimmed_args.front() == '\'' && trimmed_args.back() == '\'') {
-                        clean_args = trimmed_args.substr(1, trimmed_args.length() - 2);
-                    }
-                    
-                    CellValue val = evaluate_scalar_function(func_name, clean_args);
+                    CellValue val = evaluate_scalar_function(func_name, args);
                     
                     // Convert result to SQL literal
                     if (std::holds_alternative<std::string>(val)) {

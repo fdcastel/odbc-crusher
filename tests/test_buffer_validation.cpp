@@ -58,6 +58,7 @@ TEST(BufferValidationTests, MockDriverTests) {
     
     // All tests should pass with mock driver
     EXPECT_GT(passed, 0) << "At least some tests should pass";
+    EXPECT_EQ(failed, 0) << "No tests should fail against mock driver";
     EXPECT_EQ(errors, 0) << "No tests should error";
 }
 

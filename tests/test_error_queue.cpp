@@ -59,6 +59,7 @@ TEST(ErrorQueueTests, MockDriverTests) {
     
     // Most tests should pass or skip (driver may not support all features)
     EXPECT_GT(passed, 0) << "At least some tests should pass";
+    EXPECT_EQ(failed, 0) << "No tests should fail against mock driver";
     EXPECT_EQ(errors, 0) << "No tests should error";
 }
 

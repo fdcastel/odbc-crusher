@@ -1,8 +1,8 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 3.0  
+**Version**: 3.1  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
-**Last Updated**: February 22, 2026
+**Last Updated**: February 23, 2026
 
 ---
 
@@ -235,6 +235,12 @@ Potential areas for future development (not yet scheduled):
 23. **`dynamic_cast` across DLL boundaries doesn't work on Windows.** Solved with opaque handle + magic number validation in the mock driver.
 
 24. **Reports must serve the audience.** "PASS" and "FAIL" are meaningless without context. Driver developers need: which spec clause, what conformance level, and exactly what to fix.
+
+25. **GTest assertions must check for zero failures, not just nonzero passes.** All 17 `MockDriverTests` GTest cases used `EXPECT_GT(passed, 0)` without `EXPECT_EQ(failed, 0)`, allowing ODBC test failures to slip through undetected. The CONCAT scalar function produced wrong results for months because the GTest only verified that *some* tests passed. The fix: every MockDriverTests case must assert `EXPECT_EQ(failed, 0)` — no test result should have FAIL status when running against the mock driver.
+
+26. **Build both Debug and Release before validating.** Phase 26 was built in Debug only, but the user's `odbc-crusher.exe` was the Release binary from two weeks earlier. The stale binary had none of the new test categories. Always rebuild the same configuration the end user runs, or the CI gives a false sense of safety.
+
+27. **Mock driver scalar functions must unquote SQL string arguments individually.** A single global quote-strip worked for one-argument functions like `UCASE('hello')` → `hello` but corrupted multi-argument functions like `CONCAT('a','b')`. Each argument must be unquoted separately before evaluation. The `unquote_sql_string()` helper handles both outer quote removal and `''` → `'` unescaping.
 
 ---
 

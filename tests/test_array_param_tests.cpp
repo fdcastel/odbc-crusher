@@ -33,14 +33,16 @@ TEST_F(ArrayParamTestsTest, MockDriverTests) {
     std::cout << "\n" << test_suite.category_name() << " Results:\n";
     std::cout << "================================\n";
     
-    size_t passed = 0;
+    size_t passed = 0, failed = 0;
     for (const auto& r : results) {
         const char* s = tests::status_to_string(r.status);
         std::cout << "[" << s << "] " << r.test_name << ": " << r.actual << "\n";
         if (r.status == tests::TestStatus::PASS) passed++;
+        if (r.status == tests::TestStatus::FAIL) failed++;
     }
     
     std::cout << "\nPassed: " << passed << "/" << results.size() << "\n";
+    EXPECT_EQ(failed, 0) << "No tests should fail against mock driver";
     // Mock driver supports array parameters, so at least some tests should pass
     if (passed == 0) {
         GTEST_SKIP() << "No tests passed (driver may not support array parameters)";

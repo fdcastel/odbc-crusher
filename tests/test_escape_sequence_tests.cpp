@@ -50,5 +50,6 @@ TEST_F(EscapeSequenceTestsTest, MockDriverTests) {
     std::cout << "\nPassed: " << passed << ", Failed: " << failed
               << ", Skipped: " << skipped << ", Errors: " << errors << "\n";
     EXPECT_EQ(errors, 0) << "No errors should occur";
+    EXPECT_EQ(failed, 0) << "No tests should fail against mock driver";
     EXPECT_GT(passed, 0) << "At least some escape sequence tests should pass";
 }

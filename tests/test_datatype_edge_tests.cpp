@@ -20,9 +20,10 @@ TEST(DataTypeEdgeCaseTests, MockDriverTests) {
     
     EXPECT_EQ(results.size(), 10);
     
-    int passed = 0, errors = 0;
+    int passed = 0, failed = 0, errors = 0;
     for (const auto& result : results) {
         if (result.status == tests::TestStatus::PASS) passed++;
+        if (result.status == tests::TestStatus::FAIL) failed++;
         if (result.status == tests::TestStatus::ERR) errors++;
         
         std::cout << result.test_name << ": " 
@@ -35,5 +36,6 @@ TEST(DataTypeEdgeCaseTests, MockDriverTests) {
     if (passed == 0) {
         GTEST_SKIP() << "No tests passed (driver may not support expression queries)";
     }
+    EXPECT_EQ(failed, 0) << "No tests should fail against mock driver";
     EXPECT_EQ(errors, 0) << "No data type edge case tests should error";
 }

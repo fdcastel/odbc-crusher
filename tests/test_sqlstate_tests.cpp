@@ -20,9 +20,10 @@ TEST(SqlstateTests, MockDriverTests) {
     
     EXPECT_EQ(results.size(), 10);
     
-    int passed = 0, errors = 0;
+    int passed = 0, failed = 0, errors = 0;
     for (const auto& result : results) {
         if (result.status == tests::TestStatus::PASS) passed++;
+        if (result.status == tests::TestStatus::FAIL) failed++;
         if (result.status == tests::TestStatus::ERR) errors++;
         
         std::cout << result.test_name << ": " 
@@ -31,5 +32,6 @@ TEST(SqlstateTests, MockDriverTests) {
     }
     
     EXPECT_GT(passed, 0) << "At least some SQLSTATE tests should pass";
+    EXPECT_EQ(failed, 0) << "No tests should fail against mock driver";
     EXPECT_EQ(errors, 0) << "No SQLSTATE tests should error";
 }
