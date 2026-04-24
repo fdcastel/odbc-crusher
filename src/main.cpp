@@ -56,17 +56,16 @@ void tally_results(const std::vector<tests::TestResult>& results,
     }
 }
 
-template<typename T>
-void run_test_category(T& test_suite, reporting::Reporter& reporter,
+void run_test_category(tests::TestBase& test_suite, reporting::Reporter& reporter,
                        size_t& total_tests, size_t& total_passed,
                        size_t& total_failed, size_t& total_skipped,
                        size_t& total_errors) {
     std::vector<tests::TestResult> results;
-    
+
     auto guard = core::execute_with_crash_guard([&]() {
         results = test_suite.run();
     });
-    
+
     if (guard.crashed) {
         // The test category caused a driver crash (e.g. access violation).
         // Report it as an error result so the tool keeps running.
@@ -83,7 +82,7 @@ void run_test_category(T& test_suite, reporting::Reporter& reporter,
         crash_result.duration = std::chrono::microseconds(0);
         results.push_back(crash_result);
     }
-    
+
     reporter.report_category(test_suite.category_name(), results);
     tally_results(results, total_tests, total_passed, total_failed,
                   total_skipped, total_errors);
@@ -190,75 +189,37 @@ int main(int argc, char** argv) {
         size_t total_errors = 0;
         auto overall_start = std::chrono::high_resolution_clock::now();
         
-        // Run all test categories
-        tests::ConnectionTests conn_tests(conn);
-        run_test_category(conn_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::StatementTests stmt_tests(conn);
-        run_test_category(stmt_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::MetadataTests meta_tests(conn);
-        run_test_category(meta_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::DataTypeTests type_tests(conn);
-        run_test_category(type_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::TransactionTests txn_tests(conn);
-        run_test_category(txn_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::AdvancedTests adv_tests(conn);
-        run_test_category(adv_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::BufferValidationTests buffer_tests(conn);
-        run_test_category(buffer_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::ErrorQueueTests error_tests(conn);
-        run_test_category(error_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::StateMachineTests state_tests(conn);
-        run_test_category(state_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::DescriptorTests desc_tests(conn);
-        run_test_category(desc_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::CancellationTests cancel_tests(conn);
-        run_test_category(cancel_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::SqlstateTests sqlstate_tests(conn);
-        run_test_category(sqlstate_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::BoundaryTests boundary_tests(conn);
-        run_test_category(boundary_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::DataTypeEdgeCaseTests dtype_edge_tests(conn);
-        run_test_category(dtype_edge_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::UnicodeTests unicode_tests(conn);
-        run_test_category(unicode_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::CatalogDepthTests catalog_depth_tests(conn);
-        run_test_category(catalog_depth_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::DiagnosticDepthTests diag_depth_tests(conn);
-        run_test_category(diag_depth_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::CursorBehaviorTests cursor_tests(conn);
-        run_test_category(cursor_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::ParameterBindingTests param_tests(conn);
-        run_test_category(param_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::ArrayParamTests array_param_tests(conn);
-        run_test_category(array_param_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::EscapeSequenceTests escape_tests(conn);
-        run_test_category(escape_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::NumericStructTests numeric_tests(conn);
-        run_test_category(numeric_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
-        
-        tests::CursorStressTests cursor_stress_tests(conn);
-        run_test_category(cursor_stress_tests, *reporter, total_tests, total_passed, total_failed, total_skipped, total_errors);
+        // Registered test categories. Order is preserved in the report.
+        // Adding a new category = one line here + the usual hpp/cpp/cmake/gtest wiring.
+        std::vector<std::unique_ptr<tests::TestBase>> categories;
+        categories.emplace_back(std::make_unique<tests::ConnectionTests>(conn));
+        categories.emplace_back(std::make_unique<tests::StatementTests>(conn));
+        categories.emplace_back(std::make_unique<tests::MetadataTests>(conn));
+        categories.emplace_back(std::make_unique<tests::DataTypeTests>(conn));
+        categories.emplace_back(std::make_unique<tests::TransactionTests>(conn));
+        categories.emplace_back(std::make_unique<tests::AdvancedTests>(conn));
+        categories.emplace_back(std::make_unique<tests::BufferValidationTests>(conn));
+        categories.emplace_back(std::make_unique<tests::ErrorQueueTests>(conn));
+        categories.emplace_back(std::make_unique<tests::StateMachineTests>(conn));
+        categories.emplace_back(std::make_unique<tests::DescriptorTests>(conn));
+        categories.emplace_back(std::make_unique<tests::CancellationTests>(conn));
+        categories.emplace_back(std::make_unique<tests::SqlstateTests>(conn));
+        categories.emplace_back(std::make_unique<tests::BoundaryTests>(conn));
+        categories.emplace_back(std::make_unique<tests::DataTypeEdgeCaseTests>(conn));
+        categories.emplace_back(std::make_unique<tests::UnicodeTests>(conn));
+        categories.emplace_back(std::make_unique<tests::CatalogDepthTests>(conn));
+        categories.emplace_back(std::make_unique<tests::DiagnosticDepthTests>(conn));
+        categories.emplace_back(std::make_unique<tests::CursorBehaviorTests>(conn));
+        categories.emplace_back(std::make_unique<tests::ParameterBindingTests>(conn));
+        categories.emplace_back(std::make_unique<tests::ArrayParamTests>(conn));
+        categories.emplace_back(std::make_unique<tests::EscapeSequenceTests>(conn));
+        categories.emplace_back(std::make_unique<tests::NumericStructTests>(conn));
+        categories.emplace_back(std::make_unique<tests::CursorStressTests>(conn));
+
+        for (auto& category : categories) {
+            run_test_category(*category, *reporter, total_tests, total_passed,
+                              total_failed, total_skipped, total_errors);
+        }
         
         auto overall_end = std::chrono::high_resolution_clock::now();
         auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(
