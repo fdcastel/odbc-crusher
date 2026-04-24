@@ -23,15 +23,7 @@ void JsonReporter::report_category(const std::string& category_name,
         test["test_name"] = result.test_name;
         test["function"] = result.function;
         
-        // Status
-        switch (result.status) {
-            case tests::TestStatus::PASS: test["status"] = "PASS"; break;
-            case tests::TestStatus::FAIL: test["status"] = "FAIL"; break;
-            case tests::TestStatus::SKIP: test["status"] = "SKIP"; break;
-            case tests::TestStatus::SKIP_UNSUPPORTED: test["status"] = "SKIP_UNSUPPORTED"; break;
-            case tests::TestStatus::SKIP_INCONCLUSIVE: test["status"] = "SKIP_INCONCLUSIVE"; break;
-            case tests::TestStatus::ERR:  test["status"] = "ERROR"; break;
-        }
+        test["status"] = tests::status_to_string(result.status);
         
         // Severity
         test["severity"] = tests::severity_to_string(result.severity);

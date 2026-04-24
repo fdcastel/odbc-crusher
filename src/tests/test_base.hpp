@@ -110,6 +110,13 @@ inline const char* status_to_string(TestStatus status) {
     }
 }
 
+// True for any SKIP_* variant (including the legacy SKIP alias).
+inline bool is_skipped(TestStatus status) {
+    return status == TestStatus::SKIP
+        || status == TestStatus::SKIP_UNSUPPORTED
+        || status == TestStatus::SKIP_INCONCLUSIVE;
+}
+
 // Helper to convert severity to string
 inline const char* severity_to_string(Severity sev) {
     switch (sev) {
