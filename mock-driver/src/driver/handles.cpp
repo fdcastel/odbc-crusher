@@ -80,12 +80,21 @@ StatementHandle::StatementHandle(ConnectionHandle* conn)
 }
 
 StatementHandle::~StatementHandle() {
-    // Clean up descriptors if we own them
-    delete app_param_desc_;
-    delete imp_param_desc_;
-    delete app_row_desc_;
-    delete imp_row_desc_;
-    
+    // Only free implicit descriptors. If the user swapped in an explicit
+    // descriptor via SQLSetStmtAttr(SQL_ATTR_APP_{ROW,PARAM}_DESC), that
+    // descriptor's lifetime belongs to the caller — deleting it here would
+    // double-free. Implicit descriptors keep alloc_type_ == SQL_DESC_ALLOC_AUTO
+    // (the default); explicit ones set SQL_DESC_ALLOC_USER.
+    auto delete_if_implicit = [](DescriptorHandle* d) {
+        if (d && d->alloc_type_ == SQL_DESC_ALLOC_AUTO) {
+            delete d;
+        }
+    };
+    delete_if_implicit(app_param_desc_);
+    delete_if_implicit(imp_param_desc_);
+    delete_if_implicit(app_row_desc_);
+    delete_if_implicit(imp_row_desc_);
+
     // Remove from connection
     if (conn_) {
         auto it = std::find(conn_->statements_.begin(), conn_->statements_.end(), this);

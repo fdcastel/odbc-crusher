@@ -17,7 +17,9 @@ SQLRETURN SQL_API SQLGetDescField(
     
     auto* desc = validate_desc_handle(hdesc);
     if (!desc) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(desc);
+    desc->clear_diagnostics();
+
     (void)iRecord;
     (void)cbValueMax;
     
@@ -50,7 +52,9 @@ SQLRETURN SQL_API SQLSetDescField(
     
     auto* desc = validate_desc_handle(hdesc);
     if (!desc) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(desc);
+    desc->clear_diagnostics();
+
     (void)iRecord;
     (void)cbValue;
     
@@ -82,7 +86,9 @@ SQLRETURN SQL_API SQLGetDescRec(
     
     auto* desc = validate_desc_handle(hdesc);
     if (!desc) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(desc);
+    desc->clear_diagnostics();
+
     if (iRecord < 1 || iRecord > static_cast<SQLSMALLINT>(desc->records_.size())) {
         return SQL_NO_DATA;
     }
@@ -117,7 +123,9 @@ SQLRETURN SQL_API SQLSetDescRec(
     
     auto* desc = validate_desc_handle(hdesc);
     if (!desc) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(desc);
+    desc->clear_diagnostics();
+
     // Expand records if needed
     while (static_cast<SQLSMALLINT>(desc->records_.size()) < iRecord) {
         desc->records_.push_back(DescriptorHandle::DescriptorRecord{});
@@ -144,9 +152,11 @@ SQLRETURN SQL_API SQLCopyDesc(
     
     auto* src = validate_desc_handle(hDescSource);
     auto* tgt = validate_desc_handle(hDescTarget);
-    
+
     if (!src || !tgt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(tgt);
+    tgt->clear_diagnostics();
+
     tgt->count_ = src->count_;
     tgt->records_ = src->records_;
     
@@ -164,7 +174,9 @@ SQLRETURN SQL_API SQLColAttribute(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     if (iCol < 1 || iCol > static_cast<SQLUSMALLINT>(stmt->column_names_.size())) {
         stmt->add_diagnostic(sqlstate::INVALID_PARAMETER_NUMBER, 0,
                             "Invalid column number");
