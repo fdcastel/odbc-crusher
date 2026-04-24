@@ -21,14 +21,15 @@ MockCatalog& MockCatalog::instance() {
 }
 
 void MockCatalog::initialize(const std::string& preset) {
+    std::lock_guard<std::mutex> g(mu_);
     tables_.clear();
     indexes_.clear();
     inserted_data_.clear();
-    
+
     std::string lower_preset = preset;
     std::transform(lower_preset.begin(), lower_preset.end(), lower_preset.begin(),
                    [](unsigned char c) { return std::tolower(c); });
-    
+
     if (lower_preset == "empty") {
         create_empty_catalog();
     } else if (lower_preset == "large") {
@@ -200,10 +201,12 @@ const MockTable* MockCatalog::find_table(const std::string& name) const {
 }
 
 void MockCatalog::add_table(const MockTable& table) {
+    std::lock_guard<std::mutex> g(mu_);
     tables_.push_back(table);
 }
 
 void MockCatalog::remove_table(const std::string& name) {
+    std::lock_guard<std::mutex> g(mu_);
     std::string upper_name = to_upper(name);
     tables_.erase(
         std::remove_if(tables_.begin(), tables_.end(),
@@ -218,14 +221,17 @@ void MockCatalog::remove_table(const std::string& name) {
 }
 
 void MockCatalog::insert_row(const std::string& table_name, MockRow row) {
+    std::lock_guard<std::mutex> g(mu_);
     inserted_data_[to_upper(table_name)].push_back(std::move(row));
 }
 
 void MockCatalog::clear_inserted_data() {
+    std::lock_guard<std::mutex> g(mu_);
     inserted_data_.clear();
 }
 
 void MockCatalog::clear_inserted_data(const std::string& table_name) {
+    std::lock_guard<std::mutex> g(mu_);
     inserted_data_.erase(to_upper(table_name));
 }
 
