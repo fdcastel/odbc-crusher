@@ -47,23 +47,32 @@ struct TestResult {
     std::chrono::microseconds duration;
 };
 
+// Outcome of TestBase::verify_rows_persisted — whether the inserted rows
+// actually made it to storage.
+struct RowVerification {
+    bool ok = false;
+    long actual_count = -1;                  // SELECT COUNT(*), -1 on error
+    std::vector<std::string> actual_values;  // Per-row value column, PK-ordered
+    std::string diagnostic;                  // Empty when ok
+};
+
 // Base class for all ODBC tests
 class TestBase {
 public:
     explicit TestBase(core::OdbcConnection& conn)
         : conn_(conn) {}
-    
+
     virtual ~TestBase() = default;
-    
+
     // Run all tests in this category
     virtual std::vector<TestResult> run() = 0;
-    
+
     // Get test category name
     virtual std::string category_name() const = 0;
-    
+
 protected:
     core::OdbcConnection& conn_;
-    
+
     // Helper to create test result
     TestResult make_result(
         const std::string& test_name,
@@ -75,7 +84,7 @@ protected:
         ConformanceLevel conformance = ConformanceLevel::CORE,
         const std::string& spec_reference = ""
     );
-    
+
     // Helper to time a test
     template<typename Func>
     auto time_test(Func&& func) {
@@ -84,6 +93,18 @@ protected:
         auto end = std::chrono::high_resolution_clock::now();
         return std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     }
+
+    // Verify that rows written by the test actually made it to storage.
+    // Runs `SELECT COUNT(*) FROM table` and
+    // `SELECT value_col FROM table ORDER BY pk_col`, then returns the
+    // actual count and values. Tests comparing against expected values
+    // should treat any mismatch as a hard FAIL (CRITICAL) — never SKIP.
+    // Without this, drivers that silently drop rows still report PASS.
+    RowVerification verify_rows_persisted(
+        const std::string& table,
+        const std::string& pk_col,
+        const std::string& value_col,
+        long expected_count);
 };
 
 // Helper to convert conformance level to string

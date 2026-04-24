@@ -9,14 +9,23 @@ class ParameterBindingTests : public TestBase {
 public:
     explicit ParameterBindingTests(core::OdbcConnection& conn)
         : TestBase(conn) {}
-    
+
     std::vector<TestResult> run() override;
     std::string category_name() const override { return "Parameter Binding Tests"; }
-    
+
 private:
+    // Table lifecycle for round-trip tests. Uses autocommit-on during DDL
+    // so a failed DROP doesn't poison the transaction on Firebird-style drivers.
+    bool create_roundtrip_table();
+    void drop_roundtrip_table();
+
+    // Stores the last DDL error for SKIP suggestions.
+    std::string last_ddl_error_;
+
     TestResult test_bindparam_wchar_input();
     TestResult test_bindparam_null_indicator();
     TestResult test_param_rebind_execute();
+    TestResult test_bindparam_int_to_varchar_roundtrip();
 };
 
 } // namespace odbc_crusher::tests

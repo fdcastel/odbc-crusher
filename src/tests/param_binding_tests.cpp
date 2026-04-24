@@ -16,12 +16,81 @@ namespace odbc_crusher::tests {
 
 std::vector<TestResult> ParameterBindingTests::run() {
     std::vector<TestResult> results;
-    
+
     results.push_back(test_bindparam_wchar_input());
     results.push_back(test_bindparam_null_indicator());
     results.push_back(test_param_rebind_execute());
-    
+    results.push_back(test_bindparam_int_to_varchar_roundtrip());
+
     return results;
+}
+
+// ── Round-trip test table lifecycle ─────────────────────────────────────────
+//
+// Keep this table distinct from ODBC_TEST_ARRAY so the two categories don't
+// interfere. Follows the same CREATE-first / DROP-and-retry pattern as
+// ArrayParamTests to survive Firebird's "DDL failure invalidates the txn" rule
+// (see PROJECT_PLAN.md lesson 15).
+
+bool ParameterBindingTests::create_roundtrip_table() {
+    SQLUINTEGER old_ac = 0;
+    SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
+    SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                      (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+
+    auto restore_ac = [&]() {
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)(intptr_t)old_ac, 0);
+    };
+
+    const std::vector<std::string> ddl = {
+        "CREATE TABLE ODBC_TEST_ROUNDTRIP (ID INTEGER, VAL VARCHAR(32))",
+        "CREATE TABLE ODBC_TEST_ROUNDTRIP (ID INT, VAL VARCHAR(32))"
+    };
+
+    auto try_create = [&]() -> bool {
+        for (const auto& sql : ddl) {
+            try {
+                core::OdbcStatement s(conn_);
+                s.execute(sql);
+                return true;
+            } catch (const core::OdbcError& e) {
+                last_ddl_error_ = e.format_diagnostics();
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+            } catch (...) {
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+            }
+        }
+        return false;
+    };
+
+    if (try_create()) { restore_ac(); return true; }
+
+    try {
+        core::OdbcStatement drop_stmt(conn_);
+        drop_stmt.execute("DROP TABLE ODBC_TEST_ROUNDTRIP");
+    } catch (...) {
+        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+    }
+
+    bool ok = try_create();
+    restore_ac();
+    return ok;
+}
+
+void ParameterBindingTests::drop_roundtrip_table() {
+    SQLUINTEGER old_ac = 0;
+    SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
+    SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                      (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+    try {
+        core::OdbcStatement s(conn_);
+        s.execute("DROP TABLE ODBC_TEST_ROUNDTRIP");
+    } catch (...) {
+        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+    }
+    SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                      (SQLPOINTER)(intptr_t)old_ac, 0);
 }
 
 TestResult ParameterBindingTests::test_bindparam_wchar_input() {
@@ -283,7 +352,192 @@ TestResult ParameterBindingTests::test_param_rebind_execute() {
         result.actual = e.what();
         result.diagnostic = e.format_diagnostics();
     }
-    
+
+    return result;
+}
+
+// ── Numeric-C → character-SQL round-trip test ───────────────────────────────
+//
+// IMPROVEMENT_PLAN.md §1.1. This shape produced the Firebird #161
+// silent-corruption bug: SQLBindParameter returned SQL_SUCCESS, SQLExecute
+// returned SQL_SUCCESS, but the driver wrote zero or wrong bytes into the
+// VARCHAR column's length-prefix region. A test that only checks return
+// codes reports PASS; only reading the rows back catches the defect.
+TestResult ParameterBindingTests::test_bindparam_int_to_varchar_roundtrip() {
+    TestResult result = make_result(
+        "test_bindparam_int_to_varchar_roundtrip",
+        "SQLBindParameter",
+        TestStatus::PASS,
+        "INSERT 10 rows binding SQL_C_SLONG into VARCHAR column; "
+        "read back rows ORDER BY id; actual values match std::to_string(i) for i=1..10",
+        "",
+        Severity::CRITICAL,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter: numeric C → character SQL conversion, Appendix D"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE ODBC_TEST_ROUNDTRIP";
+        result.diagnostic = last_ddl_error_;
+        result.suggestion =
+            "This test needs DDL + DML privileges. If running against a real "
+            "driver, ensure the user can CREATE TABLE and INSERT.";
+        result.duration = elapsed();
+        return result;
+    }
+
+    constexpr int kRowCount = 10;
+    bool insert_phase_ok = true;
+    int insert_errors = 0;
+    std::string first_insert_error;
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        SQLRETURN rc = SQLPrepare(
+            stmt.get_handle(),
+            (SQLCHAR*)"INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (?, ?)",
+            SQL_NTS);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "SQLPrepare INSERT returned " + std::to_string(rc);
+            result.suggestion =
+                "Driver must support parameterised INSERT to exercise this path.";
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        SQLINTEGER id_param = 0;
+        SQLINTEGER val_param = 0;
+        SQLLEN id_ind = 0;
+        SQLLEN val_ind = 0;
+
+        rc = SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
+                              SQL_C_SLONG, SQL_INTEGER, 0, 0,
+                              &id_param, 0, &id_ind);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual =
+                "SQLBindParameter(id, SQL_C_SLONG→SQL_INTEGER) returned " +
+                std::to_string(rc);
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        // The core bind under test: SQL_C_SLONG → SQL_VARCHAR. The driver
+        // must convert the int to a numeric string representation and store
+        // it in the VARCHAR column.
+        rc = SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                              SQL_C_SLONG, SQL_VARCHAR, 32, 0,
+                              &val_param, 0, &val_ind);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual =
+                "SQLBindParameter(val, SQL_C_SLONG→SQL_VARCHAR) returned " +
+                std::to_string(rc);
+            result.suggestion =
+                "Driver rejected SQL_C_SLONG→SQL_VARCHAR conversion at bind time. "
+                "The round-trip cannot be exercised against this driver; skip, "
+                "don't fail.";
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        for (int i = 1; i <= kRowCount; ++i) {
+            id_param = i;
+            val_param = i;
+            SQLRETURN exec_rc = SQLExecute(stmt.get_handle());
+            if (!SQL_SUCCEEDED(exec_rc)) {
+                insert_phase_ok = false;
+                insert_errors++;
+                if (first_insert_error.empty()) {
+                    first_insert_error =
+                        "SQLExecute for row " + std::to_string(i) +
+                        " returned " + std::to_string(exec_rc);
+                }
+            }
+        }
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = std::string("INSERT phase threw: ") + e.what();
+        result.diagnostic = e.format_diagnostics();
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    if (!insert_phase_ok && insert_errors == kRowCount) {
+        // Every insert failed — plausibly a driver that cannot do numeric→char
+        // conversion at bind time. Skip rather than fail, but surface the error.
+        result.status = TestStatus::SKIP_UNSUPPORTED;
+        result.actual = "All " + std::to_string(kRowCount) +
+                        " SQLExecute calls failed: " + first_insert_error;
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    // Ensure any pending writes are flushed before reading back.
+    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+    RowVerification v = verify_rows_persisted(
+        "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kRowCount);
+
+    if (!v.ok) {
+        result.status = TestStatus::FAIL;
+        result.actual = "verify_rows_persisted failed: " + v.diagnostic +
+                        " (COUNT(*)=" + std::to_string(v.actual_count) +
+                        ", fetched=" + std::to_string(v.actual_values.size()) + ")";
+        result.suggestion =
+            "Rows did not persist after SQL_SUCCESS INSERTs — this is the "
+            "Firebird #161 silent-corruption shape. Check the driver's "
+            "numeric-C → character-SQL conversion on the bind path.";
+    } else {
+        std::string mismatches;
+        for (int i = 0; i < kRowCount; ++i) {
+            const auto& actual = v.actual_values[i];
+            std::string expected = std::to_string(i + 1);
+            if (actual != expected) {
+                if (!mismatches.empty()) mismatches += ", ";
+                mismatches += "row " + std::to_string(i + 1) + ": expected '" +
+                              expected + "' got '" + actual + "'";
+            }
+        }
+        if (mismatches.empty()) {
+            if (insert_phase_ok) {
+                result.actual = "All " + std::to_string(kRowCount) +
+                                " rows round-tripped correctly";
+            } else {
+                result.actual = "Round-trip succeeded but " +
+                                std::to_string(insert_errors) +
+                                " INSERTs reported errors (first: " +
+                                first_insert_error + ")";
+                result.status = TestStatus::FAIL;
+                result.severity = Severity::WARNING;
+                result.suggestion =
+                    "Driver returned errors during execute but data still landed. "
+                    "Indicator handling or post-execute state may be inconsistent.";
+            }
+        } else {
+            result.status = TestStatus::FAIL;
+            result.actual = "Round-trip value mismatch: " + mismatches;
+            result.suggestion =
+                "Driver converted SQL_C_SLONG to VARCHAR incorrectly — "
+                "numeric-C → character-SQL conversion is broken.";
+        }
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
     return result;
 }
 
