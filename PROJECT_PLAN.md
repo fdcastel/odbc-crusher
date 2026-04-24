@@ -41,47 +41,10 @@ odbc-crusher <connection_string> [--verbose] [-o console|json] [-f file.json]
 
 ---
 
-## 3. Current State
+## 3. Current tasks
 
-### What's Implemented
+Refer to `tmp\IMPROVEMENT_PLAN.md`
 
-- **131 tests across 12 categories** — all pass against the mock driver (100%)
-- **Mock driver implements 60+ ODBC functions** with Unicode-first architecture, configurable behavior, escape sequence support, SQL_NUMERIC_STRUCT, scrollable cursors, array parameters, DDL, and data persistence
-- **Console reporter** with conformance levels, spec references, severity-ranked summaries, and scalar function matrix
-- **JSON reporter** with full discovery data, structured test results, and scalar function data
-- **60/60 GTest unit tests** pass on all platforms (Windows, Linux, macOS)
-- **CI/CD**: GitHub Actions builds and tests on all 3 platforms; release workflow creates artifacts
-- **Real-driver validated** against Firebird, MariaDB, PostgreSQL, and DuckDB ODBC drivers
-
-### Real-Driver Results (v0.4.5)
-
-| Driver | Version | Pass Rate | Notes |
-|--------|---------|-----------|-------|
-| Mock ODBC | — | 131/131 (100%) | Reference implementation |
-| PostgreSQL (psqlodbc) | v16.00.0000 | 129/131 (98.5%) | 2 minor driver gaps |
-| Firebird | v03.00.0021 | 116/127 (91.3%) | Remaining are genuine driver issues |
-| MariaDB | v03.01.0015 | 115/131 (87.8%) | Needs DDL permissions for full coverage |
-| DuckDB | v1.4.4.0 | 108/123 (87.8%) | 2 crash-severity driver bugs worked around |
-
-### `TestResult` Structure
-
-```cpp
-struct TestResult {
-    std::string test_name;
-    std::string function;              // ODBC function tested
-    TestStatus status;                 // PASS, FAIL, SKIP_UNSUPPORTED, SKIP_INCONCLUSIVE, ERR
-    Severity severity;                 // CRITICAL, ERROR, WARNING, INFO
-    ConformanceLevel conformance;      // CORE, LEVEL_1, LEVEL_2
-    std::string spec_reference;        // "ODBC 3.x, SQLGetInfo"
-    std::string expected;
-    std::string actual;
-    std::optional<std::string> diagnostic;
-    std::optional<std::string> suggestion;
-    std::chrono::microseconds duration;
-};
-```
-
----
 
 ## 4. Test Categories (131 tests)
 
