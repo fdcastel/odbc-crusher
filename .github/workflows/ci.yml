@@ -30,7 +30,32 @@ jobs:
         
     - name: Build Mock Driver
       run: cmake --build mock-driver/build --config ${{ matrix.build_type }} -j 4
-        
+
+    - name: Check mockodbc.def export drift
+      if: matrix.build_type == 'Release'
+      shell: pwsh
+      run: |
+        # Every name in EXPORTS must appear as `SQLRETURN SQL_API <name>(`
+        # somewhere under mock-driver/src/odbc/. This catches exports that
+        # were hand-added to the .def without a matching C++ implementation.
+        $defFile = "mock-driver/src/mockodbc.def"
+        $exports = Get-Content $defFile |
+            Where-Object { $_ -match '^\s{4}SQL[A-Za-z0-9]+\s*$' } |
+            ForEach-Object { $_.Trim() }
+        $sources = Get-ChildItem mock-driver/src/odbc -Filter *.cpp -Recurse |
+            Get-Content -Raw
+        $missing = @()
+        foreach ($exp in $exports) {
+            if ($sources -notmatch ("SQLRETURN\s+SQL_API\s+" + [regex]::Escape($exp) + "\s*\(")) {
+                $missing += $exp
+            }
+        }
+        if ($missing.Count -gt 0) {
+            Write-Error "mockodbc.def exports are missing C++ implementations: $($missing -join ', ')"
+            exit 1
+        }
+        Write-Host "All $($exports.Count) .def exports resolve to implementations."
+
     - name: Run Mock Driver Tests
       run: ctest --test-dir mock-driver/build -C ${{ matrix.build_type }} --output-on-failure
         
