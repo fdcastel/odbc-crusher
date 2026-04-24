@@ -171,23 +171,12 @@ int main(int argc, char** argv) {
         }
         
         if (discovery_ok) {
+            reporter->report_driver_info(driver_info.get_properties());
+            reporter->report_type_info(type_info.get_types());
+            reporter->report_function_info(func_info.get_support());
+            reporter->report_scalar_functions(driver_info.get_scalar_functions());
             if (output_format == "console") {
-                auto* console_rep = dynamic_cast<reporting::ConsoleReporter*>(reporter.get());
-                if (console_rep) {
-                    console_rep->report_driver_info(driver_info.get_properties());
-                    console_rep->report_type_info(type_info.get_types());
-                    console_rep->report_function_info(func_info.get_support());
-                    console_rep->report_scalar_functions(driver_info.get_scalar_functions());
-                    std::cout << std::flush;
-                }
-            } else if (output_format == "json") {
-                auto* json_rep = dynamic_cast<reporting::JsonReporter*>(reporter.get());
-                if (json_rep) {
-                    json_rep->report_driver_info(driver_info.get_properties());
-                    json_rep->report_type_info(type_info.get_types());
-                    json_rep->report_function_info(func_info.get_support());
-                    json_rep->report_scalar_functions(driver_info.get_scalar_functions());
-                }
+                std::cout << std::flush;
             }
         }
         
