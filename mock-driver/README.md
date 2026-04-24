@@ -59,6 +59,48 @@ Default tables:
 - `PRODUCTS` - Product catalog
 - `ORDER_ITEMS` - Order line items
 
+## Contributing
+
+### Thread-safety invariant: `HandleLock`
+
+Every **public ODBC entry point** (anything declared `SQLRETURN SQL_API …`
+and exported via `mockodbc.def`) must lock its primary handle and clear
+its diagnostic stack on entry. The canonical pattern is:
+
+```cpp
+auto* stmt = validate_stmt_handle(hstmt);
+if (!stmt) return SQL_INVALID_HANDLE;
+HandleLock lock(stmt);           // Per-handle mutex from OdbcHandle
+stmt->clear_diagnostics();       // Spec: most entry points clear on entry
+```
+
+Exceptions:
+
+- **`SQLGetDiagRec` / `SQLGetDiagField`** — these *read* the diagnostic
+  stack; they must never clear it.
+- **`SQLAllocHandle(SQL_HANDLE_*)`** — the target handle does not exist yet.
+
+Diagnostic clearing is a spec requirement (ODBC 3.x §15.2, SQLGetDiagRec):
+all subsequent diagnostics from a function call replace the previous
+stack unless the caller explicitly reads first. If a function forgets to
+clear, state from the previous call leaks through and tests that check
+`SQLGetDiagRec(..., 1, ...)` see the wrong error.
+
+**Review checklist for new / changed entry points:**
+
+1. Does the first line after the validate/`SQL_INVALID_HANDLE` check
+   take `HandleLock lock(handle);`? If no — add it.
+2. Does the next line call `handle->clear_diagnostics();`? If no — add it,
+   unless this is a diagnostic-reading function.
+3. If the function delegates to another public ODBC function (e.g. a
+   `SQL…W` wrapper calling its ANSI sibling), make sure you don't
+   re-lock the same handle — `HandleLock` is not recursive.
+
+A CI check under `Build Mock ODBC Driver` (`Check mockodbc.def export drift`)
+enforces that every export in `mockodbc.def` has a matching `SQLRETURN
+SQL_API <name>(` implementation. There is no automated enforcement of the
+lock/clear invariant yet — rely on code review.
+
 ## License
 
 MIT License - See LICENSE file
