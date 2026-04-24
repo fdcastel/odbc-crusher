@@ -204,17 +204,23 @@ SQLRETURN SQL_API SQLPrimaryKeys(
     SQLSMALLINT cbSchemaName,
     SQLCHAR* szTableName,
     SQLSMALLINT cbTableName) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    HandleLock lock(stmt);    
+    HandleLock lock(stmt);
     stmt->clear_diagnostics();
-    
+
+    const auto& config = BehaviorController::instance().config();
+    if (config.should_fail("SQLPrimaryKeys")) {
+        stmt->add_diagnostic(config.error_code, 0, "Simulated SQLPrimaryKeys failure");
+        return SQL_ERROR;
+    }
+
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;
     (void)cbSchemaName;
-    
+
     std::string table_name = sql_to_string(szTableName, cbTableName);
     
     // Set up result columns
@@ -260,9 +266,15 @@ SQLRETURN SQL_API SQLForeignKeys(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    HandleLock lock(stmt);    
+    HandleLock lock(stmt);
     stmt->clear_diagnostics();
-    
+
+    const auto& config = BehaviorController::instance().config();
+    if (config.should_fail("SQLForeignKeys")) {
+        stmt->add_diagnostic(config.error_code, 0, "Simulated SQLForeignKeys failure");
+        return SQL_ERROR;
+    }
+
     (void)szPkCatalogName;
     (void)cbPkCatalogName;
     (void)szPkSchemaName;
@@ -344,9 +356,15 @@ SQLRETURN SQL_API SQLStatistics(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    HandleLock lock(stmt);    
+    HandleLock lock(stmt);
     stmt->clear_diagnostics();
-    
+
+    const auto& config = BehaviorController::instance().config();
+    if (config.should_fail("SQLStatistics")) {
+        stmt->add_diagnostic(config.error_code, 0, "Simulated SQLStatistics failure");
+        return SQL_ERROR;
+    }
+
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;
@@ -411,9 +429,15 @@ SQLRETURN SQL_API SQLSpecialColumns(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    HandleLock lock(stmt);    
+    HandleLock lock(stmt);
     stmt->clear_diagnostics();
-    
+
+    const auto& config = BehaviorController::instance().config();
+    if (config.should_fail("SQLSpecialColumns")) {
+        stmt->add_diagnostic(config.error_code, 0, "Simulated SQLSpecialColumns failure");
+        return SQL_ERROR;
+    }
+
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;
@@ -467,16 +491,22 @@ SQLRETURN SQL_API SQLProcedures(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    HandleLock lock(stmt);    
+    HandleLock lock(stmt);
     stmt->clear_diagnostics();
-    
+
+    const auto& config = BehaviorController::instance().config();
+    if (config.should_fail("SQLProcedures")) {
+        stmt->add_diagnostic(config.error_code, 0, "Simulated SQLProcedures failure");
+        return SQL_ERROR;
+    }
+
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;
     (void)cbSchemaName;
     (void)szProcName;
     (void)cbProcName;
-    
+
     // Mock: no procedures
     setup_catalog_result(stmt,
         {"PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "NUM_INPUT_PARAMS",
@@ -502,9 +532,15 @@ SQLRETURN SQL_API SQLProcedureColumns(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    HandleLock lock(stmt);    
+    HandleLock lock(stmt);
     stmt->clear_diagnostics();
-    
+
+    const auto& config = BehaviorController::instance().config();
+    if (config.should_fail("SQLProcedureColumns")) {
+        stmt->add_diagnostic(config.error_code, 0, "Simulated SQLProcedureColumns failure");
+        return SQL_ERROR;
+    }
+
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;
@@ -513,7 +549,7 @@ SQLRETURN SQL_API SQLProcedureColumns(
     (void)cbProcName;
     (void)szColumnName;
     (void)cbColumnName;
-    
+
     // Mock: no procedure columns
     setup_catalog_result(stmt,
         {"PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "COLUMN_NAME",
@@ -537,14 +573,22 @@ SQLRETURN SQL_API SQLTablePrivileges(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    HandleLock lock(stmt);    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
+    const auto& config = BehaviorController::instance().config();
+    if (config.should_fail("SQLTablePrivileges")) {
+        stmt->add_diagnostic(config.error_code, 0, "Simulated SQLTablePrivileges failure");
+        return SQL_ERROR;
+    }
+
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;
     (void)cbSchemaName;
     (void)szTableName;
     (void)cbTableName;
-    
+
     // Mock: empty privileges
     setup_catalog_result(stmt,
         {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "GRANTOR", "GRANTEE",
@@ -568,7 +612,15 @@ SQLRETURN SQL_API SQLColumnPrivileges(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    HandleLock lock(stmt);    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
+    const auto& config = BehaviorController::instance().config();
+    if (config.should_fail("SQLColumnPrivileges")) {
+        stmt->add_diagnostic(config.error_code, 0, "Simulated SQLColumnPrivileges failure");
+        return SQL_ERROR;
+    }
+
     (void)szCatalogName;
     (void)cbCatalogName;
     (void)szSchemaName;
@@ -577,7 +629,7 @@ SQLRETURN SQL_API SQLColumnPrivileges(
     (void)cbTableName;
     (void)szColumnName;
     (void)cbColumnName;
-    
+
     // Mock: empty privileges
     setup_catalog_result(stmt,
         {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "GRANTOR",
