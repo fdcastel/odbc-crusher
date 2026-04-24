@@ -55,10 +55,13 @@ static CellValue read_param_value(
     if (param_bind_type == SQL_PARAM_BIND_BY_COLUMN) {
         // Column-wise: stride by element size for data, by sizeof(SQLLEN) for indicator
         SQLLEN elem_size = c_type_element_size(pb.value_type, pb.buffer_length);
-        data_ptr = base_data + row * elem_size;
+        if (elem_size <= 0) return std::monostate{};
+        data_ptr = base_data + row * static_cast<SQLULEN>(elem_size);
         ind_ptr  = base_ind ? (base_ind + row) : nullptr;
     } else {
-        // Row-wise: stride by the struct size (param_bind_type) for both
+        // Row-wise: stride by the struct size (param_bind_type) for both.
+        // A zero stride would make every row alias param-set 0; reject.
+        if (param_bind_type == 0) return std::monostate{};
         data_ptr = base_data + row * param_bind_type;
         ind_ptr  = base_ind
             ? reinterpret_cast<const SQLLEN*>(
@@ -100,11 +103,19 @@ static CellValue read_param_value(
             if (ind_ptr && *ind_ptr != SQL_NTS) {
                 len = *ind_ptr;
             }
+            // Guard against unbounded strlen on a non-NUL-terminated buffer:
+            // cap the walk at buffer_length when it is set. Without this a
+            // malformed caller that passes SQL_NTS with a raw byte buffer
+            // could read past the end of its buffer.
+            constexpr size_t kSafetyCapBytes = 1 << 20;  // 1 MB
             if (len == SQL_NTS || len < 0) {
-                return std::string(data_ptr);
-            } else {
-                return std::string(data_ptr, static_cast<size_t>(len));
+                size_t max_scan = pb.buffer_length > 0
+                    ? static_cast<size_t>(pb.buffer_length)
+                    : kSafetyCapBytes;
+                size_t actual = ::strnlen(data_ptr, max_scan);
+                return std::string(data_ptr, actual);
             }
+            return std::string(data_ptr, static_cast<size_t>(len));
         }
     }
 }
