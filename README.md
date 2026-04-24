@@ -293,6 +293,29 @@ In verbose mode (`-v`), each test also shows:
 - **MySQL 8.0+** via MySQL Connector/ODBC 9.x
 - **Mock ODBC Driver** (included in `mock-driver/`, used for CI)
 
+## Stress-Test Workflow
+
+The `stress-test` GitHub Actions workflow runs `odbc-crusher` against
+each supported real-world ODBC driver on fresh VMs and uploads the
+resulting reports as build artifacts.
+
+After a stress-test run, `fetch-stress-test.ps1` in the repo root
+downloads those artifacts locally, clones the matching upstream driver
+source tree at the exact tag that was tested, and writes a per-driver
+`recommendations/prompts/<DRIVER>-ODBC-CRUSHER-PROMPT.md` that a
+driver developer (or LLM-assisted workflow) can hand to an agent to
+produce actionable fix recommendations.
+
+```powershell
+# From the project root:
+.\fetch-stress-test.ps1
+```
+
+The script is idempotent — safe to re-run after each stress-test
+release. Driver versions are pinned in `.github/workflows/stress-test.yml`
+and in the `$Drivers` hashtable at the top of the script; keep them in
+sync when bumping a target driver.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
