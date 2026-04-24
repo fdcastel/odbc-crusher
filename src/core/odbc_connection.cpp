@@ -28,13 +28,13 @@ void OdbcConnection::connect(std::string_view connection_string) {
         throw OdbcError("Already connected");
     }
     
-    SQLCHAR out_conn_str[1024];
+    SQLCHAR out_conn_str[2048];
     SQLSMALLINT out_conn_str_len;
-    
+
     SQLRETURN ret = SQLDriverConnect(
         handle_,
         nullptr,  // No window handle
-        (SQLCHAR*)connection_string.data(),
+        reinterpret_cast<SQLCHAR*>(const_cast<char*>(connection_string.data())),
         static_cast<SQLSMALLINT>(connection_string.length()),
         out_conn_str,
         sizeof(out_conn_str),
