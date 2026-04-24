@@ -83,13 +83,12 @@ SQLRETURN SQL_API SQLAllocHandle(
             if (!conn) {
                 return SQL_INVALID_HANDLE;
             }
-            
-            if (!conn->is_connected()) {
-                conn->add_diagnostic(sqlstate::CONNECTION_NOT_OPEN, 0,
-                                    "Connection not open");
-                return SQL_ERROR;
-            }
-            
+
+            // Per the ODBC state table, the connection need only be in state
+            // C2 (Allocated) for SQLAllocHandle(SQL_HANDLE_STMT) — the
+            // connection does not have to be open yet. Previously we
+            // returned 08003 here, which caused drivers that legitimately
+            // pre-allocate statements to fail conformance.
             auto* stmt = new StatementHandle(conn);
             *phOutput = static_cast<SQLHANDLE>(stmt);
             return SQL_SUCCESS;
