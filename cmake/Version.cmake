@@ -25,6 +25,13 @@ if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
         set(ODBC_CRUSHER_VERSION_MINOR ${CMAKE_MATCH_2})
         set(ODBC_CRUSHER_VERSION_PATCH ${CMAKE_MATCH_3})
         message(STATUS "Version from git tag: ${GIT_TAG}")
+    elseif(NOT GIT_TAG_RESULT EQUAL 0)
+        message(WARNING "git describe --tags --match v* failed (result ${GIT_TAG_RESULT}); "
+                        "falling back to project() version ${PROJECT_VERSION}. "
+                        "This is expected on a shallow clone or when no v* tag exists.")
+    elseif(NOT GIT_TAG STREQUAL "")
+        message(WARNING "Git tag '${GIT_TAG}' does not match vMAJOR.MINOR.PATCH; "
+                        "falling back to project() version ${PROJECT_VERSION}.")
     endif()
 endif()
 
