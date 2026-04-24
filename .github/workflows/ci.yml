@@ -36,17 +36,21 @@ jobs:
       shell: pwsh
       run: |
         # Every name in EXPORTS must appear as `SQLRETURN SQL_API <name>(`
-        # somewhere under mock-driver/src/odbc/. This catches exports that
-        # were hand-added to the .def without a matching C++ implementation.
+        # somewhere under mock-driver/src/. This catches exports that were
+        # hand-added to the .def without a matching C++ implementation.
         $defFile = "mock-driver/src/mockodbc.def"
         $exports = Get-Content $defFile |
             Where-Object { $_ -match '^\s{4}SQL[A-Za-z0-9]+\s*$' } |
             ForEach-Object { $_.Trim() }
-        $sources = Get-ChildItem mock-driver/src/odbc -Filter *.cpp -Recurse |
-            Get-Content -Raw
+        # Flatten all source files into one big string so a single regex
+        # hit anywhere is enough. Covers driver/ (SQLAllocHandle etc.) and
+        # odbc/ (the W-variant wrappers in unicode_wrappers.cpp).
+        $sources = (Get-ChildItem mock-driver/src -Filter *.cpp -Recurse |
+            Get-Content -Raw) -join "`n"
         $missing = @()
         foreach ($exp in $exports) {
-            if ($sources -notmatch ("SQLRETURN\s+SQL_API\s+" + [regex]::Escape($exp) + "\s*\(")) {
+            $pattern = "SQLRETURN\s+SQL_API\s+" + [regex]::Escape($exp) + "\s*\("
+            if ($sources -notmatch $pattern) {
                 $missing += $exp
             }
         }
