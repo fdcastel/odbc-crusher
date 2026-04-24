@@ -150,8 +150,83 @@ TEST(ConfigTest, GetIntValue) {
         {"count", "42"},
         {"invalid", "abc"}
     };
-    
+
     EXPECT_EQ(get_int_value(pairs, "count", 0), 42);
     EXPECT_EQ(get_int_value(pairs, "missing", 100), 100);
     EXPECT_EQ(get_int_value(pairs, "invalid", 50), 50);  // Returns default on parse error
+}
+
+// ── Adversarial / edge-case connection strings ─────────────────────────────
+//
+// IMPROVEMENT_PLAN.md §3.7 — the parser is hand-rolled and used to accept
+// plenty of malformed shapes silently. These cases document what the parser
+// does under each malformed input so regressions trip a test.
+
+TEST(ConfigTest, EmbeddedSemicolonInBracedValue) {
+    // A semicolon inside braces must not split the pair.
+    auto pairs = parse_connection_string_pairs(
+        "Driver={Some;Odd;Driver};Mode=Success;");
+    EXPECT_EQ(pairs["driver"], "Some;Odd;Driver");
+    EXPECT_EQ(pairs["mode"], "Success");
+}
+
+TEST(ConfigTest, DoubleEqualsInValue) {
+    // Only the first `=` separates key from value — the rest is part of the value.
+    auto pairs = parse_connection_string_pairs("Password=a=b=c;");
+    EXPECT_EQ(pairs["password"], "a=b=c");
+}
+
+TEST(ConfigTest, EmptyValue) {
+    auto pairs = parse_connection_string_pairs("Key=;Mode=Success;");
+    EXPECT_EQ(pairs["key"], "");
+    EXPECT_EQ(pairs["mode"], "Success");
+}
+
+TEST(ConfigTest, KeyWithoutEquals) {
+    // Malformed fragment without `=` must be silently skipped, not crash.
+    auto pairs = parse_connection_string_pairs("Orphan;Mode=Success;");
+    EXPECT_TRUE(pairs.find("orphan") == pairs.end());
+    EXPECT_EQ(pairs["mode"], "Success");
+}
+
+TEST(ConfigTest, WhitespaceAroundKeyAndValue) {
+    auto pairs = parse_connection_string_pairs("  Mode  =  Success  ;");
+    EXPECT_EQ(pairs["mode"], "Success");
+}
+
+TEST(ConfigTest, UnbalancedOpeningBraceDoesNotCrash) {
+    // Open brace without a matching close: parser must still terminate.
+    auto pairs = parse_connection_string_pairs("Driver={Unterminated;Mode=Success;");
+    // Everything after the `{` is in "brace mode" — the `;` doesn't split.
+    // We don't pin the exact resulting pair, we just guarantee termination.
+    SUCCEED();
+    (void)pairs;
+}
+
+TEST(ConfigTest, RepeatedKeyLastWins) {
+    auto pairs = parse_connection_string_pairs("Mode=Success;Mode=Failure;");
+    EXPECT_EQ(pairs["mode"], "Failure");
+}
+
+TEST(ConfigTest, CaseInsensitiveKey) {
+    auto pairs = parse_connection_string_pairs("MODE=Success;CaTaLoG=Large;");
+    EXPECT_EQ(pairs["mode"], "Success");
+    EXPECT_EQ(pairs["catalog"], "Large");
+}
+
+TEST(ConfigTest, NegativeIntegerValue) {
+    // ResultSetSize=-1 used to round-trip as -1; document current behaviour.
+    DriverConfig config = parse_connection_string("ResultSetSize=-5;");
+    EXPECT_EQ(config.result_set_size, -5);
+}
+
+TEST(ConfigTest, NonNumericIntegerFallsBackToDefault) {
+    DriverConfig config = parse_connection_string("ResultSetSize=not-a-number;");
+    EXPECT_EQ(config.result_set_size, 100);  // default
+}
+
+TEST(ConfigTest, VeryLongValueDoesNotCrash) {
+    std::string long_value(8192, 'x');
+    auto pairs = parse_connection_string_pairs("Key=" + long_value + ";");
+    EXPECT_EQ(pairs["key"].size(), 8192u);
 }
