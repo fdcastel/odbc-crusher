@@ -44,7 +44,8 @@ TEST_F(DataTypeTestsTest, RunFirebirdDataTypeTests) {
         switch (result.status) {
             case tests::TestStatus::PASS: status_str = "PASS ✓"; passed++; break;
             case tests::TestStatus::FAIL: status_str = "FAIL ✗"; failed++; break;
-            case tests::TestStatus::SKIP: status_str = "SKIP -"; skipped++; break;
+            case tests::TestStatus::SKIP_UNSUPPORTED:
+            case tests::TestStatus::SKIP_INCONCLUSIVE: status_str = "SKIP -"; skipped++; break;
             case tests::TestStatus::ERR: status_str = "ERROR!"; errors++; break;
         }
         
@@ -96,7 +97,8 @@ TEST_F(DataTypeTestsTest, RunMySQLDataTypeTests) {
         switch (result.status) {
             case tests::TestStatus::PASS: status_str = "PASS ✓"; break;
             case tests::TestStatus::FAIL: status_str = "FAIL ✗"; break;
-            case tests::TestStatus::SKIP: status_str = "SKIP -"; break;
+            case tests::TestStatus::SKIP_UNSUPPORTED:
+            case tests::TestStatus::SKIP_INCONCLUSIVE: status_str = "SKIP -"; break;
             case tests::TestStatus::ERR: status_str = "ERROR!"; break;
         }
         

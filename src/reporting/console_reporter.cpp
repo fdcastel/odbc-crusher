@@ -18,7 +18,6 @@ void ConsoleReporter::report_category(const std::string& category_name,
         switch (result.status) {
             case tests::TestStatus::PASS: passed++; break;
             case tests::TestStatus::FAIL: failed++; break;
-            case tests::TestStatus::SKIP:
             case tests::TestStatus::SKIP_UNSUPPORTED:
             case tests::TestStatus::SKIP_INCONCLUSIVE: skipped++; break;
             case tests::TestStatus::ERR: errors++; break;
@@ -153,7 +152,6 @@ std::string ConsoleReporter::status_icon(tests::TestStatus status) const {
     switch (status) {
         case tests::TestStatus::PASS: return "[PASS]";
         case tests::TestStatus::FAIL: return "[FAIL]";
-        case tests::TestStatus::SKIP: return "[SKIP]";
         case tests::TestStatus::SKIP_UNSUPPORTED: return "[NOT ]";
         case tests::TestStatus::SKIP_INCONCLUSIVE: return "[ ?? ]";
         case tests::TestStatus::ERR:  return "[ERR!]";

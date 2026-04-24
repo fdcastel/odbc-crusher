@@ -44,7 +44,8 @@ TEST_F(MetadataTestsTest, RunFirebirdMetadataTests) {
         switch (result.status) {
             case tests::TestStatus::PASS: status_str = "PASS ✓"; passed++; break;
             case tests::TestStatus::FAIL: status_str = "FAIL ✗"; failed++; break;
-            case tests::TestStatus::SKIP: status_str = "SKIP -"; skipped++; break;
+            case tests::TestStatus::SKIP_UNSUPPORTED:
+            case tests::TestStatus::SKIP_INCONCLUSIVE: status_str = "SKIP -"; skipped++; break;
             case tests::TestStatus::ERR: status_str = "ERROR!"; errors++; break;
         }
         
@@ -90,15 +91,16 @@ TEST_F(MetadataTestsTest, RunMySQLMetadataTests) {
     for (const auto& result : results) {
         if (result.status == tests::TestStatus::PASS) {
             passed++;
-        } else if (result.status == tests::TestStatus::SKIP) {
+        } else if (tests::is_skipped(result.status)) {
             skipped++;
         }
-        
+
         std::string status_str;
         switch (result.status) {
             case tests::TestStatus::PASS: status_str = "PASS ✓"; break;
             case tests::TestStatus::FAIL: status_str = "FAIL ✗"; break;
-            case tests::TestStatus::SKIP: status_str = "SKIP -"; break;
+            case tests::TestStatus::SKIP_UNSUPPORTED:
+            case tests::TestStatus::SKIP_INCONCLUSIVE: status_str = "SKIP -"; break;
             case tests::TestStatus::ERR: status_str = "ERROR!"; break;
         }
         

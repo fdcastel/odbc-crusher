@@ -14,7 +14,6 @@ enum class TestStatus {
     FAIL,
     SKIP_UNSUPPORTED,   // Driver doesn't support this optional feature
     SKIP_INCONCLUSIVE,  // Test couldn't determine result
-    SKIP,               // Legacy - treated as SKIP_INCONCLUSIVE
     ERR                 // Changed from ERROR to avoid Windows macro conflict
 };
 
@@ -104,16 +103,14 @@ inline const char* status_to_string(TestStatus status) {
         case TestStatus::FAIL: return "FAIL";
         case TestStatus::SKIP_UNSUPPORTED: return "SKIP_UNSUPPORTED";
         case TestStatus::SKIP_INCONCLUSIVE: return "SKIP_INCONCLUSIVE";
-        case TestStatus::SKIP: return "SKIP";
         case TestStatus::ERR: return "ERROR";
         default: return "UNKNOWN";
     }
 }
 
-// True for any SKIP_* variant (including the legacy SKIP alias).
+// True for any SKIP_* variant.
 inline bool is_skipped(TestStatus status) {
-    return status == TestStatus::SKIP
-        || status == TestStatus::SKIP_UNSUPPORTED
+    return status == TestStatus::SKIP_UNSUPPORTED
         || status == TestStatus::SKIP_INCONCLUSIVE;
 }
 
