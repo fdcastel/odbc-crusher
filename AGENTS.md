@@ -38,6 +38,32 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `
 6. Add GTest unit tests in `tests/` and register in `tests/CMakeLists.txt`
 7. Update mock driver if new ODBC functions are exercised
 
+### Preserve the primary exception on rollback-path failure
+
+When a `catch (const OdbcError& e)` block issues a rollback (via
+`SQLEndTran(SQL_HANDLE_DBC, ..., SQL_ROLLBACK)` or the equivalent)
+and the rollback itself fails, **do not let the rollback's
+diagnostics overwrite the original exception**. Capture the primary
+`e.what()` / `e.format_diagnostics()` first, then attempt the
+rollback and append its outcome to a separate diagnostic slot if
+relevant. Typical mistake:
+
+```cpp
+} catch (const core::OdbcError& e) {
+    // BAD: SQLEndTran can throw its own HY010 on a broken txn,
+    // and the new exception hides the real cause (e).
+    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+    throw;
+}
+```
+
+`SQLEndTran` here does not currently throw in the project (we call
+the C API directly), but the same pitfall shows up in any
+driver-caller code where a cleanup step raises after the primary
+error — the rollback's `HY010 "Function sequence error"` is what the
+user then sees, not the underlying SQL error. Root-cause text
+belongs to the first failure, not the cleanup.
+
 ### Adding Dependencies
 
 1. Prefer `FetchContent` for header-only or small libraries
