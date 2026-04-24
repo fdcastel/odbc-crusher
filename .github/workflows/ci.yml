@@ -139,3 +139,39 @@ jobs:
           build/src/Debug/odbc-crusher*
           build/src/odbc-crusher
         if-no-files-found: ignore
+
+  sanitizers:
+    name: ASan + UBSan (Linux Debug)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install ODBC dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y unixodbc unixodbc-dev
+
+    - name: Configure with ASan + UBSan
+      # `-fno-sanitize-recover=all` upgrades UBSan warnings into errors so a
+      # signed overflow or null deref fails CI instead of buried logs.
+      run: |
+        cmake -B build-san -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+          -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
+
+    - name: Build
+      run: cmake --build build-san --config Debug -j 4
+
+    - name: Run unit tests
+      # Mock-driver-backed tests are skipped on Linux anyway (Windows-only
+      # driver), so the value here is in the Debug test harness running under
+      # sanitizers — that covers the core RAII / error-path code.
+      env:
+        ASAN_OPTIONS: detect_leaks=1:symbolize=1:abort_on_error=1
+        UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      run: ctest --test-dir build-san -C Debug --output-on-failure
