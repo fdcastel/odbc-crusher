@@ -5,7 +5,6 @@ add_library(odbc_crusher_core
     odbc_statement.cpp
     odbc_error.cpp
     crash_guard.cpp
-    logger.cpp
 )
 
 target_include_directories(odbc_crusher_core
