@@ -25,13 +25,41 @@ private:
     TestResult test_bindparam_wchar_input();
     TestResult test_bindparam_null_indicator();
     TestResult test_param_rebind_execute();
+
+    // §1.1 — numeric-C → character-SQL round-trip matrix. Integer shapes
+    // share `run_int_to_varchar_roundtrip<CType>`; float shapes use
+    // `run_float_to_varchar_roundtrip<CType>` (numeric tolerance because
+    // drivers format `1.0f` differently — "1", "1.0", "1.000000", "1e0"…).
+    TestResult test_bindparam_short_to_varchar_roundtrip();
     TestResult test_bindparam_int_to_varchar_roundtrip();
+    TestResult test_bindparam_bigint_to_varchar_roundtrip();
+    TestResult test_bindparam_float_to_varchar_roundtrip();
+    TestResult test_bindparam_double_to_varchar_roundtrip();
+
+    // Shared roundtrip helpers — defined in the .cpp; only invoked from this
+    // class's own test methods, so implicit instantiation is sufficient.
+    template <typename CType>
+    TestResult run_int_to_varchar_roundtrip(
+        const std::string& test_name,
+        SQLSMALLINT c_type_id,
+        const std::string& c_type_name);
+
+    template <typename CType>
+    TestResult run_float_to_varchar_roundtrip(
+        const std::string& test_name,
+        SQLSMALLINT c_type_id,
+        const std::string& c_type_name);
+
     TestResult test_sqldescribeparam_varchar();
+    TestResult test_sqldescribeparam_integer();
+
     TestResult test_sqlrowcount_after_insert();
     TestResult test_sqlrowcount_after_update();
     TestResult test_sqlrowcount_after_delete();
+
     TestResult test_param_rebind_per_row_row_count();
     TestResult test_param_bind_once_execute_many_row_count();
+    TestResult test_param_reexecute_requires_close();
     TestResult test_param_batch_then_single_row_tail();
 };
 
