@@ -166,16 +166,15 @@ jobs:
       if: runner.os != 'Windows' && matrix.build_type == 'Release'
       shell: bash
       run: |
-        # Debug: verify odbcinst is where we expect.
-        echo "=== odbcinst lookup debug ==="
-        which odbcinst || echo "which: not found"
-        ls -la /usr/bin/odbcinst /opt/homebrew/bin/odbcinst /usr/local/bin/odbcinst 2>&1 || true
-        sudo which odbcinst || echo "sudo which: not found"
-        echo "--- dpkg -L unixodbc ---"
-        dpkg -L unixodbc 2>&1 | head -30 || echo "dpkg failed"
-        echo "--- find odbcinst ---"
-        sudo find / -name 'odbcinst*' -type f 2>/dev/null | head -10 || true
-        echo "============================"
+        # Re-ensure odbcinst is present. The earlier "Install ODBC
+        # dependencies (Ubuntu)" step's `unixodbc` package gets removed
+        # somewhere between that step and this one on the GitHub
+        # ubuntu-latest image (likely an apt autoremove triggered by a
+        # subsequent step that pulls a conflicting dep). Re-install
+        # here defensively — it's cheap and idempotent.
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          sudo apt-get install -y --no-install-recommends unixodbc
+        fi
 
         # Linux generates libmockodbc.so directly under build/ (single-
         # config Make/Ninja); macOS generates libmockodbc.dylib in the
