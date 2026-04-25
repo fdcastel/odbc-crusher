@@ -118,20 +118,12 @@ void ParameterBindingTests::drop_roundtrip_table(const std::string& table_name) 
 }
 
 TestResult ParameterBindingTests::test_bindparam_wchar_input() {
-    TestResult result = make_result(
-        "test_bindparam_wchar_input",
-        "SQLBindParameter",
-        TestStatus::PASS,
+    return run_test(
+        "test_bindparam_wchar_input", "SQLBindParameter",
         "SQLBindParameter with SQL_C_WCHAR input type accepts Unicode data",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLBindParameter: SQL_C_WCHAR for Unicode parameter data"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter: SQL_C_WCHAR for Unicode parameter data",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         
         // Prepare a parameterized query — try multiple patterns
@@ -159,11 +151,9 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
         }
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare parameterized query";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare parameterized query";
+            return;
         }
         
         // Bind a Unicode string parameter
@@ -188,38 +178,20 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
             }
         } else {
             actual << "SQLBindParameter with SQL_C_WCHAR returned " << ret;
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "Driver may not support SQL_C_WCHAR parameter binding";
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.suggestion = "Driver may not support SQL_C_WCHAR parameter binding";
         }
-        result.actual = actual.str();
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        r.actual = actual.str();
+        });
 }
 
 TestResult ParameterBindingTests::test_bindparam_null_indicator() {
-    TestResult result = make_result(
-        "test_bindparam_null_indicator",
-        "SQLBindParameter",
-        TestStatus::PASS,
+    return run_test(
+        "test_bindparam_null_indicator", "SQLBindParameter",
         "SQLBindParameter with SQL_NULL_DATA indicator passes NULL to driver",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLBindParameter: SQL_NULL_DATA in StrLen_or_IndPtr for NULL"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter: SQL_NULL_DATA in StrLen_or_IndPtr for NULL",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         
         std::vector<std::string> queries = {
@@ -245,11 +217,9 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
         }
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare query for NULL parameter test";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare query for NULL parameter test";
+            return;
         }
         
         // Bind with SQL_NULL_DATA indicator
@@ -268,38 +238,20 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
             actual << "; execute returned " << exec_ret;
         } else {
             actual << "SQLBindParameter with NULL indicator returned " << ret;
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Drivers must accept SQL_NULL_DATA as parameter indicator";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Drivers must accept SQL_NULL_DATA as parameter indicator";
         }
-        result.actual = actual.str();
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        r.actual = actual.str();
+        });
 }
 
 TestResult ParameterBindingTests::test_param_rebind_execute() {
-    TestResult result = make_result(
-        "test_param_rebind_execute",
-        "SQLBindParameter",
-        TestStatus::PASS,
+    return run_test(
+        "test_param_rebind_execute", "SQLBindParameter",
         "Bind, execute, rebind with new value, execute again",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLBindParameter: Parameters persist across executions"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter: Parameters persist across executions",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         
         std::vector<std::string> queries = {
@@ -325,11 +277,9 @@ TestResult ParameterBindingTests::test_param_rebind_execute() {
         }
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare query for rebind test";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare query for rebind test";
+            return;
         }
         
         // First bind and execute
@@ -340,11 +290,9 @@ TestResult ParameterBindingTests::test_param_rebind_execute() {
             0, 0, &param_val, 0, &ind);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not bind first parameter";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not bind first parameter";
+            return;
         }
         
         SQLRETURN exec1 = SQLExecute(stmt.get_handle());
@@ -358,26 +306,16 @@ TestResult ParameterBindingTests::test_param_rebind_execute() {
         
         std::ostringstream actual;
         actual << "First execute: " << exec1 << "; Rebind + second execute: " << exec2;
-        result.actual = actual.str();
+        r.actual = actual.str();
         
         if (!SQL_SUCCEEDED(exec1) && !SQL_SUCCEEDED(exec2)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "Neither execution succeeded; driver may not support parameterized queries";
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.suggestion = "Neither execution succeeded; driver may not support parameterized queries";
         } else if (SQL_SUCCEEDED(exec1) && !SQL_SUCCEEDED(exec2)) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Second execute after rebind should succeed if first did";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Second execute after rebind should succeed if first did";
         }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-
-    return result;
+        });
 }
 
 // ── §1.1 numeric-C → character-SQL round-trip helpers ────────────────────

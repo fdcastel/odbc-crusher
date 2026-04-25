@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/odbc_connection.hpp"
+#include "core/odbc_error.hpp"
 #include <string>
 #include <vector>
 #include <chrono>
@@ -92,6 +93,52 @@ protected:
         func();
         auto end = std::chrono::high_resolution_clock::now();
         return std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    }
+
+    // Run a single test method. Wraps the body in (a) timing,
+    // (b) make_result for the metadata, and (c) a catch for OdbcError that
+    // would otherwise unwind out of the category. The body is a callable
+    // taking `TestResult&` — it mutates `r.status`, `r.actual`, etc., and
+    // may early-`return;` to short-circuit. By default an uncaught
+    // OdbcError becomes an ERR (test infrastructure problem); pass
+    // `TestStatus::FAIL` for tests where a thrown error means the driver
+    // failed the probe.
+    //
+    // Replaces the ~10 lines of make_result + start_time + try/catch +
+    // duration_cast that used to wrap every test.
+    template <typename Func>
+    TestResult run_test(
+        const std::string& test_name,
+        const std::string& function,
+        const std::string& expected,
+        Severity severity,
+        ConformanceLevel conformance,
+        const std::string& spec_reference,
+        Func&& body,
+        TestStatus on_odbc_error = TestStatus::ERR
+    ) {
+        TestResult result = make_result(test_name, function, TestStatus::PASS,
+                                        expected, "", severity, conformance,
+                                        spec_reference);
+        auto start = std::chrono::high_resolution_clock::now();
+        try {
+            body(result);
+        } catch (const core::OdbcError& e) {
+            result.status = on_odbc_error;
+            result.actual = e.what();
+            result.diagnostic = e.format_diagnostics();
+            if (on_odbc_error == TestStatus::FAIL && severity > Severity::ERR) {
+                // ERR severity is the convention when an OdbcError breaks
+                // a passing-by-default test — upgrade INFO/WARNING that
+                // the metadata defaulted to without losing CRITICAL/ERR
+                // when the caller deliberately chose those.
+                result.severity = Severity::ERR;
+            }
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        result.duration =
+            std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        return result;
     }
 
     // Verify that rows written by the test actually made it to storage.

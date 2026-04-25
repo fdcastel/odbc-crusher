@@ -6,15 +6,13 @@
 namespace odbc_crusher::tests {
 
 std::vector<TestResult> TransactionTests::run() {
-    std::vector<TestResult> results;
-    
-    results.push_back(test_autocommit_on());
-    results.push_back(test_autocommit_off());
-    results.push_back(test_manual_commit());
-    results.push_back(test_manual_rollback());
-    results.push_back(test_transaction_isolation_levels());
-    
-    return results;
+    return {
+        test_autocommit_on(),
+        test_autocommit_off(),
+        test_manual_commit(),
+        test_manual_rollback(),
+        test_transaction_isolation_levels()
+    };
 }
 
 bool TransactionTests::create_test_table() {
@@ -48,7 +46,7 @@ bool TransactionTests::create_test_table() {
             "CREATE TABLE ODBC_TEST_TXN (ID INTEGER, VAL VARCHAR(50))",
             "CREATE TABLE ODBC_TEST_TXN (ID INT, VAL VARCHAR(50))"
         };
-        
+
         // Attempt 1: try CREATE directly
         for (const auto& query : create_queries) {
             try {
@@ -64,7 +62,7 @@ bool TransactionTests::create_test_table() {
                 continue;
             }
         }
-        
+
         // Attempt 2: table probably exists — DROP then re-CREATE
         try {
             core::OdbcStatement drop_stmt(conn_);
@@ -72,7 +70,7 @@ bool TransactionTests::create_test_table() {
         } catch (...) {
             SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
         }
-        
+
         for (const auto& query : create_queries) {
             try {
                 core::OdbcStatement create_stmt(conn_);
@@ -86,7 +84,7 @@ bool TransactionTests::create_test_table() {
                 continue;
             }
         }
-        
+
         SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                           (SQLPOINTER)(intptr_t)old_ac, 0);
         return false;
@@ -109,432 +107,356 @@ void TransactionTests::drop_test_table() {
 }
 
 TestResult TransactionTests::test_autocommit_on() {
-    TestResult result = make_result(
-        "test_autocommit_on",
-        "SQLGetConnectAttr(SQL_ATTR_AUTOCOMMIT)",
-        TestStatus::PASS,
+    return run_test(
+        "test_autocommit_on", "SQLGetConnectAttr(SQL_ATTR_AUTOCOMMIT)",
         "Autocommit mode should be ON by default",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLGetConnectAttr"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        SQLUINTEGER autocommit = 0;
-        SQLRETURN ret = SQLGetConnectAttr(
-            conn_.get_handle(),
-            SQL_ATTR_AUTOCOMMIT,
-            &autocommit,
-            0,
-            nullptr
-        );
-        
-        if (SQL_SUCCEEDED(ret)) {
-            if (autocommit == SQL_AUTOCOMMIT_ON) {
-                result.actual = "Autocommit is ON (default)";
-                result.status = TestStatus::PASS;
-            } else {
-                result.actual = "Autocommit is OFF (unexpected default)";
-                result.status = TestStatus::FAIL;
-            }
-        } else {
-            result.actual = "Could not query autocommit mode";
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "SQLGetConnectAttr for SQL_ATTR_AUTOCOMMIT did not succeed";
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
-}
-
-TestResult TransactionTests::test_autocommit_off() {
-    TestResult result = make_result(
-        "test_autocommit_off",
-        "SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)",
-        TestStatus::PASS,
-        "Can disable autocommit mode",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLSetConnectAttr"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        // Turn off autocommit
-        SQLRETURN ret = SQLSetConnectAttr(
-            conn_.get_handle(),
-            SQL_ATTR_AUTOCOMMIT,
-            (SQLPOINTER)SQL_AUTOCOMMIT_OFF,
-            0
-        );
-        
-        if (SQL_SUCCEEDED(ret)) {
-            // Verify it's off
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetConnectAttr",
+        [&](TestResult& r) {
             SQLUINTEGER autocommit = 0;
-            ret = SQLGetConnectAttr(
+            SQLRETURN ret = SQLGetConnectAttr(
                 conn_.get_handle(),
                 SQL_ATTR_AUTOCOMMIT,
                 &autocommit,
                 0,
                 nullptr
             );
-            
-            if (SQL_SUCCEEDED(ret) && autocommit == SQL_AUTOCOMMIT_OFF) {
-                result.actual = "Successfully disabled autocommit";
-                result.status = TestStatus::PASS;
-                
-                // Turn it back on for other tests
-                SQLSetConnectAttr(
+
+            if (SQL_SUCCEEDED(ret)) {
+                if (autocommit == SQL_AUTOCOMMIT_ON) {
+                    r.actual = "Autocommit is ON (default)";
+                    r.status = TestStatus::PASS;
+                } else {
+                    r.actual = "Autocommit is OFF (unexpected default)";
+                    r.status = TestStatus::FAIL;
+                }
+            } else {
+                r.actual = "Could not query autocommit mode";
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion = "SQLGetConnectAttr for SQL_ATTR_AUTOCOMMIT did not succeed";
+            }
+        });
+}
+
+TestResult TransactionTests::test_autocommit_off() {
+    return run_test(
+        "test_autocommit_off", "SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)",
+        "Can disable autocommit mode",
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLSetConnectAttr",
+        [&](TestResult& r) {
+            try {
+                // Turn off autocommit
+                SQLRETURN ret = SQLSetConnectAttr(
                     conn_.get_handle(),
                     SQL_ATTR_AUTOCOMMIT,
-                    (SQLPOINTER)SQL_AUTOCOMMIT_ON,
+                    (SQLPOINTER)SQL_AUTOCOMMIT_OFF,
                     0
                 );
-            } else {
-                result.actual = "Autocommit mode did not change";
-                result.status = TestStatus::FAIL;
+
+                if (SQL_SUCCEEDED(ret)) {
+                    // Verify it's off
+                    SQLUINTEGER autocommit = 0;
+                    ret = SQLGetConnectAttr(
+                        conn_.get_handle(),
+                        SQL_ATTR_AUTOCOMMIT,
+                        &autocommit,
+                        0,
+                        nullptr
+                    );
+
+                    if (SQL_SUCCEEDED(ret) && autocommit == SQL_AUTOCOMMIT_OFF) {
+                        r.actual = "Successfully disabled autocommit";
+                        r.status = TestStatus::PASS;
+
+                        // Turn it back on for other tests
+                        SQLSetConnectAttr(
+                            conn_.get_handle(),
+                            SQL_ATTR_AUTOCOMMIT,
+                            (SQLPOINTER)SQL_AUTOCOMMIT_ON,
+                            0
+                        );
+                    } else {
+                        r.actual = "Autocommit mode did not change";
+                        r.status = TestStatus::FAIL;
+                    }
+                } else {
+                    r.actual = "SQLSetConnectAttr for autocommit not supported";
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.suggestion = "Driver did not accept SQL_ATTR_AUTOCOMMIT change";
+                }
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::ERR;
+                r.actual = e.what();
+                r.diagnostic = e.format_diagnostics();
+
+                // Try to restore autocommit
+                try {
+                    SQLSetConnectAttr(
+                        conn_.get_handle(),
+                        SQL_ATTR_AUTOCOMMIT,
+                        (SQLPOINTER)SQL_AUTOCOMMIT_ON,
+                        0
+                    );
+                } catch (...) {}
             }
-        } else {
-            result.actual = "SQLSetConnectAttr for autocommit not supported";
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "Driver did not accept SQL_ATTR_AUTOCOMMIT change";
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-        
-        // Try to restore autocommit
-        try {
-            SQLSetConnectAttr(
-                conn_.get_handle(),
-                SQL_ATTR_AUTOCOMMIT,
-                (SQLPOINTER)SQL_AUTOCOMMIT_ON,
-                0
-            );
-        } catch (...) {}
-    }
-    
-    return result;
+        });
 }
 
 TestResult TransactionTests::test_manual_commit() {
-    TestResult result = make_result(
-        "test_manual_commit",
-        "SQLEndTran(SQL_COMMIT)",
-        TestStatus::PASS,
+    return run_test(
+        "test_manual_commit", "SQLEndTran(SQL_COMMIT)",
         "Can manually commit a transaction",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLEndTran"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        // Turn off autocommit
-        SQLRETURN ret = SQLSetConnectAttr(
-            conn_.get_handle(),
-            SQL_ATTR_AUTOCOMMIT,
-            (SQLPOINTER)SQL_AUTOCOMMIT_OFF,
-            0
-        );
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            result.actual = "Cannot disable autocommit for manual transaction test";
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "Could not disable autocommit to test manual commit";
-        } else {
-            // Create test table
-            if (!create_test_table()) {
-                // DDL-free fallback: verify SQLEndTran(COMMIT) is callable even
-                // without a test table.  This proves the driver's transaction API
-                // works, though we can't verify data persistence.
-                SQLRETURN commit_ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
-                if (SQL_SUCCEEDED(commit_ret)) {
-                    result.actual = "SQLEndTran(SQL_COMMIT) succeeded (DDL-free fallback; "
-                                   "could not create test table for full data persistence test)";
-                    result.status = TestStatus::PASS;
-                    if (!last_ddl_error_.empty()) {
-                        result.suggestion = "CREATE TABLE failed: " + last_ddl_error_ +
-                                          ". Ensure the connected user has CREATE TABLE privileges "
-                                          "for the full transaction commit test.";
-                    } else {
-                        result.suggestion = "Test table creation failed; ensure the connected user "
-                                          "has CREATE TABLE privileges for the full test.";
-                    }
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLEndTran",
+        [&](TestResult& r) {
+            try {
+                // Turn off autocommit
+                SQLRETURN ret = SQLSetConnectAttr(
+                    conn_.get_handle(),
+                    SQL_ATTR_AUTOCOMMIT,
+                    (SQLPOINTER)SQL_AUTOCOMMIT_OFF,
+                    0
+                );
+
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.actual = "Cannot disable autocommit for manual transaction test";
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.suggestion = "Could not disable autocommit to test manual commit";
                 } else {
-                    result.actual = "Could not create test table and SQLEndTran(COMMIT) failed";
-                    result.status = TestStatus::SKIP_INCONCLUSIVE;
-                    if (!last_ddl_error_.empty()) {
-                        result.suggestion = "CREATE TABLE failed: " + last_ddl_error_;
-                    } else {
-                        result.suggestion = "Test table creation failed; manual commit test could not run";
-                    }
-                }
-                
-                // Restore autocommit
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
-            } else {
-                // Insert data
-                core::OdbcStatement stmt(conn_);
-                stmt.execute("INSERT INTO ODBC_TEST_TXN (ID, VAL) VALUES (1, 'test')");
-                
-                // Commit
-                ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
-                
-                if (SQL_SUCCEEDED(ret)) {
-                    // Verify data exists
-                    stmt.execute("SELECT COUNT(*) FROM ODBC_TEST_TXN");
-                    if (stmt.fetch()) {
-                        SQLINTEGER count = 0;
-                        SQLLEN indicator = 0;
-                        SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                  &count, sizeof(count), &indicator);
-                        
-                        if (count == 1) {
-                            result.actual = "Transaction committed successfully";
-                            result.status = TestStatus::PASS;
+                    // Create test table
+                    if (!create_test_table()) {
+                        // DDL-free fallback: verify SQLEndTran(COMMIT) is callable even
+                        // without a test table.  This proves the driver's transaction API
+                        // works, though we can't verify data persistence.
+                        SQLRETURN commit_ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+                        if (SQL_SUCCEEDED(commit_ret)) {
+                            r.actual = "SQLEndTran(SQL_COMMIT) succeeded (DDL-free fallback; "
+                                           "could not create test table for full data persistence test)";
+                            r.status = TestStatus::PASS;
+                            if (!last_ddl_error_.empty()) {
+                                r.suggestion = "CREATE TABLE failed: " + last_ddl_error_ +
+                                                  ". Ensure the connected user has CREATE TABLE privileges "
+                                                  "for the full transaction commit test.";
+                            } else {
+                                r.suggestion = "Test table creation failed; ensure the connected user "
+                                                  "has CREATE TABLE privileges for the full test.";
+                            }
                         } else {
-                            result.actual = "Data not committed";
-                            result.status = TestStatus::FAIL;
+                            r.actual = "Could not create test table and SQLEndTran(COMMIT) failed";
+                            r.status = TestStatus::SKIP_INCONCLUSIVE;
+                            if (!last_ddl_error_.empty()) {
+                                r.suggestion = "CREATE TABLE failed: " + last_ddl_error_;
+                            } else {
+                                r.suggestion = "Test table creation failed; manual commit test could not run";
+                            }
                         }
+
+                        // Restore autocommit
+                        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                        (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+                    } else {
+                        // Insert data
+                        core::OdbcStatement stmt(conn_);
+                        stmt.execute("INSERT INTO ODBC_TEST_TXN (ID, VAL) VALUES (1, 'test')");
+
+                        // Commit
+                        ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+                        if (SQL_SUCCEEDED(ret)) {
+                            // Verify data exists
+                            stmt.execute("SELECT COUNT(*) FROM ODBC_TEST_TXN");
+                            if (stmt.fetch()) {
+                                SQLINTEGER count = 0;
+                                SQLLEN indicator = 0;
+                                SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                          &count, sizeof(count), &indicator);
+
+                                if (count == 1) {
+                                    r.actual = "Transaction committed successfully";
+                                    r.status = TestStatus::PASS;
+                                } else {
+                                    r.actual = "Data not committed";
+                                    r.status = TestStatus::FAIL;
+                                }
+                            }
+                        } else {
+                            r.actual = "SQLEndTran(COMMIT) failed";
+                            r.status = TestStatus::FAIL;
+                        }
+
+                        // Cleanup
+                        drop_test_table();
+
+                        // Restore autocommit
+                        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                        (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
                     }
-                } else {
-                    result.actual = "SQLEndTran(COMMIT) failed";
-                    result.status = TestStatus::FAIL;
                 }
-                
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::ERR;
+                r.actual = e.what();
+                r.diagnostic = e.format_diagnostics();
+
                 // Cleanup
-                drop_test_table();
-                
-                // Restore autocommit
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+                try {
+                    drop_test_table();
+                    SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                    (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+                } catch (...) {}
             }
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-        
-        // Cleanup
-        try {
-            drop_test_table();
-            SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                            (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
-        } catch (...) {}
-    }
-    
-    return result;
+        });
 }
 
 TestResult TransactionTests::test_manual_rollback() {
-    TestResult result = make_result(
-        "test_manual_rollback",
-        "SQLEndTran(SQL_ROLLBACK)",
-        TestStatus::PASS,
+    return run_test(
+        "test_manual_rollback", "SQLEndTran(SQL_ROLLBACK)",
         "Can manually rollback a transaction",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLEndTran"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        // Turn off autocommit
-        SQLRETURN ret = SQLSetConnectAttr(
-            conn_.get_handle(),
-            SQL_ATTR_AUTOCOMMIT,
-            (SQLPOINTER)SQL_AUTOCOMMIT_OFF,
-            0
-        );
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            result.actual = "Cannot disable autocommit for rollback test";
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "Could not disable autocommit to test manual rollback";
-        } else {
-            // Create test table
-            if (!create_test_table()) {
-                // DDL-free fallback: verify SQLEndTran(ROLLBACK) is callable even
-                // without a test table.  This proves the driver's transaction API
-                // works, though we can't verify data rollback.
-                SQLRETURN rb_ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-                if (SQL_SUCCEEDED(rb_ret)) {
-                    result.actual = "SQLEndTran(SQL_ROLLBACK) succeeded (DDL-free fallback; "
-                                   "could not create test table for full data rollback test)";
-                    result.status = TestStatus::PASS;
-                    if (!last_ddl_error_.empty()) {
-                        result.suggestion = "CREATE TABLE failed: " + last_ddl_error_ +
-                                          ". Ensure the connected user has CREATE TABLE privileges "
-                                          "for the full transaction rollback test.";
-                    } else {
-                        result.suggestion = "Test table creation failed; ensure the connected user "
-                                          "has CREATE TABLE privileges for the full test.";
-                    }
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLEndTran",
+        [&](TestResult& r) {
+            try {
+                // Turn off autocommit
+                SQLRETURN ret = SQLSetConnectAttr(
+                    conn_.get_handle(),
+                    SQL_ATTR_AUTOCOMMIT,
+                    (SQLPOINTER)SQL_AUTOCOMMIT_OFF,
+                    0
+                );
+
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.actual = "Cannot disable autocommit for rollback test";
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.suggestion = "Could not disable autocommit to test manual rollback";
                 } else {
-                    result.actual = "Could not create test table and SQLEndTran(ROLLBACK) failed";
-                    result.status = TestStatus::SKIP_INCONCLUSIVE;
-                    if (!last_ddl_error_.empty()) {
-                        result.suggestion = "CREATE TABLE failed: " + last_ddl_error_;
-                    } else {
-                        result.suggestion = "Test table creation failed; rollback test could not run";
-                    }
-                }
-                
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
-            } else {
-                // Commit the CREATE TABLE
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
-                
-                // Insert data
-                core::OdbcStatement stmt(conn_);
-                stmt.execute("INSERT INTO ODBC_TEST_TXN (ID, VAL) VALUES (1, 'should_rollback')");
-                
-                // Rollback
-                ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-                
-                if (SQL_SUCCEEDED(ret)) {
-                    // Verify data does NOT exist
-                    stmt.execute("SELECT COUNT(*) FROM ODBC_TEST_TXN");
-                    if (stmt.fetch()) {
-                        SQLINTEGER count = 0;
-                        SQLLEN indicator = 0;
-                        SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                  &count, sizeof(count), &indicator);
-                        
-                        if (count == 0) {
-                            result.actual = "Transaction rolled back successfully";
-                            result.status = TestStatus::PASS;
+                    // Create test table
+                    if (!create_test_table()) {
+                        // DDL-free fallback: verify SQLEndTran(ROLLBACK) is callable even
+                        // without a test table.  This proves the driver's transaction API
+                        // works, though we can't verify data rollback.
+                        SQLRETURN rb_ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+                        if (SQL_SUCCEEDED(rb_ret)) {
+                            r.actual = "SQLEndTran(SQL_ROLLBACK) succeeded (DDL-free fallback; "
+                                           "could not create test table for full data rollback test)";
+                            r.status = TestStatus::PASS;
+                            if (!last_ddl_error_.empty()) {
+                                r.suggestion = "CREATE TABLE failed: " + last_ddl_error_ +
+                                                  ". Ensure the connected user has CREATE TABLE privileges "
+                                                  "for the full transaction rollback test.";
+                            } else {
+                                r.suggestion = "Test table creation failed; ensure the connected user "
+                                                  "has CREATE TABLE privileges for the full test.";
+                            }
                         } else {
-                            result.actual = "Data was not rolled back";
-                            result.status = TestStatus::FAIL;
+                            r.actual = "Could not create test table and SQLEndTran(ROLLBACK) failed";
+                            r.status = TestStatus::SKIP_INCONCLUSIVE;
+                            if (!last_ddl_error_.empty()) {
+                                r.suggestion = "CREATE TABLE failed: " + last_ddl_error_;
+                            } else {
+                                r.suggestion = "Test table creation failed; rollback test could not run";
+                            }
                         }
+
+                        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                        (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+                    } else {
+                        // Commit the CREATE TABLE
+                        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+                        // Insert data
+                        core::OdbcStatement stmt(conn_);
+                        stmt.execute("INSERT INTO ODBC_TEST_TXN (ID, VAL) VALUES (1, 'should_rollback')");
+
+                        // Rollback
+                        ret = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+
+                        if (SQL_SUCCEEDED(ret)) {
+                            // Verify data does NOT exist
+                            stmt.execute("SELECT COUNT(*) FROM ODBC_TEST_TXN");
+                            if (stmt.fetch()) {
+                                SQLINTEGER count = 0;
+                                SQLLEN indicator = 0;
+                                SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                          &count, sizeof(count), &indicator);
+
+                                if (count == 0) {
+                                    r.actual = "Transaction rolled back successfully";
+                                    r.status = TestStatus::PASS;
+                                } else {
+                                    r.actual = "Data was not rolled back";
+                                    r.status = TestStatus::FAIL;
+                                }
+                            }
+                        } else {
+                            r.actual = "SQLEndTran(ROLLBACK) failed";
+                            r.status = TestStatus::FAIL;
+                        }
+
+                        // Cleanup
+                        drop_test_table();
+
+                        // Restore autocommit
+                        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                        (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
                     }
-                } else {
-                    result.actual = "SQLEndTran(ROLLBACK) failed";
-                    result.status = TestStatus::FAIL;
                 }
-                
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::ERR;
+                r.actual = e.what();
+                r.diagnostic = e.format_diagnostics();
+
                 // Cleanup
-                drop_test_table();
-                
-                // Restore autocommit
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+                try {
+                    drop_test_table();
+                    SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                    (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+                } catch (...) {}
             }
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-        
-        // Cleanup
-        try {
-            drop_test_table();
-            SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                            (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
-        } catch (...) {}
-    }
-    
-    return result;
+        });
 }
 
 TestResult TransactionTests::test_transaction_isolation_levels() {
-    TestResult result = make_result(
-        "test_transaction_isolation_levels",
-        "SQLSetConnectAttr(SQL_ATTR_TXN_ISOLATION)",
-        TestStatus::PASS,
+    return run_test(
+        "test_transaction_isolation_levels", "SQLSetConnectAttr(SQL_ATTR_TXN_ISOLATION)",
         "Can query and set transaction isolation levels",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLSetConnectAttr, SQL_ATTR_TXN_ISOLATION"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        // Get current isolation level
-        SQLUINTEGER isolation = 0;
-        SQLRETURN ret = SQLGetConnectAttr(
-            conn_.get_handle(),
-            SQL_ATTR_TXN_ISOLATION,
-            &isolation,
-            0,
-            nullptr
-        );
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            result.actual = "Transaction isolation level query not supported";
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.suggestion = "Driver does not support querying SQL_ATTR_TXN_ISOLATION";
-        } else {
-            std::ostringstream oss;
-            oss << "Current isolation: ";
-            
-            switch (isolation) {
-                case SQL_TXN_READ_UNCOMMITTED:
-                    oss << "READ UNCOMMITTED";
-                    break;
-                case SQL_TXN_READ_COMMITTED:
-                    oss << "READ COMMITTED";
-                    break;
-                case SQL_TXN_REPEATABLE_READ:
-                    oss << "REPEATABLE READ";
-                    break;
-                case SQL_TXN_SERIALIZABLE:
-                    oss << "SERIALIZABLE";
-                    break;
-                default:
-                    oss << "Unknown (" << isolation << ")";
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLSetConnectAttr, SQL_ATTR_TXN_ISOLATION",
+        [&](TestResult& r) {
+            // Get current isolation level
+            SQLUINTEGER isolation = 0;
+            SQLRETURN ret = SQLGetConnectAttr(
+                conn_.get_handle(),
+                SQL_ATTR_TXN_ISOLATION,
+                &isolation,
+                0,
+                nullptr
+            );
+
+            if (!SQL_SUCCEEDED(ret)) {
+                r.actual = "Transaction isolation level query not supported";
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.suggestion = "Driver does not support querying SQL_ATTR_TXN_ISOLATION";
+            } else {
+                std::ostringstream oss;
+                oss << "Current isolation: ";
+
+                switch (isolation) {
+                    case SQL_TXN_READ_UNCOMMITTED:
+                        oss << "READ UNCOMMITTED";
+                        break;
+                    case SQL_TXN_READ_COMMITTED:
+                        oss << "READ COMMITTED";
+                        break;
+                    case SQL_TXN_REPEATABLE_READ:
+                        oss << "REPEATABLE READ";
+                        break;
+                    case SQL_TXN_SERIALIZABLE:
+                        oss << "SERIALIZABLE";
+                        break;
+                    default:
+                        oss << "Unknown (" << isolation << ")";
+                }
+
+                r.actual = oss.str();
+                r.status = TestStatus::PASS;
             }
-            
-            result.actual = oss.str();
-            result.status = TestStatus::PASS;
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 } // namespace odbc_crusher::tests

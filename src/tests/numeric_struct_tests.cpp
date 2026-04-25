@@ -8,14 +8,12 @@
 namespace odbc_crusher::tests {
 
 std::vector<TestResult> NumericStructTests::run() {
-    std::vector<TestResult> results;
-
-    results.push_back(test_numeric_struct_binding());
-    results.push_back(test_numeric_struct_precision_scale());
-    results.push_back(test_numeric_positive_negative());
-    results.push_back(test_numeric_zero_and_extremes());
-
-    return results;
+    return {
+        test_numeric_struct_binding(),
+        test_numeric_struct_precision_scale(),
+        test_numeric_positive_negative(),
+        test_numeric_zero_and_extremes()
+    };
 }
 
 // Helper: convert SQL_NUMERIC_STRUCT val[] to double
@@ -50,333 +48,233 @@ static bool set_numeric_descriptor(SQLHSTMT hstmt, SQLSMALLINT col,
 }
 
 TestResult NumericStructTests::test_numeric_struct_binding() {
-    TestResult result = make_result(
-        "test_numeric_struct_binding",
-        "SQLGetData(SQL_C_NUMERIC)",
-        TestStatus::PASS,
+    return run_test(
+        "test_numeric_struct_binding", "SQLGetData(SQL_C_NUMERIC)",
         "Can retrieve a numeric value as SQL_C_NUMERIC struct",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8, SQL_C_NUMERIC"
-    );
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8, SQL_C_NUMERIC",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            stmt.execute("SELECT 12345");
 
-    try {
-        auto start = std::chrono::high_resolution_clock::now();
-
-        core::OdbcStatement stmt(conn_);
-        stmt.execute("SELECT 12345");
-
-        SQLRETURN ret = SQLFetch(stmt.get_handle());
-        if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::FAIL;
-            result.actual = "SQLFetch failed";
-            auto end = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-            return result;
-        }
-
-        SQL_NUMERIC_STRUCT ns;
-        std::memset(&ns, 0, sizeof(ns));
-        SQLLEN ind = 0;
-
-        // Set ARD descriptor precision/scale (required by ODBC spec for SQL_C_NUMERIC)
-        set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
-
-        ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
-
-        if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "SQLGetData with SQL_C_NUMERIC not supported";
-            result.suggestion = "Driver does not support SQL_C_NUMERIC target type";
-        } else {
-            double val = numeric_struct_to_double(ns);
-            if (std::abs(val - 12345.0) < 0.01) {
-                result.actual = "Retrieved 12345 as SQL_NUMERIC_STRUCT: precision="
-                              + std::to_string(ns.precision)
-                              + ", scale=" + std::to_string(ns.scale)
-                              + ", sign=" + std::to_string(ns.sign);
-            } else {
-                result.status = TestStatus::FAIL;
-                result.actual = "Expected 12345, got " + std::to_string(val);
-                result.severity = Severity::WARNING;
+            SQLRETURN ret = SQLFetch(stmt.get_handle());
+            if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLFetch failed";
+                return;
             }
-        }
 
-        auto end = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
+            SQL_NUMERIC_STRUCT ns;
+            std::memset(&ns, 0, sizeof(ns));
+            SQLLEN ind = 0;
 
-    return result;
+            // Set ARD descriptor precision/scale (required by ODBC spec for SQL_C_NUMERIC)
+            set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
+
+            ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
+
+            if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "SQLGetData with SQL_C_NUMERIC not supported";
+                r.suggestion = "Driver does not support SQL_C_NUMERIC target type";
+            } else {
+                double val = numeric_struct_to_double(ns);
+                if (std::abs(val - 12345.0) < 0.01) {
+                    r.actual = "Retrieved 12345 as SQL_NUMERIC_STRUCT: precision="
+                                  + std::to_string(ns.precision)
+                                  + ", scale=" + std::to_string(ns.scale)
+                                  + ", sign=" + std::to_string(ns.sign);
+                } else {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "Expected 12345, got " + std::to_string(val);
+                    r.severity = Severity::WARNING;
+                }
+            }
+        });
 }
 
 TestResult NumericStructTests::test_numeric_struct_precision_scale() {
-    TestResult result = make_result(
-        "test_numeric_struct_precision_scale",
-        "SQLGetData(SQL_C_NUMERIC)",
-        TestStatus::PASS,
+    return run_test(
+        "test_numeric_struct_precision_scale", "SQLGetData(SQL_C_NUMERIC)",
         "SQL_NUMERIC_STRUCT precision and scale are correct for decimal values",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8, SQL_C_NUMERIC"
-    );
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8, SQL_C_NUMERIC",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            stmt.execute("SELECT 123.45");
 
-    try {
-        auto start = std::chrono::high_resolution_clock::now();
-
-        core::OdbcStatement stmt(conn_);
-        stmt.execute("SELECT 123.45");
-
-        SQLRETURN ret = SQLFetch(stmt.get_handle());
-        if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::FAIL;
-            result.actual = "SQLFetch failed";
-            auto end = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-            return result;
-        }
-
-        SQL_NUMERIC_STRUCT ns;
-        std::memset(&ns, 0, sizeof(ns));
-        SQLLEN ind = 0;
-        set_numeric_descriptor(stmt.get_handle(), 1, 18, 2);
-        ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
-
-        if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "SQLGetData with SQL_C_NUMERIC not supported for decimal values";
-        } else {
-            double val = numeric_struct_to_double(ns);
-            std::ostringstream oss;
-            oss << "Value=" << val << ", precision=" << (int)ns.precision
-                << ", scale=" << (int)ns.scale << ", sign=" << (int)ns.sign;
-            result.actual = oss.str();
-
-            if (std::abs(val - 123.45) > 0.01) {
-                result.status = TestStatus::FAIL;
-                result.severity = Severity::WARNING;
-                result.suggestion = "SQL_NUMERIC_STRUCT val[] encoding or scale may be incorrect";
+            SQLRETURN ret = SQLFetch(stmt.get_handle());
+            if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLFetch failed";
+                return;
             }
-        }
 
-        auto end = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
+            SQL_NUMERIC_STRUCT ns;
+            std::memset(&ns, 0, sizeof(ns));
+            SQLLEN ind = 0;
+            set_numeric_descriptor(stmt.get_handle(), 1, 18, 2);
+            ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
 
-    return result;
+            if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "SQLGetData with SQL_C_NUMERIC not supported for decimal values";
+            } else {
+                double val = numeric_struct_to_double(ns);
+                std::ostringstream oss;
+                oss << "Value=" << val << ", precision=" << (int)ns.precision
+                    << ", scale=" << (int)ns.scale << ", sign=" << (int)ns.sign;
+                r.actual = oss.str();
+
+                if (std::abs(val - 123.45) > 0.01) {
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::WARNING;
+                    r.suggestion = "SQL_NUMERIC_STRUCT val[] encoding or scale may be incorrect";
+                }
+            }
+        });
 }
 
 TestResult NumericStructTests::test_numeric_positive_negative() {
-    TestResult result = make_result(
-        "test_numeric_positive_negative",
-        "SQLGetData(SQL_C_NUMERIC)",
-        TestStatus::PASS,
+    return run_test(
+        "test_numeric_positive_negative", "SQLGetData(SQL_C_NUMERIC)",
         "Positive and negative values round-trip correctly via SQL_NUMERIC_STRUCT",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8, SQL_C_NUMERIC"
-    );
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8, SQL_C_NUMERIC",
+        [&](TestResult& r) {
+            // Test positive value
+            {
+                core::OdbcStatement stmt(conn_);
+                stmt.execute("SELECT 42");
+                SQLRETURN ret = SQLFetch(stmt.get_handle());
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLFetch failed for positive value";
+                    return;
+                }
 
-    try {
-        auto start = std::chrono::high_resolution_clock::now();
+                SQL_NUMERIC_STRUCT ns;
+                std::memset(&ns, 0, sizeof(ns));
+                SQLLEN ind = 0;
+                set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
+                ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQL_C_NUMERIC not supported";
+                    return;
+                }
 
-        // Test positive value
-        {
-            core::OdbcStatement stmt(conn_);
-            stmt.execute("SELECT 42");
-            SQLRETURN ret = SQLFetch(stmt.get_handle());
-            if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::FAIL;
-                result.actual = "SQLFetch failed for positive value";
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
+                if (ns.sign != 1) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "Positive 42: sign=" + std::to_string(ns.sign) + " (expected 1)";
+                    r.severity = Severity::WARNING;
+                    return;
+                }
             }
 
-            SQL_NUMERIC_STRUCT ns;
-            std::memset(&ns, 0, sizeof(ns));
-            SQLLEN ind = 0;
-            set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
-            ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
-            if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::SKIP_UNSUPPORTED;
-                result.actual = "SQL_C_NUMERIC not supported";
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
+            // Test negative value
+            {
+                core::OdbcStatement stmt(conn_);
+                stmt.execute("SELECT -42");
+                SQLRETURN ret = SQLFetch(stmt.get_handle());
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLFetch failed for negative value";
+                    return;
+                }
+
+                SQL_NUMERIC_STRUCT ns;
+                std::memset(&ns, 0, sizeof(ns));
+                SQLLEN ind = 0;
+                set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
+                ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQL_C_NUMERIC not supported for negative values";
+                    return;
+                }
+
+                double val = numeric_struct_to_double(ns);
+                if (ns.sign != 0 || std::abs(val - (-42.0)) > 0.01) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "Negative -42: val=" + std::to_string(val)
+                                  + ", sign=" + std::to_string(ns.sign);
+                    r.severity = Severity::WARNING;
+                    return;
+                }
             }
 
-            if (ns.sign != 1) {
-                result.status = TestStatus::FAIL;
-                result.actual = "Positive 42: sign=" + std::to_string(ns.sign) + " (expected 1)";
-                result.severity = Severity::WARNING;
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
-            }
-        }
-
-        // Test negative value
-        {
-            core::OdbcStatement stmt(conn_);
-            stmt.execute("SELECT -42");
-            SQLRETURN ret = SQLFetch(stmt.get_handle());
-            if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::FAIL;
-                result.actual = "SQLFetch failed for negative value";
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
-            }
-
-            SQL_NUMERIC_STRUCT ns;
-            std::memset(&ns, 0, sizeof(ns));
-            SQLLEN ind = 0;
-            set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
-            ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
-            if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::SKIP_UNSUPPORTED;
-                result.actual = "SQL_C_NUMERIC not supported for negative values";
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
-            }
-
-            double val = numeric_struct_to_double(ns);
-            if (ns.sign != 0 || std::abs(val - (-42.0)) > 0.01) {
-                result.status = TestStatus::FAIL;
-                result.actual = "Negative -42: val=" + std::to_string(val)
-                              + ", sign=" + std::to_string(ns.sign);
-                result.severity = Severity::WARNING;
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
-            }
-        }
-
-        result.actual = "Positive (sign=1) and negative (sign=0) values round-trip correctly";
-
-        auto end = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-
-    return result;
+            r.actual = "Positive (sign=1) and negative (sign=0) values round-trip correctly";
+        });
 }
 
 TestResult NumericStructTests::test_numeric_zero_and_extremes() {
-    TestResult result = make_result(
-        "test_numeric_zero_and_extremes",
-        "SQLGetData(SQL_C_NUMERIC)",
-        TestStatus::PASS,
+    return run_test(
+        "test_numeric_zero_and_extremes", "SQLGetData(SQL_C_NUMERIC)",
         "Zero and large values work with SQL_NUMERIC_STRUCT",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8, SQL_C_NUMERIC"
-    );
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8, SQL_C_NUMERIC",
+        [&](TestResult& r) {
+            // Test zero
+            {
+                core::OdbcStatement stmt(conn_);
+                stmt.execute("SELECT 0");
+                SQLRETURN ret = SQLFetch(stmt.get_handle());
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLFetch failed for zero";
+                    return;
+                }
 
-    try {
-        auto start = std::chrono::high_resolution_clock::now();
+                SQL_NUMERIC_STRUCT ns;
+                std::memset(&ns, 0, sizeof(ns));
+                SQLLEN ind = 0;
+                set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
+                ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQL_C_NUMERIC not supported";
+                    return;
+                }
 
-        // Test zero
-        {
-            core::OdbcStatement stmt(conn_);
-            stmt.execute("SELECT 0");
-            SQLRETURN ret = SQLFetch(stmt.get_handle());
-            if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::FAIL;
-                result.actual = "SQLFetch failed for zero";
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
+                double val = numeric_struct_to_double(ns);
+                if (std::abs(val) > 0.001) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "Zero: got " + std::to_string(val);
+                    r.severity = Severity::WARNING;
+                    return;
+                }
             }
 
-            SQL_NUMERIC_STRUCT ns;
-            std::memset(&ns, 0, sizeof(ns));
-            SQLLEN ind = 0;
-            set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
-            ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
-            if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::SKIP_UNSUPPORTED;
-                result.actual = "SQL_C_NUMERIC not supported";
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
+            // Test large value
+            {
+                core::OdbcStatement stmt(conn_);
+                stmt.execute("SELECT 999999999");
+                SQLRETURN ret = SQLFetch(stmt.get_handle());
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLFetch failed for large value";
+                    return;
+                }
+
+                SQL_NUMERIC_STRUCT ns;
+                std::memset(&ns, 0, sizeof(ns));
+                SQLLEN ind = 0;
+                set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
+                ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
+                if (!SQL_SUCCEEDED(ret)) {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQL_C_NUMERIC not supported for large values";
+                    return;
+                }
+
+                double val = numeric_struct_to_double(ns);
+                if (std::abs(val - 999999999.0) > 1.0) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "Large value: expected 999999999, got " + std::to_string(val);
+                    r.severity = Severity::WARNING;
+                    return;
+                }
             }
 
-            double val = numeric_struct_to_double(ns);
-            if (std::abs(val) > 0.001) {
-                result.status = TestStatus::FAIL;
-                result.actual = "Zero: got " + std::to_string(val);
-                result.severity = Severity::WARNING;
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
-            }
-        }
-
-        // Test large value
-        {
-            core::OdbcStatement stmt(conn_);
-            stmt.execute("SELECT 999999999");
-            SQLRETURN ret = SQLFetch(stmt.get_handle());
-            if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::FAIL;
-                result.actual = "SQLFetch failed for large value";
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
-            }
-
-            SQL_NUMERIC_STRUCT ns;
-            std::memset(&ns, 0, sizeof(ns));
-            SQLLEN ind = 0;
-            set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
-            ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
-            if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::SKIP_UNSUPPORTED;
-                result.actual = "SQL_C_NUMERIC not supported for large values";
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
-            }
-
-            double val = numeric_struct_to_double(ns);
-            if (std::abs(val - 999999999.0) > 1.0) {
-                result.status = TestStatus::FAIL;
-                result.actual = "Large value: expected 999999999, got " + std::to_string(val);
-                result.severity = Severity::WARNING;
-                auto end = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                return result;
-            }
-        }
-
-        result.actual = "Zero and 999999999 round-trip correctly via SQL_NUMERIC_STRUCT";
-
-        auto end = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-
-    return result;
+            r.actual = "Zero and 999999999 round-trip correctly via SQL_NUMERIC_STRUCT";
+        });
 }
 
 } // namespace odbc_crusher::tests

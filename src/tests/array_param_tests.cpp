@@ -201,20 +201,12 @@ std::vector<TestResult> ArrayParamTests::run() {
 
 // ── Test 1: Column-Wise Array Binding ────────────────────────────────────────
 TestResult ArrayParamTests::test_column_wise_array_binding() {
-    TestResult result = make_result(
-        "test_column_wise_array_binding",
-        "SQLSetStmtAttr/SQLBindParameter/SQLExecute",
-        TestStatus::PASS,
+    return run_test(
+        "test_column_wise_array_binding", "SQLSetStmtAttr/SQLBindParameter/SQLExecute",
         "Column-wise array binding with PARAMSET_SIZE=3 executes successfully",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.x Arrays of Parameter Values: Column-wise binding"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::INFO, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Arrays of Parameter Values: Column-wise binding",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         constexpr SQLULEN ARRAY_SIZE = 3;
         
@@ -223,34 +215,28 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
             SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare parameterized INSERT";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare parameterized INSERT";
+            return;
         }
         
         // Set column-wise binding (default, but explicit)
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
             reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "SQLSetStmtAttr(SQL_ATTR_PARAM_BIND_TYPE) failed";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "SQLSetStmtAttr(SQL_ATTR_PARAM_BIND_TYPE) failed";
+            return;
         }
         
         // Set paramset size
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
             reinterpret_cast<SQLPOINTER>(ARRAY_SIZE), 0);
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "Driver does not support SQL_ATTR_PARAMSET_SIZE > 1";
-            result.suggestion = "Implement SQL_ATTR_PARAMSET_SIZE support per ODBC 3.x spec §Arrays of Parameters";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_UNSUPPORTED;
+            r.actual = "Driver does not support SQL_ATTR_PARAMSET_SIZE > 1";
+            r.suggestion = "Implement SQL_ATTR_PARAMSET_SIZE support per ODBC 3.x spec §Arrays of Parameters";
+            return;
         }
         
         // Bind integer array (column-wise: array of SQLINTEGER)
@@ -262,11 +248,9 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
             0, 0, id_array, 0, id_ind_array);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not bind integer array parameter";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not bind integer array parameter";
+            return;
         }
         
         // Bind string array (column-wise: 2D char array)
@@ -286,11 +270,9 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
             NAME_LEN - 1, 0, name_array, NAME_LEN, name_ind_array);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not bind string array parameter";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not bind string array parameter";
+            return;
         }
         
         // Execute with array parameters
@@ -301,45 +283,27 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
             actual << "Array execution with PARAMSET_SIZE=" << ARRAY_SIZE << " succeeded (ret=" << exec_ret << ")";
         } else {
             actual << "Array execution returned " << exec_ret;
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Driver should execute the statement once per parameter set "
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Driver should execute the statement once per parameter set "
                                "when SQL_ATTR_PARAMSET_SIZE > 1. Per ODBC spec, drivers can "
                                "emulate this by executing the SQL once per parameter set.";
         }
-        result.actual = actual.str();
+        r.actual = actual.str();
         
         // Reset paramset size to 1 for cleanup
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
             reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 // ── Test 2: Row-Wise Array Binding ───────────────────────────────────────────
 TestResult ArrayParamTests::test_row_wise_array_binding() {
-    TestResult result = make_result(
-        "test_row_wise_array_binding",
-        "SQLSetStmtAttr/SQLBindParameter/SQLExecute",
-        TestStatus::PASS,
+    return run_test(
+        "test_row_wise_array_binding", "SQLSetStmtAttr/SQLBindParameter/SQLExecute",
         "Row-wise array binding with struct layout executes successfully",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.x Arrays of Parameter Values: Row-wise binding"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::INFO, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Arrays of Parameter Values: Row-wise binding",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         
         // Define row structure
@@ -354,23 +318,19 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
             SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare parameterized INSERT";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare parameterized INSERT";
+            return;
         }
         
         // Set row-wise binding: structure size
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
             reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(sizeof(ParamRow))), 0);
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "Driver does not support SQL_ATTR_PARAM_BIND_TYPE (row-wise binding)";
-            result.suggestion = "Implement SQL_ATTR_PARAM_BIND_TYPE per ODBC 3.x spec §Binding Arrays of Parameters";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_UNSUPPORTED;
+            r.actual = "Driver does not support SQL_ATTR_PARAM_BIND_TYPE (row-wise binding)";
+            r.suggestion = "Implement SQL_ATTR_PARAM_BIND_TYPE per ODBC 3.x spec §Binding Arrays of Parameters";
+            return;
         }
         
         // ── Safety probe ──
@@ -411,15 +371,11 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
                 reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
             
             if (!SQL_SUCCEEDED(probe_ret)) {
-                result.status = TestStatus::FAIL;
-                result.actual = "Row-wise binding with PARAMSET_SIZE=1 failed (ret="
+                r.status = TestStatus::FAIL;
+                r.actual = "Row-wise binding with PARAMSET_SIZE=1 failed (ret="
                     + std::to_string(probe_ret) + ")";
-                result.suggestion = "Even with PARAMSET_SIZE=1, row-wise binding "
-                    "should work identically to column-wise";
-                auto end_time = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                    end_time - start_time);
-                return result;
+                r.suggestion = "Even with PARAMSET_SIZE=1, row-wise binding "
+                    "should work identically to column-wise";                return;
             }
         }
         
@@ -448,14 +404,10 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
                 reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
             
             if (!SQL_SUCCEEDED(probe_ret)) {
-                result.status = TestStatus::FAIL;
-                result.actual = "Row-wise binding with PARAMSET_SIZE=2 (integer-only) failed";
-                result.suggestion = "Row-wise binding should offset each row by "
-                    "SQL_ATTR_PARAM_BIND_TYPE bytes. The driver may ignore the bind type.";
-                auto end_time = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                    end_time - start_time);
-                return result;
+                r.status = TestStatus::FAIL;
+                r.actual = "Row-wise binding with PARAMSET_SIZE=2 (integer-only) failed";
+                r.suggestion = "Row-wise binding should offset each row by "
+                    "SQL_ATTR_PARAM_BIND_TYPE bytes. The driver may ignore the bind type.";                return;
             }
             
             // Verify: the driver should have inserted 9991 and 9992.
@@ -472,7 +424,7 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
             }
             
             if (ids.size() != 2 || ids[0] != 9991 || ids[1] != 9992) {
-                result.status = TestStatus::FAIL;
+                r.status = TestStatus::FAIL;
                 std::ostringstream actual;
                 actual << "Row-wise binding inserts wrong data: got {";
                 for (size_t i = 0; i < ids.size(); ++i) {
@@ -482,15 +434,11 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
                 actual << "} instead of {9991, 9992}. Driver stores "
                        "SQL_ATTR_PARAM_BIND_TYPE but does not use it for "
                        "pointer arithmetic.";
-                result.actual = actual.str();
-                result.suggestion = "The driver's parameter value reader must offset "
+                r.actual = actual.str();
+                r.suggestion = "The driver's parameter value reader must offset "
                     "by SQL_ATTR_PARAM_BIND_TYPE bytes per row, not by column size. "
                     "Executing with string parameters in this state would cause "
-                    "memory corruption and a process crash.";
-                auto end_time = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                    end_time - start_time);
-                return result;
+                    "memory corruption and a process crash.";                return;
             }
         }
         
@@ -503,12 +451,8 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
             ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
                 reinterpret_cast<SQLPOINTER>(ARRAY_SIZE_FULL), 0);
             if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::SKIP_UNSUPPORTED;
-                result.actual = "Driver does not support SQL_ATTR_PARAMSET_SIZE > 1";
-                auto end_time = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                    end_time - start_time);
-                return result;
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver does not support SQL_ATTR_PARAMSET_SIZE > 1";                return;
             }
             
             // Populate row array
@@ -523,12 +467,8 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
                 0, 0, &rows[0].id, 0, &rows[0].id_ind);
             
             if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::SKIP_INCONCLUSIVE;
-                result.actual = "Could not bind row-wise integer parameter";
-                auto end_time = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                    end_time - start_time);
-                return result;
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not bind row-wise integer parameter";                return;
             }
             
             // Bind parameter 2 (NAME)
@@ -537,12 +477,8 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
                 50, 0, rows[0].name, sizeof(rows[0].name), &rows[0].name_ind);
             
             if (!SQL_SUCCEEDED(ret)) {
-                result.status = TestStatus::SKIP_INCONCLUSIVE;
-                result.actual = "Could not bind row-wise string parameter";
-                auto end_time = std::chrono::high_resolution_clock::now();
-                result.duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                    end_time - start_time);
-                return result;
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not bind row-wise string parameter";                return;
             }
             
             // Execute with array parameters
@@ -554,13 +490,13 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
                        << ARRAY_SIZE_FULL << " succeeded (ret=" << exec_ret << ")";
             } else {
                 actual << "Row-wise array execution returned " << exec_ret;
-                result.status = TestStatus::FAIL;
-                result.suggestion = "Driver should support row-wise parameter binding via "
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Driver should support row-wise parameter binding via "
                                    "SQL_ATTR_PARAM_BIND_TYPE = sizeof(struct). The driver "
                                    "calculates each row's address as: "
                                    "base + row_number * struct_size.";
             }
-            result.actual = actual.str();
+            r.actual = actual.str();
             
             // Reset
             SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
@@ -568,35 +504,17 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
             SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
                 reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
         }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 // ── Test 3: Parameter Status Array ───────────────────────────────────────────
 TestResult ArrayParamTests::test_param_status_array() {
-    TestResult result = make_result(
-        "test_param_status_array",
-        "SQLSetStmtAttr/SQLExecute",
-        TestStatus::PASS,
+    return run_test(
+        "test_param_status_array", "SQLSetStmtAttr/SQLExecute",
         "SQL_ATTR_PARAM_STATUS_PTR is populated with SQL_PARAM_SUCCESS for each row",
-        "",
-        Severity::WARNING,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.x Using Arrays of Parameters: Parameter status array"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::WARNING, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Using Arrays of Parameters: Parameter status array",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         constexpr SQLULEN ARRAY_SIZE = 3;
         
@@ -604,11 +522,9 @@ TestResult ArrayParamTests::test_param_status_array() {
             SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare statement";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare statement";
+            return;
         }
         
         // Set up array parameters
@@ -627,14 +543,12 @@ TestResult ArrayParamTests::test_param_status_array() {
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR,
             status_array, 0);
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "Driver does not support SQL_ATTR_PARAM_STATUS_PTR";
-            result.suggestion = "Implement SQL_ATTR_PARAM_STATUS_PTR to report per-row status. "
+            r.status = TestStatus::SKIP_UNSUPPORTED;
+            r.actual = "Driver does not support SQL_ATTR_PARAM_STATUS_PTR";
+            r.suggestion = "Implement SQL_ATTR_PARAM_STATUS_PTR to report per-row status. "
                                "Per ODBC 3.x, the driver fills this array with SQL_PARAM_SUCCESS, "
                                "SQL_PARAM_ERROR, etc. after execution.";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            return;
         }
         
         // Bind parameters
@@ -667,49 +581,31 @@ TestResult ArrayParamTests::test_param_status_array() {
             }
         }
         actual << "]";
-        result.actual = actual.str();
+        r.actual = actual.str();
         
         if (!SQL_SUCCEEDED(exec_ret)) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Array execution should succeed for valid parameter sets";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Array execution should succeed for valid parameter sets";
         } else if (!all_success) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "All status entries should be SQL_PARAM_SUCCESS when no errors occur";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "All status entries should be SQL_PARAM_SUCCESS when no errors occur";
         }
         
         // Reset
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
             reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 // ── Test 4: Params Processed Count ───────────────────────────────────────────
 TestResult ArrayParamTests::test_params_processed_count() {
-    TestResult result = make_result(
-        "test_params_processed_count",
-        "SQLSetStmtAttr/SQLExecute",
-        TestStatus::PASS,
+    return run_test(
+        "test_params_processed_count", "SQLSetStmtAttr/SQLExecute",
         "SQL_ATTR_PARAMS_PROCESSED_PTR reports correct count after array execution",
-        "",
-        Severity::WARNING,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.x Using Arrays of Parameters: SQL_ATTR_PARAMS_PROCESSED_PTR"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::WARNING, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Using Arrays of Parameters: SQL_ATTR_PARAMS_PROCESSED_PTR",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         constexpr SQLULEN ARRAY_SIZE = 4;
         
@@ -718,11 +614,9 @@ TestResult ArrayParamTests::test_params_processed_count() {
             SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare statement";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare statement";
+            return;
         }
         
         // Configure array execution
@@ -736,13 +630,11 @@ TestResult ArrayParamTests::test_params_processed_count() {
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR,
             &params_processed, 0);
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "Driver does not support SQL_ATTR_PARAMS_PROCESSED_PTR";
-            result.suggestion = "Implement SQL_ATTR_PARAMS_PROCESSED_PTR per ODBC 3.x spec. "
+            r.status = TestStatus::SKIP_UNSUPPORTED;
+            r.actual = "Driver does not support SQL_ATTR_PARAMS_PROCESSED_PTR";
+            r.suggestion = "Implement SQL_ATTR_PARAMS_PROCESSED_PTR per ODBC 3.x spec. "
                                "The driver must set this to the number of parameter sets processed.";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            return;
         }
         
         // Bind parameter array
@@ -758,14 +650,14 @@ TestResult ArrayParamTests::test_params_processed_count() {
         actual << "Execute returned " << exec_ret 
                << "; params_processed=" << params_processed
                << " (expected " << ARRAY_SIZE << ")";
-        result.actual = actual.str();
+        r.actual = actual.str();
         
         if (!SQL_SUCCEEDED(exec_ret)) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Array execution should succeed";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Array execution should succeed";
         } else if (params_processed != ARRAY_SIZE) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "SQL_ATTR_PARAMS_PROCESSED_PTR must report the total number "
+            r.status = TestStatus::FAIL;
+            r.suggestion = "SQL_ATTR_PARAMS_PROCESSED_PTR must report the total number "
                                "of parameter sets processed (including error sets). "
                                "Expected " + std::to_string(ARRAY_SIZE) + " but got " + 
                                std::to_string(params_processed);
@@ -775,35 +667,17 @@ TestResult ArrayParamTests::test_params_processed_count() {
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
             reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, nullptr, 0);
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 // ── Test 5: Array with NULL Values ───────────────────────────────────────────
 TestResult ArrayParamTests::test_array_with_null_values() {
-    TestResult result = make_result(
-        "test_array_with_null_values",
-        "SQLBindParameter/SQLExecute",
-        TestStatus::PASS,
+    return run_test(
+        "test_array_with_null_values", "SQLBindParameter/SQLExecute",
         "Array binding with SQL_NULL_DATA indicators in some rows executes successfully",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.x Arrays of Parameter Values: NULL indicators in arrays"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::INFO, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Arrays of Parameter Values: NULL indicators in arrays",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         constexpr SQLULEN ARRAY_SIZE = 3;
         
@@ -812,11 +686,9 @@ TestResult ArrayParamTests::test_array_with_null_values() {
             SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare statement";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare statement";
+            return;
         }
         
         // Configure
@@ -851,44 +723,26 @@ TestResult ArrayParamTests::test_array_with_null_values() {
         } else {
             actual << "Array execution with NULL returned " << exec_ret;
             // Not necessarily a failure — some drivers may reject NULLs depending on constraints
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "Driver may reject NULL values due to column constraints";
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.suggestion = "Driver may reject NULL values due to column constraints";
         }
-        result.actual = actual.str();
+        r.actual = actual.str();
         
         // Reset
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
             reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 // ── Test 6: Parameter Operation Array (SQL_PARAM_IGNORE) ─────────────────────
 TestResult ArrayParamTests::test_param_operation_array() {
-    TestResult result = make_result(
-        "test_param_operation_array",
-        "SQLSetStmtAttr/SQLExecute",
-        TestStatus::PASS,
+    return run_test(
+        "test_param_operation_array", "SQLSetStmtAttr/SQLExecute",
         "SQL_ATTR_PARAM_OPERATION_PTR skips rows marked SQL_PARAM_IGNORE, status=SQL_PARAM_UNUSED",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.x Using Arrays of Parameters: SQL_ATTR_PARAM_OPERATION_PTR"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::INFO, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Using Arrays of Parameters: SQL_ATTR_PARAM_OPERATION_PTR",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         constexpr SQLULEN ARRAY_SIZE = 4;
         
@@ -897,11 +751,9 @@ TestResult ArrayParamTests::test_param_operation_array() {
             SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare statement";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare statement";
+            return;
         }
         
         // Configure array execution
@@ -917,13 +769,11 @@ TestResult ArrayParamTests::test_param_operation_array() {
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_OPERATION_PTR,
             operation_array, 0);
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "Driver does not support SQL_ATTR_PARAM_OPERATION_PTR";
-            result.suggestion = "Implement SQL_ATTR_PARAM_OPERATION_PTR per ODBC 3.x spec. "
+            r.status = TestStatus::SKIP_UNSUPPORTED;
+            r.actual = "Driver does not support SQL_ATTR_PARAM_OPERATION_PTR";
+            r.suggestion = "Implement SQL_ATTR_PARAM_OPERATION_PTR per ODBC 3.x spec. "
                                "This allows applications to skip specific parameter sets.";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            return;
         }
         
         // Set up status array to check results
@@ -967,14 +817,14 @@ TestResult ArrayParamTests::test_param_operation_array() {
             }
         }
         actual << "]";
-        result.actual = actual.str();
+        r.actual = actual.str();
         
         if (!SQL_SUCCEEDED(exec_ret)) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Array execution with IGNORE rows should still succeed for non-ignored rows";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Array execution with IGNORE rows should still succeed for non-ignored rows";
         } else if (!correct) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Ignored rows must have status SQL_PARAM_UNUSED, "
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Ignored rows must have status SQL_PARAM_UNUSED, "
                                "executed rows must have status SQL_PARAM_SUCCESS";
         }
         
@@ -984,35 +834,17 @@ TestResult ArrayParamTests::test_param_operation_array() {
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, nullptr, 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_OPERATION_PTR, nullptr, 0);
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 // ── Test 7: PARAMSET_SIZE=1 (Normal Execution) ──────────────────────────────
 TestResult ArrayParamTests::test_paramset_size_one() {
-    TestResult result = make_result(
-        "test_paramset_size_one",
-        "SQLSetStmtAttr/SQLExecute",
-        TestStatus::PASS,
+    return run_test(
+        "test_paramset_size_one", "SQLSetStmtAttr/SQLExecute",
         "SQL_ATTR_PARAMSET_SIZE=1 behaves like normal single-parameter execution",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.x SQLSetStmtAttr: SQL_ATTR_PARAMSET_SIZE default is 1"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.x SQLSetStmtAttr: SQL_ATTR_PARAMSET_SIZE default is 1",
+        [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         
         // Prepare
@@ -1020,11 +852,9 @@ TestResult ArrayParamTests::test_paramset_size_one() {
             SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare statement";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare statement";
+            return;
         }
         
         // Explicitly set PARAMSET_SIZE = 1
@@ -1032,11 +862,9 @@ TestResult ArrayParamTests::test_paramset_size_one() {
             reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not set SQL_ATTR_PARAMSET_SIZE to 1";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not set SQL_ATTR_PARAMSET_SIZE to 1";
+            return;
         }
         
         // Set up status/processed pointers
@@ -1058,51 +886,33 @@ TestResult ArrayParamTests::test_paramset_size_one() {
         actual << "Execute returned " << exec_ret
                << "; processed=" << processed
                << "; status=" << status;
-        result.actual = actual.str();
+        r.actual = actual.str();
         
         if (!SQL_SUCCEEDED(exec_ret)) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "PARAMSET_SIZE=1 should execute normally";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "PARAMSET_SIZE=1 should execute normally";
         } else if (processed != 1) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "With PARAMSET_SIZE=1, params_processed should be 1";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "With PARAMSET_SIZE=1, params_processed should be 1";
         } else if (status != SQL_PARAM_SUCCESS) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "With PARAMSET_SIZE=1 and successful execution, status should be SQL_PARAM_SUCCESS";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "With PARAMSET_SIZE=1 and successful execution, status should be SQL_PARAM_SUCCESS";
         }
         
         // Reset
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, nullptr, 0);
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 // ── Test 8: Array Partial Error ──────────────────────────────────────────────
 TestResult ArrayParamTests::test_array_partial_error() {
-    TestResult result = make_result(
-        "test_array_partial_error",
-        "SQLSetStmtAttr/SQLExecute",
-        TestStatus::PASS,
+    return run_test(
+        "test_array_partial_error", "SQLSetStmtAttr/SQLExecute",
         "Partial failure in array execution returns SQL_SUCCESS_WITH_INFO with mixed status",
-        "",
-        Severity::WARNING,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.x Using Arrays of Parameters: Error Processing"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
+        Severity::WARNING, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Using Arrays of Parameters: Error Processing",
+        [&](TestResult& r) {
         // This test uses a special SQL that the mock driver will fail on for specific rows.
         // We use the FAIL_ON_ROW syntax convention: the mock driver can be configured
         // so that certain parameter sets fail.
@@ -1118,11 +928,9 @@ TestResult ArrayParamTests::test_array_partial_error() {
             SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
         
         if (!SQL_SUCCEEDED(ret)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not prepare statement";
-            auto end_time = std::chrono::high_resolution_clock::now();
-            result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            return result;
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not prepare statement";
+            return;
         }
         
         // Configure array execution
@@ -1174,21 +982,21 @@ TestResult ArrayParamTests::test_array_partial_error() {
             }
         }
         actual << "]";
-        result.actual = actual.str();
+        r.actual = actual.str();
         
         if (!SQL_SUCCEEDED(exec_ret)) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Execution with some IGNORED rows should succeed for non-ignored rows";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Execution with some IGNORED rows should succeed for non-ignored rows";
         } else if (!has_success || !has_unused) {
-            result.status = TestStatus::FAIL;
-            result.suggestion = "Expected mix of SQL_PARAM_SUCCESS and SQL_PARAM_UNUSED in status array";
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Expected mix of SQL_PARAM_SUCCESS and SQL_PARAM_UNUSED in status array";
         } else {
             // Verify ignored row is UNUSED and executed rows are SUCCESS
             if (status_array[0] != SQL_PARAM_SUCCESS || 
                 status_array[1] != SQL_PARAM_UNUSED ||
                 status_array[2] != SQL_PARAM_SUCCESS) {
-                result.status = TestStatus::FAIL;
-                result.suggestion = "Row 0,2 should be SUCCESS, row 1 should be UNUSED";
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Row 0,2 should be SUCCESS, row 1 should be UNUSED";
             }
         }
         
@@ -1198,17 +1006,7 @@ TestResult ArrayParamTests::test_array_partial_error() {
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, nullptr, 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_OPERATION_PTR, nullptr, 0);
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 } // namespace odbc_crusher::tests

@@ -12,102 +12,64 @@ std::vector<TestResult> CancellationTests::run() {
 }
 
 TestResult CancellationTests::test_cancel_idle() {
-    TestResult result = make_result(
-        "test_cancel_idle",
-        "SQLCancel",
-        TestStatus::PASS,
+    return run_test(
+        "test_cancel_idle", "SQLCancel",
         "SQLCancel on idle statement succeeds",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLCancel"
-    );
-    
-    try {
-        auto start = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        // Cancel on a freshly allocated (idle) statement
-        SQLRETURN rc = SQLCancel(stmt.get_handle());
-        
-        if (SQL_SUCCEEDED(rc)) {
-            result.status = TestStatus::PASS;
-            result.actual = "SQLCancel on idle statement returned SQL_SUCCESS";
-        } else {
-            result.status = TestStatus::FAIL;
-            result.actual = "SQLCancel on idle statement failed (rc=" + std::to_string(rc) + ")";
-            result.severity = Severity::WARNING;
-            result.suggestion = "Per ODBC spec, SQLCancel should succeed on an idle statement";
-        }
-        
-        auto end = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLCancel",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            // Cancel on a freshly allocated (idle) statement
+            SQLRETURN rc = SQLCancel(stmt.get_handle());
+
+            if (SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::PASS;
+                r.actual = "SQLCancel on idle statement returned SQL_SUCCESS";
+            } else {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLCancel on idle statement failed (rc=" + std::to_string(rc) + ")";
+                r.severity = Severity::WARNING;
+                r.suggestion = "Per ODBC spec, SQLCancel should succeed on an idle statement";
+            }
+        });
 }
 
 TestResult CancellationTests::test_cancel_as_reset() {
-    TestResult result = make_result(
-        "test_cancel_as_reset",
-        "SQLCancel",
-        TestStatus::PASS,
+    return run_test(
+        "test_cancel_as_reset", "SQLCancel",
         "SQLCancel resets statement state after query execution",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLCancel"
-    );
-    
-    try {
-        auto start = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
-        bool success = false;
-        
-        for (const auto& query : queries) {
-            try {
-                // Execute a query
-                stmt.execute(query);
-                stmt.fetch();
-                
-                // Cancel to reset state
-                SQLRETURN rc = SQLCancel(stmt.get_handle());
-                
-                if (SQL_SUCCEEDED(rc)) {
-                    result.status = TestStatus::PASS;
-                    result.actual = "SQLCancel after query execution succeeded";
-                    success = true;
-                    break;
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLCancel",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
+            bool success = false;
+
+            for (const auto& query : queries) {
+                try {
+                    // Execute a query
+                    stmt.execute(query);
+                    stmt.fetch();
+
+                    // Cancel to reset state
+                    SQLRETURN rc = SQLCancel(stmt.get_handle());
+
+                    if (SQL_SUCCEEDED(rc)) {
+                        r.status = TestStatus::PASS;
+                        r.actual = "SQLCancel after query execution succeeded";
+                        success = true;
+                        break;
+                    }
+                } catch (const core::OdbcError&) {
+                    continue;
                 }
-            } catch (const core::OdbcError&) {
-                continue;
             }
-        }
-        
-        if (!success) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Could not test SQLCancel state reset";
-        }
-        
-        auto end = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+
+            if (!success) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not test SQLCancel state reset";
+            }
+        });
 }
 
 } // namespace odbc_crusher::tests

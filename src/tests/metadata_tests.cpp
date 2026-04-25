@@ -12,201 +12,141 @@
 namespace odbc_crusher::tests {
 
 std::vector<TestResult> MetadataTests::run() {
-    std::vector<TestResult> results;
-
-    results.push_back(test_tables_catalog());
-    results.push_back(test_columns_catalog());
-    results.push_back(test_primary_keys());
-    results.push_back(test_foreign_keys());
-    results.push_back(test_statistics());
-    results.push_back(test_special_columns());
-    results.push_back(test_table_privileges());
-    results.push_back(test_desc_unsigned_on_signed_integer());
-    results.push_back(test_count_star_result_metadata());
-
-    return results;
+    return {
+        test_tables_catalog(),
+        test_columns_catalog(),
+        test_primary_keys(),
+        test_foreign_keys(),
+        test_statistics(),
+        test_special_columns(),
+        test_table_privileges(),
+        test_desc_unsigned_on_signed_integer(),
+        test_count_star_result_metadata()
+    };
 }
 
 TestResult MetadataTests::test_tables_catalog() {
-    TestResult result = make_result(
-        "test_tables_catalog",
-        "SQLTables",
-        TestStatus::PASS,
+    return run_test(
+        "test_tables_catalog", "SQLTables",
         "List tables in the database",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLTables"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        // Call SQLTables to list all tables
-        SQLRETURN ret = SQLTables(
-            stmt.get_handle(),
-            nullptr, 0,        // Catalog name (NULL = all)
-            nullptr, 0,        // Schema name (NULL = all)
-            nullptr, 0,        // Table name (NULL = all)
-            (SQLCHAR*)"TABLE", SQL_NTS  // Table type
-        );
-        
-        if (SQL_SUCCEEDED(ret)) {
-            // Count how many tables we can find
-            int table_count = 0;
-            while (stmt.fetch() && table_count < 100) {  // Limit to avoid excessive output
-                table_count++;
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLTables",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            // Call SQLTables to list all tables
+            SQLRETURN ret = SQLTables(
+                stmt.get_handle(),
+                nullptr, 0,        // Catalog name (NULL = all)
+                nullptr, 0,        // Schema name (NULL = all)
+                nullptr, 0,        // Table name (NULL = all)
+                (SQLCHAR*)"TABLE", SQL_NTS  // Table type
+            );
+
+            if (SQL_SUCCEEDED(ret)) {
+                // Count how many tables we can find
+                int table_count = 0;
+                while (stmt.fetch() && table_count < 100) {  // Limit to avoid excessive output
+                    table_count++;
+                }
+
+                std::ostringstream oss;
+                oss << "Found " << table_count << " table(s)";
+                r.actual = oss.str();
+                r.status = TestStatus::PASS;
+            } else {
+                r.actual = "SQLTables not supported or failed";
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion = "SQLTables call did not succeed; check driver catalog support";
             }
-            
-            std::ostringstream oss;
-            oss << "Found " << table_count << " table(s)";
-            result.actual = oss.str();
-            result.status = TestStatus::PASS;
-        } else {
-            result.actual = "SQLTables not supported or failed";
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "SQLTables call did not succeed; check driver catalog support";
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+        });
 }
 
 TestResult MetadataTests::test_columns_catalog() {
-    TestResult result = make_result(
-        "test_columns_catalog",
-        "SQLColumns",
-        TestStatus::PASS,
+    return run_test(
+        "test_columns_catalog", "SQLColumns",
         "List columns from system tables",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLColumns"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        // Strategy 1: Discover a real table via SQLTables, capturing both
-        // catalog and table name, then query SQLColumns with both.
-        // This avoids hard-coding schema/catalog assumptions that break on
-        // drivers that use catalogs (MySQL/MariaDB) vs schemas (SQL Server).
-        struct DiscoveredTable {
-            std::string catalog;
-            std::string schema;
-            std::string name;
-        };
-        std::vector<DiscoveredTable> discovered;
-        
-        {
-            core::OdbcStatement tbl_stmt(conn_);
-            SQLRETURN tbl_ret = SQLTables(
-                tbl_stmt.get_handle(),
-                nullptr, 0,   // Catalog (all)
-                nullptr, 0,   // Schema (all)
-                nullptr, 0,   // Table (all)
-                (SQLCHAR*)"TABLE", SQL_NTS  // Type
-            );
-            if (SQL_SUCCEEDED(tbl_ret)) {
-                char cat_buf[128] = {0};
-                char sch_buf[128] = {0};
-                char name_buf[128] = {0};
-                SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
-                while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
-                       && discovered.size() < 5) {
-                    cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
-                    SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
-                    SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
-                    SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
-                    if (name_ind > 0) {
-                        discovered.push_back({
-                            cat_ind > 0 ? std::string(cat_buf) : "",
-                            sch_ind > 0 ? std::string(sch_buf) : "",
-                            std::string(name_buf)
-                        });
-                    }
-                }
-            }
-        }
-        
-        // Strategy 2: Also try well-known system tables / mock tables with
-        // different catalog/schema arrangements.
-        // For MySQL/MariaDB: 'information_schema' is a catalog, not a schema.
-        // For SQL Server: 'sys' is a schema.
-        // For Firebird: no catalog/schema, just table name.
-        struct StaticTable {
-            std::string catalog;
-            std::string schema;
-            std::string name;
-        };
-        std::vector<StaticTable> static_tables = {
-            {"information_schema", "", "TABLES"},       // MySQL/MariaDB (database=catalog)
-            {"", "information_schema", "TABLES"},       // Fallback (schema-based)
-            {"", "sys", "tables"},                      // SQL Server
-            {"", "", "RDB$DATABASE"},                   // Firebird
-            {"", "", "CUSTOMERS"},                      // Mock driver
-            {"", "", "USERS"},                          // Mock driver
-        };
-        
-        bool success = false;
-        int column_count = 0;
-        
-        // Try discovered tables first (these have the correct catalog/schema)
-        for (const auto& dt : discovered) {
-            try {
-                stmt.recycle();
-                SQLRETURN ret = SQLColumns(
-                    stmt.get_handle(),
-                    dt.catalog.empty() ? nullptr : (SQLCHAR*)dt.catalog.c_str(),
-                    dt.catalog.empty() ? 0 : SQL_NTS,
-                    dt.schema.empty() ? nullptr : (SQLCHAR*)dt.schema.c_str(),
-                    dt.schema.empty() ? 0 : SQL_NTS,
-                    (SQLCHAR*)dt.name.c_str(), SQL_NTS,
-                    nullptr, 0
+        Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLColumns",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            // Strategy 1: Discover a real table via SQLTables, capturing both
+            // catalog and table name, then query SQLColumns with both.
+            // This avoids hard-coding schema/catalog assumptions that break on
+            // drivers that use catalogs (MySQL/MariaDB) vs schemas (SQL Server).
+            struct DiscoveredTable {
+                std::string catalog;
+                std::string schema;
+                std::string name;
+            };
+            std::vector<DiscoveredTable> discovered;
+
+            {
+                core::OdbcStatement tbl_stmt(conn_);
+                SQLRETURN tbl_ret = SQLTables(
+                    tbl_stmt.get_handle(),
+                    nullptr, 0,   // Catalog (all)
+                    nullptr, 0,   // Schema (all)
+                    nullptr, 0,   // Table (all)
+                    (SQLCHAR*)"TABLE", SQL_NTS  // Type
                 );
-                
-                if (SQL_SUCCEEDED(ret)) {
-                    while (stmt.fetch() && column_count < 50) {
-                        column_count++;
-                    }
-                    if (column_count > 0) {
-                        success = true;
-                        break;
+                if (SQL_SUCCEEDED(tbl_ret)) {
+                    char cat_buf[128] = {0};
+                    char sch_buf[128] = {0};
+                    char name_buf[128] = {0};
+                    SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
+                    while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                           && discovered.size() < 5) {
+                        cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
+                        SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
+                        SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
+                        SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
+                        if (name_ind > 0) {
+                            discovered.push_back({
+                                cat_ind > 0 ? std::string(cat_buf) : "",
+                                sch_ind > 0 ? std::string(sch_buf) : "",
+                                std::string(name_buf)
+                            });
+                        }
                     }
                 }
-            } catch (const core::OdbcError&) {
-                continue;
             }
-        }
-        
-        // If discovered tables didn't work, try static table list
-        if (!success) {
-            for (const auto& st : static_tables) {
+
+            // Strategy 2: Also try well-known system tables / mock tables with
+            // different catalog/schema arrangements.
+            // For MySQL/MariaDB: 'information_schema' is a catalog, not a schema.
+            // For SQL Server: 'sys' is a schema.
+            // For Firebird: no catalog/schema, just table name.
+            struct StaticTable {
+                std::string catalog;
+                std::string schema;
+                std::string name;
+            };
+            std::vector<StaticTable> static_tables = {
+                {"information_schema", "", "TABLES"},       // MySQL/MariaDB (database=catalog)
+                {"", "information_schema", "TABLES"},       // Fallback (schema-based)
+                {"", "sys", "tables"},                      // SQL Server
+                {"", "", "RDB$DATABASE"},                   // Firebird
+                {"", "", "CUSTOMERS"},                      // Mock driver
+                {"", "", "USERS"},                          // Mock driver
+            };
+
+            bool success = false;
+            int column_count = 0;
+
+            // Try discovered tables first (these have the correct catalog/schema)
+            for (const auto& dt : discovered) {
                 try {
                     stmt.recycle();
-                    column_count = 0;
                     SQLRETURN ret = SQLColumns(
                         stmt.get_handle(),
-                        st.catalog.empty() ? nullptr : (SQLCHAR*)st.catalog.c_str(),
-                        st.catalog.empty() ? 0 : SQL_NTS,
-                        st.schema.empty() ? nullptr : (SQLCHAR*)st.schema.c_str(),
-                        st.schema.empty() ? 0 : SQL_NTS,
-                        (SQLCHAR*)st.name.c_str(), SQL_NTS,
+                        dt.catalog.empty() ? nullptr : (SQLCHAR*)dt.catalog.c_str(),
+                        dt.catalog.empty() ? 0 : SQL_NTS,
+                        dt.schema.empty() ? nullptr : (SQLCHAR*)dt.schema.c_str(),
+                        dt.schema.empty() ? 0 : SQL_NTS,
+                        (SQLCHAR*)dt.name.c_str(), SQL_NTS,
                         nullptr, 0
                     );
-                    
+
                     if (SQL_SUCCEEDED(ret)) {
                         while (stmt.fetch() && column_count < 50) {
                             column_count++;
@@ -220,496 +160,436 @@ TestResult MetadataTests::test_columns_catalog() {
                     continue;
                 }
             }
-        }
-        
-        if (success) {
-            std::ostringstream oss;
-            oss << "Found " << column_count << " column(s) from system table";
-            result.actual = oss.str();
-            result.status = TestStatus::PASS;
-        } else {
-            result.actual = "SQLColumns callable but no system tables accessible";
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.suggestion = "SQLColumns executed but no columns found in tested system tables";
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+
+            // If discovered tables didn't work, try static table list
+            if (!success) {
+                for (const auto& st : static_tables) {
+                    try {
+                        stmt.recycle();
+                        column_count = 0;
+                        SQLRETURN ret = SQLColumns(
+                            stmt.get_handle(),
+                            st.catalog.empty() ? nullptr : (SQLCHAR*)st.catalog.c_str(),
+                            st.catalog.empty() ? 0 : SQL_NTS,
+                            st.schema.empty() ? nullptr : (SQLCHAR*)st.schema.c_str(),
+                            st.schema.empty() ? 0 : SQL_NTS,
+                            (SQLCHAR*)st.name.c_str(), SQL_NTS,
+                            nullptr, 0
+                        );
+
+                        if (SQL_SUCCEEDED(ret)) {
+                            while (stmt.fetch() && column_count < 50) {
+                                column_count++;
+                            }
+                            if (column_count > 0) {
+                                success = true;
+                                break;
+                            }
+                        }
+                    } catch (const core::OdbcError&) {
+                        continue;
+                    }
+                }
+            }
+
+            if (success) {
+                std::ostringstream oss;
+                oss << "Found " << column_count << " column(s) from system table";
+                r.actual = oss.str();
+                r.status = TestStatus::PASS;
+            } else {
+                r.actual = "SQLColumns callable but no system tables accessible";
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion = "SQLColumns executed but no columns found in tested system tables";
+            }
+        });
 }
 
 TestResult MetadataTests::test_primary_keys() {
-    TestResult result = make_result(
-        "test_primary_keys",
-        "SQLPrimaryKeys",
-        TestStatus::PASS,
+    return run_test(
+        "test_primary_keys", "SQLPrimaryKeys",
         "Query primary key information",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 SQLPrimaryKeys"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        // Try to get primary keys from system tables
-        std::vector<std::pair<std::string, std::string>> test_tables = {
-            {"", "RDB$DATABASE"},
-            {"information_schema", "TABLES"},
-            {"sys", "tables"}
-        };
-        
-        bool callable = false;
-        
-        for (const auto& [schema, table] : test_tables) {
-            try {
-                stmt.recycle();
-                SQLRETURN ret = SQLPrimaryKeys(
-                    stmt.get_handle(),
-                    nullptr, 0,
-                    schema.empty() ? nullptr : (SQLCHAR*)schema.c_str(),
-                    schema.empty() ? 0 : SQL_NTS,
-                    (SQLCHAR*)table.c_str(), SQL_NTS
-                );
-                
-                // Even if there are no primary keys, if the function succeeds, it's callable
-                if (SQL_SUCCEEDED(ret)) {
-                    callable = true;
-                    
-                    int pk_count = 0;
-                    while (stmt.fetch() && pk_count < 10) {
-                        pk_count++;
+        Severity::INFO, ConformanceLevel::LEVEL_1, "ODBC 3.8 SQLPrimaryKeys",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            // Try to get primary keys from system tables
+            std::vector<std::pair<std::string, std::string>> test_tables = {
+                {"", "RDB$DATABASE"},
+                {"information_schema", "TABLES"},
+                {"sys", "tables"}
+            };
+
+            bool callable = false;
+
+            for (const auto& [schema, table] : test_tables) {
+                try {
+                    stmt.recycle();
+                    SQLRETURN ret = SQLPrimaryKeys(
+                        stmt.get_handle(),
+                        nullptr, 0,
+                        schema.empty() ? nullptr : (SQLCHAR*)schema.c_str(),
+                        schema.empty() ? 0 : SQL_NTS,
+                        (SQLCHAR*)table.c_str(), SQL_NTS
+                    );
+
+                    // Even if there are no primary keys, if the function succeeds, it's callable
+                    if (SQL_SUCCEEDED(ret)) {
+                        callable = true;
+
+                        int pk_count = 0;
+                        while (stmt.fetch() && pk_count < 10) {
+                            pk_count++;
+                        }
+
+                        if (pk_count > 0) {
+                            std::ostringstream oss;
+                            oss << "Found " << pk_count << " primary key column(s)";
+                            r.actual = oss.str();
+                            r.status = TestStatus::PASS;
+                            break;
+                        }
                     }
-                    
-                    if (pk_count > 0) {
-                        std::ostringstream oss;
-                        oss << "Found " << pk_count << " primary key column(s)";
-                        result.actual = oss.str();
-                        result.status = TestStatus::PASS;
-                        break;
-                    }
+                } catch (const core::OdbcError&) {
+                    continue;
                 }
-            } catch (const core::OdbcError&) {
-                continue;
             }
-        }
-        
-        if (!callable) {
-            result.actual = "SQLPrimaryKeys not supported by driver";
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.suggestion = "SQLPrimaryKeys is a Level 1 function and may not be implemented";
-        } else if (result.actual.empty()) {
-            result.actual = "SQLPrimaryKeys callable (no PKs in queried tables)";
-            result.status = TestStatus::PASS;
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+
+            if (!callable) {
+                r.actual = "SQLPrimaryKeys not supported by driver";
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.suggestion = "SQLPrimaryKeys is a Level 1 function and may not be implemented";
+            } else if (r.actual.empty()) {
+                r.actual = "SQLPrimaryKeys callable (no PKs in queried tables)";
+                r.status = TestStatus::PASS;
+            }
+        });
 }
 
 TestResult MetadataTests::test_statistics() {
-    TestResult result = make_result(
-        "test_statistics",
-        "SQLStatistics",
-        TestStatus::PASS,
+    return run_test(
+        "test_statistics", "SQLStatistics",
         "Query index/statistics information",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 SQLStatistics"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        std::vector<std::pair<std::string, std::string>> test_tables = {
-            {"", "RDB$DATABASE"},
-            {"information_schema", "TABLES"}
-        };
-        
-        bool callable = false;
-        
-        for (const auto& [schema, table] : test_tables) {
-            try {
-                stmt.recycle();
-                SQLRETURN ret = SQLStatistics(
-                    stmt.get_handle(),
-                    nullptr, 0,
-                    schema.empty() ? nullptr : (SQLCHAR*)schema.c_str(),
-                    schema.empty() ? 0 : SQL_NTS,
-                    (SQLCHAR*)table.c_str(), SQL_NTS,
-                    SQL_INDEX_ALL,      // All indexes
-                    SQL_QUICK           // Don't guarantee accuracy
-                );
-                
-                if (SQL_SUCCEEDED(ret)) {
-                    callable = true;
-                    
-                    int stat_count = 0;
-                    while (stmt.fetch() && stat_count < 20) {
-                        stat_count++;
+        Severity::INFO, ConformanceLevel::LEVEL_1, "ODBC 3.8 SQLStatistics",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            std::vector<std::pair<std::string, std::string>> test_tables = {
+                {"", "RDB$DATABASE"},
+                {"information_schema", "TABLES"}
+            };
+
+            bool callable = false;
+
+            for (const auto& [schema, table] : test_tables) {
+                try {
+                    stmt.recycle();
+                    SQLRETURN ret = SQLStatistics(
+                        stmt.get_handle(),
+                        nullptr, 0,
+                        schema.empty() ? nullptr : (SQLCHAR*)schema.c_str(),
+                        schema.empty() ? 0 : SQL_NTS,
+                        (SQLCHAR*)table.c_str(), SQL_NTS,
+                        SQL_INDEX_ALL,      // All indexes
+                        SQL_QUICK           // Don't guarantee accuracy
+                    );
+
+                    if (SQL_SUCCEEDED(ret)) {
+                        callable = true;
+
+                        int stat_count = 0;
+                        while (stmt.fetch() && stat_count < 20) {
+                            stat_count++;
+                        }
+
+                        std::ostringstream oss;
+                        if (stat_count > 0) {
+                            oss << "Found " << stat_count << " statistic(s)/index(es)";
+                        } else {
+                            oss << "SQLStatistics callable (no statistics in test table)";
+                        }
+                        r.actual = oss.str();
+                        r.status = TestStatus::PASS;
+                        break;
                     }
-                    
-                    std::ostringstream oss;
-                    if (stat_count > 0) {
-                        oss << "Found " << stat_count << " statistic(s)/index(es)";
-                    } else {
-                        oss << "SQLStatistics callable (no statistics in test table)";
-                    }
-                    result.actual = oss.str();
-                    result.status = TestStatus::PASS;
-                    break;
+                } catch (const core::OdbcError&) {
+                    continue;
                 }
-            } catch (const core::OdbcError&) {
-                continue;
             }
-        }
-        
-        if (!callable) {
-            result.actual = "SQLStatistics not supported by driver";
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.suggestion = "SQLStatistics is a Level 1 function and may not be implemented";
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+
+            if (!callable) {
+                r.actual = "SQLStatistics not supported by driver";
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.suggestion = "SQLStatistics is a Level 1 function and may not be implemented";
+            }
+        });
 }
 
 TestResult MetadataTests::test_special_columns() {
-    TestResult result = make_result(
-        "test_special_columns",
-        "SQLSpecialColumns",
-        TestStatus::PASS,
+    return run_test(
+        "test_special_columns", "SQLSpecialColumns",
         "Query special columns (row identifiers)",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 SQLSpecialColumns"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        // Strategy 1: Dynamically discover a base table via SQLTables.
-        // We want a TABLE (not VIEW) because SQLSpecialColumns with
-        // SQL_BEST_ROWID is meaningful on base tables with primary keys.
-        struct DiscoveredTable {
-            std::string catalog;
-            std::string schema;
-            std::string name;
-        };
-        std::vector<DiscoveredTable> discovered;
-        
-        try {
-            core::OdbcStatement tbl_stmt(conn_);
-            SQLRETURN tbl_ret = SQLTables(tbl_stmt.get_handle(),
-                nullptr, 0, nullptr, 0, nullptr, 0,
-                (SQLCHAR*)"TABLE", SQL_NTS);
-            if (SQL_SUCCEEDED(tbl_ret)) {
-                char cat_buf[128] = {0};
-                char sch_buf[128] = {0};
-                char name_buf[128] = {0};
-                SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
-                while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
-                       && discovered.size() < 5) {
-                    cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
-                    SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
-                    SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
-                    SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
-                    if (name_ind > 0) {
-                        discovered.push_back({
-                            (cat_ind > 0) ? std::string(cat_buf) : "",
-                            (sch_ind > 0) ? std::string(sch_buf) : "",
-                            std::string(name_buf)
-                        });
-                    }
-                }
-            }
-        } catch (...) {}
-        
-        // Strategy 2: Static fallback list covering major drivers.
-        // Use discovered tables first, then well-known base tables.
-        std::vector<DiscoveredTable> test_tables;
-        for (auto& d : discovered) test_tables.push_back(std::move(d));
-        test_tables.push_back({"", "",  "RDB$DATABASE"});                // Firebird
-        test_tables.push_back({"", "pg_catalog", "pg_class"});           // PostgreSQL
-        test_tables.push_back({"", "pg_catalog", "pg_type"});            // PostgreSQL
-        test_tables.push_back({"", "information_schema", "TABLES"});     // MySQL / SQL Server
-        test_tables.push_back({"information_schema", "", "TABLES"});     // MySQL (catalog)
-        test_tables.push_back({"", "dbo", "sysobjects"});               // SQL Server
-        
-        bool callable = false;
-        
-        for (const auto& tbl : test_tables) {
+        Severity::INFO, ConformanceLevel::LEVEL_1, "ODBC 3.8 SQLSpecialColumns",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            // Strategy 1: Dynamically discover a base table via SQLTables.
+            // We want a TABLE (not VIEW) because SQLSpecialColumns with
+            // SQL_BEST_ROWID is meaningful on base tables with primary keys.
+            struct DiscoveredTable {
+                std::string catalog;
+                std::string schema;
+                std::string name;
+            };
+            std::vector<DiscoveredTable> discovered;
+
             try {
-                stmt.recycle();
-                SQLRETURN ret = SQLSpecialColumns(
-                    stmt.get_handle(),
-                    SQL_BEST_ROWID,     // Best row identifier
-                    tbl.catalog.empty() ? nullptr : (SQLCHAR*)tbl.catalog.c_str(),
-                    tbl.catalog.empty() ? 0 : SQL_NTS,
-                    tbl.schema.empty() ? nullptr : (SQLCHAR*)tbl.schema.c_str(),
-                    tbl.schema.empty() ? 0 : SQL_NTS,
-                    (SQLCHAR*)tbl.name.c_str(), SQL_NTS,
-                    SQL_SCOPE_SESSION,  // Valid for session
-                    SQL_NULLABLE        // Include nullable columns
-                );
-                
-                if (SQL_SUCCEEDED(ret)) {
-                    callable = true;
-                    
-                    int col_count = 0;
-                    while (stmt.fetch() && col_count < 10) {
-                        col_count++;
+                core::OdbcStatement tbl_stmt(conn_);
+                SQLRETURN tbl_ret = SQLTables(tbl_stmt.get_handle(),
+                    nullptr, 0, nullptr, 0, nullptr, 0,
+                    (SQLCHAR*)"TABLE", SQL_NTS);
+                if (SQL_SUCCEEDED(tbl_ret)) {
+                    char cat_buf[128] = {0};
+                    char sch_buf[128] = {0};
+                    char name_buf[128] = {0};
+                    SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
+                    while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                           && discovered.size() < 5) {
+                        cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
+                        SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
+                        SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
+                        SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
+                        if (name_ind > 0) {
+                            discovered.push_back({
+                                (cat_ind > 0) ? std::string(cat_buf) : "",
+                                (sch_ind > 0) ? std::string(sch_buf) : "",
+                                std::string(name_buf)
+                            });
+                        }
                     }
-                    
-                    std::ostringstream oss;
-                    if (col_count > 0) {
-                        oss << "Found " << col_count << " special column(s)";
-                    } else {
-                        oss << "SQLSpecialColumns callable (no special columns)";
-                    }
-                    result.actual = oss.str();
-                    result.status = TestStatus::PASS;
-                    break;
                 }
-            } catch (const core::OdbcError&) {
-                continue;
+            } catch (...) {}
+
+            // Strategy 2: Static fallback list covering major drivers.
+            // Use discovered tables first, then well-known base tables.
+            std::vector<DiscoveredTable> test_tables;
+            for (auto& d : discovered) test_tables.push_back(std::move(d));
+            test_tables.push_back({"", "",  "RDB$DATABASE"});                // Firebird
+            test_tables.push_back({"", "pg_catalog", "pg_class"});           // PostgreSQL
+            test_tables.push_back({"", "pg_catalog", "pg_type"});            // PostgreSQL
+            test_tables.push_back({"", "information_schema", "TABLES"});     // MySQL / SQL Server
+            test_tables.push_back({"information_schema", "", "TABLES"});     // MySQL (catalog)
+            test_tables.push_back({"", "dbo", "sysobjects"});               // SQL Server
+
+            bool callable = false;
+
+            for (const auto& tbl : test_tables) {
+                try {
+                    stmt.recycle();
+                    SQLRETURN ret = SQLSpecialColumns(
+                        stmt.get_handle(),
+                        SQL_BEST_ROWID,     // Best row identifier
+                        tbl.catalog.empty() ? nullptr : (SQLCHAR*)tbl.catalog.c_str(),
+                        tbl.catalog.empty() ? 0 : SQL_NTS,
+                        tbl.schema.empty() ? nullptr : (SQLCHAR*)tbl.schema.c_str(),
+                        tbl.schema.empty() ? 0 : SQL_NTS,
+                        (SQLCHAR*)tbl.name.c_str(), SQL_NTS,
+                        SQL_SCOPE_SESSION,  // Valid for session
+                        SQL_NULLABLE        // Include nullable columns
+                    );
+
+                    if (SQL_SUCCEEDED(ret)) {
+                        callable = true;
+
+                        int col_count = 0;
+                        while (stmt.fetch() && col_count < 10) {
+                            col_count++;
+                        }
+
+                        std::ostringstream oss;
+                        if (col_count > 0) {
+                            oss << "Found " << col_count << " special column(s)";
+                        } else {
+                            oss << "SQLSpecialColumns callable (no special columns)";
+                        }
+                        r.actual = oss.str();
+                        r.status = TestStatus::PASS;
+                        break;
+                    }
+                } catch (const core::OdbcError&) {
+                    continue;
+                }
             }
-        }
-        
-        if (!callable) {
-            result.actual = "SQLSpecialColumns not supported by driver";
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.suggestion = "SQLSpecialColumns is a Level 1 function and may not be implemented";
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-    }
-    
-    return result;
+
+            if (!callable) {
+                r.actual = "SQLSpecialColumns not supported by driver";
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.suggestion = "SQLSpecialColumns is a Level 1 function and may not be implemented";
+            }
+        });
 }
 
 TestResult MetadataTests::test_foreign_keys() {
-    TestResult result = make_result(
-        "test_foreign_keys",
-        "SQLForeignKeys",
-        TestStatus::PASS,
+    // NOTE: original catch downgraded any OdbcError to SKIP_UNSUPPORTED with
+    // a custom message. Preserved by adding inner try/catch in the lambda.
+    return run_test(
+        "test_foreign_keys", "SQLForeignKeys",
         "Retrieve foreign key relationships",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_1,
-        "ODBC 3.8 SQLForeignKeys"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        // Try to get foreign keys using different approaches
-        // ODBC spec requires either PK or FK table name
-        bool success = false;
-        bool callable = false;
-        int fk_count = 0;
-        
-        // Discover actual user tables from the database
-        std::vector<std::string> user_tables;
-        try {
-            core::OdbcStatement tbl_stmt(conn_);
-            SQLRETURN tbl_ret = SQLTables(tbl_stmt.get_handle(),
-                nullptr, 0, nullptr, 0, nullptr, 0,
-                (SQLCHAR*)"TABLE", SQL_NTS);
-            if (SQL_SUCCEEDED(tbl_ret)) {
-                char name_buf[128] = {0};
-                SQLLEN ind = 0;
-                while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
-                       && user_tables.size() < 20) {
-                    if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3,
-                            SQL_C_CHAR, name_buf, sizeof(name_buf), &ind))
-                        && ind > 0) {
-                        user_tables.emplace_back(name_buf);
+        Severity::INFO, ConformanceLevel::LEVEL_1, "ODBC 3.8 SQLForeignKeys",
+        [&](TestResult& r) {
+            try {
+                core::OdbcStatement stmt(conn_);
+
+                // Try to get foreign keys using different approaches
+                // ODBC spec requires either PK or FK table name
+                bool success = false;
+                bool callable = false;
+                int fk_count = 0;
+
+                // Discover actual user tables from the database
+                std::vector<std::string> user_tables;
+                try {
+                    core::OdbcStatement tbl_stmt(conn_);
+                    SQLRETURN tbl_ret = SQLTables(tbl_stmt.get_handle(),
+                        nullptr, 0, nullptr, 0, nullptr, 0,
+                        (SQLCHAR*)"TABLE", SQL_NTS);
+                    if (SQL_SUCCEEDED(tbl_ret)) {
+                        char name_buf[128] = {0};
+                        SQLLEN ind = 0;
+                        while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                               && user_tables.size() < 20) {
+                            if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3,
+                                    SQL_C_CHAR, name_buf, sizeof(name_buf), &ind))
+                                && ind > 0) {
+                                user_tables.emplace_back(name_buf);
+                            }
+                        }
+                    }
+                } catch (...) {}
+
+                // Build table list: discovered tables first, then well-known names
+                std::vector<std::string> fk_tables;
+                for (const auto& t : user_tables) fk_tables.push_back(t);
+                fk_tables.push_back("ORDERS");
+                fk_tables.push_back("ORDER_ITEMS");
+
+                // Strategy 1: Try each table as FK table
+                for (const auto& fk_tbl : fk_tables) {
+                    try {
+                        stmt.recycle();
+                        SQLRETURN ret = SQLForeignKeys(
+                            stmt.get_handle(),
+                            nullptr, 0,     // PK Catalog
+                            nullptr, 0,     // PK Schema
+                            nullptr, 0,     // PK Table
+                            nullptr, 0,     // FK Catalog
+                            nullptr, 0,     // FK Schema
+                            (SQLCHAR*)fk_tbl.c_str(), SQL_NTS  // FK Table
+                        );
+
+                        if (SQL_SUCCEEDED(ret)) {
+                            callable = true;  // Function works even if 0 rows returned
+                            while (stmt.fetch() && fk_count < 100) {
+                                fk_count++;
+                            }
+                            if (fk_count > 0) {
+                                success = true;
+                                break;
+                            }
+                        }
+                    } catch (const core::OdbcError&) {
+                        continue;
                     }
                 }
-            }
-        } catch (...) {}
-        
-        // Build table list: discovered tables first, then well-known names
-        std::vector<std::string> fk_tables;
-        for (const auto& t : user_tables) fk_tables.push_back(t);
-        fk_tables.push_back("ORDERS");
-        fk_tables.push_back("ORDER_ITEMS");
-        
-        // Strategy 1: Try each table as FK table
-        for (const auto& fk_tbl : fk_tables) {
-            try {
-                stmt.recycle();
-                SQLRETURN ret = SQLForeignKeys(
-                    stmt.get_handle(),
-                    nullptr, 0,     // PK Catalog
-                    nullptr, 0,     // PK Schema
-                    nullptr, 0,     // PK Table
-                    nullptr, 0,     // FK Catalog
-                    nullptr, 0,     // FK Schema
-                    (SQLCHAR*)fk_tbl.c_str(), SQL_NTS  // FK Table
-                );
-                
-                if (SQL_SUCCEEDED(ret)) {
-                    callable = true;  // Function works even if 0 rows returned
-                    while (stmt.fetch() && fk_count < 100) {
-                        fk_count++;
+
+                // Strategy 2: Try with all NULLs (some drivers support this)
+                if (!success && !callable) {
+                    try {
+                        stmt.recycle();
+                        SQLRETURN ret = SQLForeignKeys(
+                            stmt.get_handle(),
+                            nullptr, 0,     // PK Catalog
+                            nullptr, 0,     // PK Schema
+                            nullptr, 0,     // PK Table
+                            nullptr, 0,     // FK Catalog
+                            nullptr, 0,     // FK Schema
+                            nullptr, 0      // FK Table
+                        );
+
+                        if (SQL_SUCCEEDED(ret)) {
+                            callable = true;
+                            while (stmt.fetch() && fk_count < 100) {
+                                fk_count++;
+                            }
+                            if (fk_count > 0) {
+                                success = true;
+                            }
+                        }
+                    } catch (const core::OdbcError&) {
+                        // Ignore - some drivers don't support all-NULLs
                     }
-                    if (fk_count > 0) {
-                        success = true;
-                        break;
-                    }
+                }
+
+                if (success || fk_count > 0) {
+                    std::ostringstream oss;
+                    oss << "Found " << fk_count << " foreign key(s)";
+                    r.actual = oss.str();
+                    r.status = TestStatus::PASS;
+                } else if (callable) {
+                    r.actual = "SQLForeignKeys callable (no foreign keys in database)";
+                    r.status = TestStatus::PASS;
+                } else {
+                    r.actual = "SQLForeignKeys not supported";
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.suggestion = "SQLForeignKeys is a Level 1 function; some drivers don't implement foreign key metadata";
                 }
             } catch (const core::OdbcError&) {
-                continue;
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Foreign keys not supported by driver";
+                r.suggestion = "SQLForeignKeys is a Level 1 function; this is normal for simple drivers";
             }
-        }
-        
-        // Strategy 2: Try with all NULLs (some drivers support this)
-        if (!success && !callable) {
-            try {
-                stmt.recycle();
-                SQLRETURN ret = SQLForeignKeys(
-                    stmt.get_handle(),
-                    nullptr, 0,     // PK Catalog
-                    nullptr, 0,     // PK Schema
-                    nullptr, 0,     // PK Table
-                    nullptr, 0,     // FK Catalog
-                    nullptr, 0,     // FK Schema
-                    nullptr, 0      // FK Table
-                );
-                
-                if (SQL_SUCCEEDED(ret)) {
-                    callable = true;
-                    while (stmt.fetch() && fk_count < 100) {
-                        fk_count++;
-                    }
-                    if (fk_count > 0) {
-                        success = true;
-                    }
-                }
-            } catch (const core::OdbcError&) {
-                // Ignore - some drivers don't support all-NULLs
-            }
-        }
-        
-        if (success || fk_count > 0) {
-            std::ostringstream oss;
-            oss << "Found " << fk_count << " foreign key(s)";
-            result.actual = oss.str();
-            result.status = TestStatus::PASS;
-        } else if (callable) {
-            result.actual = "SQLForeignKeys callable (no foreign keys in database)";
-            result.status = TestStatus::PASS;
-        } else {
-            result.actual = "SQLForeignKeys not supported";
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.suggestion = "SQLForeignKeys is a Level 1 function; some drivers don't implement foreign key metadata";
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError&) {
-        result.status = TestStatus::SKIP_UNSUPPORTED;
-        result.actual = "Foreign keys not supported by driver";
-        result.suggestion = "SQLForeignKeys is a Level 1 function; this is normal for simple drivers";
-    }
-    
-    return result;
+        });
 }
 
 TestResult MetadataTests::test_table_privileges() {
-    TestResult result = make_result(
-        "test_table_privileges",
-        "SQLTablePrivileges",
-        TestStatus::PASS,
+    // NOTE: original catch downgraded any OdbcError to SKIP_UNSUPPORTED.
+    return run_test(
+        "test_table_privileges", "SQLTablePrivileges",
         "Query table access privileges",
-        "",
-        Severity::INFO,
-        ConformanceLevel::LEVEL_2,
-        "ODBC 3.8 SQLTablePrivileges"
-    );
-    
-    try {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        core::OdbcStatement stmt(conn_);
-        
-        // Try to get table privileges
-        SQLRETURN ret = SQLTablePrivileges(
-            stmt.get_handle(),
-            nullptr, 0,     // Catalog
-            nullptr, 0,     // Schema
-            nullptr, 0      // Table
-        );
-        
-        if (SQL_SUCCEEDED(ret)) {
-            int priv_count = 0;
-            while (stmt.fetch() && priv_count < 100) {
-                priv_count++;
-            }
-            
-            std::ostringstream oss;
-            oss << "Found " << priv_count << " table privilege(s)";
-            result.actual = oss.str();
-            result.status = TestStatus::PASS;
-        } else {
-            result.actual = "SQLTablePrivileges not supported";
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.suggestion = "SQLTablePrivileges is a Level 2 function; many drivers don't implement privilege metadata";
-        }
-        
-        auto end_time = std::chrono::high_resolution_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        
-    } catch (const core::OdbcError&) {
-        result.status = TestStatus::SKIP_UNSUPPORTED;
-        result.actual = "Table privileges not supported by driver";
-        result.suggestion = "SQLTablePrivileges is a Level 2 function; this is normal for basic ODBC drivers";
-    }
+        Severity::INFO, ConformanceLevel::LEVEL_2, "ODBC 3.8 SQLTablePrivileges",
+        [&](TestResult& r) {
+            try {
+                core::OdbcStatement stmt(conn_);
 
-    return result;
+                // Try to get table privileges
+                SQLRETURN ret = SQLTablePrivileges(
+                    stmt.get_handle(),
+                    nullptr, 0,     // Catalog
+                    nullptr, 0,     // Schema
+                    nullptr, 0      // Table
+                );
+
+                if (SQL_SUCCEEDED(ret)) {
+                    int priv_count = 0;
+                    while (stmt.fetch() && priv_count < 100) {
+                        priv_count++;
+                    }
+
+                    std::ostringstream oss;
+                    oss << "Found " << priv_count << " table privilege(s)";
+                    r.actual = oss.str();
+                    r.status = TestStatus::PASS;
+                } else {
+                    r.actual = "SQLTablePrivileges not supported";
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.suggestion = "SQLTablePrivileges is a Level 2 function; many drivers don't implement privilege metadata";
+                }
+            } catch (const core::OdbcError&) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Table privileges not supported by driver";
+                r.suggestion = "SQLTablePrivileges is a Level 2 function; this is normal for basic ODBC drivers";
+            }
+        });
 }
 
 // ── §1.10: SQL_DESC_UNSIGNED sanity on signed numeric columns ──────────────
@@ -720,101 +600,77 @@ TestResult MetadataTests::test_table_privileges() {
 // runs `SELECT CAST(1 AS INTEGER)` and asserts SQL_DESC_UNSIGNED is
 // SQL_FALSE, with fallbacks for engines that can't cast literals.
 TestResult MetadataTests::test_desc_unsigned_on_signed_integer() {
-    TestResult result = make_result(
-        "test_desc_unsigned_on_signed_integer",
-        "SQLColAttribute",
-        TestStatus::PASS,
+    return run_test(
+        "test_desc_unsigned_on_signed_integer", "SQLColAttribute",
         "SQL_DESC_UNSIGNED == SQL_FALSE for a signed INTEGER column",
-        "",
-        Severity::WARNING,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLColAttribute, Appendix D: SQL_DESC_UNSIGNED"
-    );
+        Severity::WARNING, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLColAttribute, Appendix D: SQL_DESC_UNSIGNED",
+        [&](TestResult& r) {
+            // Try a sequence of known-portable INTEGER queries. The first one that
+            // executes is enough — we just need a cursor open on a signed integer
+            // column so we can call SQLColAttribute on it.
+            const std::vector<std::string> queries = {
+                "SELECT CAST(1 AS INTEGER)",
+                "SELECT CAST(1 AS INTEGER) FROM RDB$DATABASE",   // Firebird
+                "SELECT CAST(1 AS INTEGER) FROM DUAL",           // Oracle
+            };
 
-    auto start_time = std::chrono::high_resolution_clock::now();
-    auto elapsed = [&]() {
-        auto end = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
-    };
+            core::OdbcStatement stmt(conn_);
 
-    // Try a sequence of known-portable INTEGER queries. The first one that
-    // executes is enough — we just need a cursor open on a signed integer
-    // column so we can call SQLColAttribute on it.
-    const std::vector<std::string> queries = {
-        "SELECT CAST(1 AS INTEGER)",
-        "SELECT CAST(1 AS INTEGER) FROM RDB$DATABASE",   // Firebird
-        "SELECT CAST(1 AS INTEGER) FROM DUAL",           // Oracle
-    };
-
-    try {
-        core::OdbcStatement stmt(conn_);
-
-        SQLRETURN exec_rc = SQL_ERROR;
-        std::string used_query;
-        for (const auto& q : queries) {
-            try {
-                stmt.execute(q);
-                exec_rc = SQL_SUCCESS;
-                used_query = q;
-                break;
-            } catch (const core::OdbcError&) {
-                // try next
+            SQLRETURN exec_rc = SQL_ERROR;
+            std::string used_query;
+            for (const auto& q : queries) {
+                try {
+                    stmt.execute(q);
+                    exec_rc = SQL_SUCCESS;
+                    used_query = q;
+                    break;
+                } catch (const core::OdbcError&) {
+                    // try next
+                }
             }
-        }
-        if (!SQL_SUCCEEDED(exec_rc)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "No portable `CAST(1 AS INTEGER)` query succeeded";
-            result.suggestion = "Driver may not accept inline CAST literals; rerun "
-                                "against a connection that has a known signed "
-                                "INTEGER column.";
-            result.duration = elapsed();
-            return result;
-        }
+            if (!SQL_SUCCEEDED(exec_rc)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "No portable `CAST(1 AS INTEGER)` query succeeded";
+                r.suggestion = "Driver may not accept inline CAST literals; rerun "
+                                    "against a connection that has a known signed "
+                                    "INTEGER column.";
+                return;
+            }
 
-        SQLLEN unsigned_attr = -1;
-        SQLRETURN col_rc = SQLColAttribute(
-            stmt.get_handle(), 1, SQL_DESC_UNSIGNED,
-            nullptr, 0, nullptr, &unsigned_attr);
+            SQLLEN unsigned_attr = -1;
+            SQLRETURN col_rc = SQLColAttribute(
+                stmt.get_handle(), 1, SQL_DESC_UNSIGNED,
+                nullptr, 0, nullptr, &unsigned_attr);
 
-        if (!SQL_SUCCEEDED(col_rc)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "SQLColAttribute(SQL_DESC_UNSIGNED) returned " +
-                            std::to_string(col_rc);
-            result.suggestion = "Driver does not implement SQL_DESC_UNSIGNED — "
-                                "callers can't rely on it; treat all numeric "
-                                "columns as signed unless the driver says otherwise.";
-            result.duration = elapsed();
-            return result;
-        }
+            if (!SQL_SUCCEEDED(col_rc)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "SQLColAttribute(SQL_DESC_UNSIGNED) returned " +
+                                std::to_string(col_rc);
+                r.suggestion = "Driver does not implement SQL_DESC_UNSIGNED — "
+                                    "callers can't rely on it; treat all numeric "
+                                    "columns as signed unless the driver says otherwise.";
+                return;
+            }
 
-        if (unsigned_attr == SQL_FALSE) {
-            std::ostringstream actual;
-            actual << "Query `" << used_query
-                   << "` returned SQL_DESC_UNSIGNED = SQL_FALSE";
-            result.actual = actual.str();
-        } else {
-            result.status = TestStatus::FAIL;
-            result.severity = Severity::WARNING;
-            std::ostringstream actual;
-            actual << "Query `" << used_query
-                   << "` returned SQL_DESC_UNSIGNED = " << unsigned_attr
-                   << " (expected SQL_FALSE/0 for a signed INTEGER literal)";
-            result.actual = actual.str();
-            result.suggestion = "Driver reports a signed INTEGER as unsigned — "
-                                "this confuses scanner-style consumers that key "
-                                "on `(type, signed)`. See DuckDB ODBC HUGEINT bug.";
-        }
-
-        result.duration = elapsed();
-
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-        result.duration = elapsed();
-    }
-
-    return result;
+            if (unsigned_attr == SQL_FALSE) {
+                std::ostringstream actual;
+                actual << "Query `" << used_query
+                       << "` returned SQL_DESC_UNSIGNED = SQL_FALSE";
+                r.actual = actual.str();
+            } else {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::WARNING;
+                std::ostringstream actual;
+                actual << "Query `" << used_query
+                       << "` returned SQL_DESC_UNSIGNED = " << unsigned_attr
+                       << " (expected SQL_FALSE/0 for a signed INTEGER literal)";
+                r.actual = actual.str();
+                r.suggestion = "Driver reports a signed INTEGER as unsigned — "
+                                    "this confuses scanner-style consumers that key "
+                                    "on `(type, signed)`. See DuckDB ODBC HUGEINT bug.";
+            }
+        });
 }
 
 // ── §1.9: COUNT(*) result-metadata probe ──────────────────────────────────
@@ -830,107 +686,83 @@ TestResult MetadataTests::test_desc_unsigned_on_signed_integer() {
 // precision, scale, unsigned)` tuple into `actual` so a driver developer
 // can read the report and update their consumer code.
 TestResult MetadataTests::test_count_star_result_metadata() {
-    TestResult result = make_result(
-        "test_count_star_result_metadata",
-        "SQLDescribeCol/SQLColAttribute",
-        TestStatus::PASS,
+    return run_test(
+        "test_count_star_result_metadata", "SQLDescribeCol/SQLColAttribute",
         "Record COUNT(*) result column's (type, precision, scale, unsigned) tuple",
-        "",
-        Severity::INFO,
-        ConformanceLevel::CORE,
-        "ODBC 3.8 SQLDescribeCol, SQLColAttribute, Appendix D"
-    );
-
-    auto start_time = std::chrono::high_resolution_clock::now();
-    auto elapsed = [&]() {
-        auto end = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
-    };
-
-    // Find any table to count. SQLTables yields a portable list; avoids
-    // hard-coding mock-driver names (CUSTOMERS) so the probe runs on real
-    // drivers too.
-    std::string target_table;
-    try {
-        core::OdbcStatement enum_stmt(conn_);
-        SQLRETURN rc = SQLTables(enum_stmt.get_handle(),
-                                 nullptr, 0,
-                                 nullptr, 0,
-                                 nullptr, 0,
-                                 (SQLCHAR*)"TABLE", SQL_NTS);
-        if (SQL_SUCCEEDED(rc) && enum_stmt.fetch()) {
-            char buf[256] = {0};
-            SQLLEN ind = 0;
-            // Column 3 is TABLE_NAME per ODBC spec.
-            SQLGetData(enum_stmt.get_handle(), 3, SQL_C_CHAR, buf,
-                       sizeof(buf), &ind);
-            if (ind != SQL_NULL_DATA && buf[0] != '\0') {
-                target_table = buf;
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLDescribeCol, SQLColAttribute, Appendix D",
+        [&](TestResult& r) {
+            // Find any table to count. SQLTables yields a portable list; avoids
+            // hard-coding mock-driver names (CUSTOMERS) so the probe runs on real
+            // drivers too.
+            std::string target_table;
+            try {
+                core::OdbcStatement enum_stmt(conn_);
+                SQLRETURN rc = SQLTables(enum_stmt.get_handle(),
+                                         nullptr, 0,
+                                         nullptr, 0,
+                                         nullptr, 0,
+                                         (SQLCHAR*)"TABLE", SQL_NTS);
+                if (SQL_SUCCEEDED(rc) && enum_stmt.fetch()) {
+                    char buf[256] = {0};
+                    SQLLEN ind = 0;
+                    // Column 3 is TABLE_NAME per ODBC spec.
+                    SQLGetData(enum_stmt.get_handle(), 3, SQL_C_CHAR, buf,
+                               sizeof(buf), &ind);
+                    if (ind != SQL_NULL_DATA && buf[0] != '\0') {
+                        target_table = buf;
+                    }
+                }
+            } catch (const core::OdbcError&) {
+                // Fall through — we'll handle empty target_table below.
             }
-        }
-    } catch (const core::OdbcError&) {
-        // Fall through — we'll handle empty target_table below.
-    }
 
-    if (target_table.empty()) {
-        result.status = TestStatus::SKIP_INCONCLUSIVE;
-        result.actual = "SQLTables returned no tables; cannot probe COUNT(*) metadata";
-        result.duration = elapsed();
-        return result;
-    }
+            if (target_table.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "SQLTables returned no tables; cannot probe COUNT(*) metadata";
+                return;
+            }
 
-    try {
-        core::OdbcStatement stmt(conn_);
-        std::string query = "SELECT COUNT(*) FROM " + target_table;
-        try {
-            stmt.execute(query);
-        } catch (const core::OdbcError& e) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "Failed to execute `" + query + "`: " + e.what();
-            result.duration = elapsed();
-            return result;
-        }
+            core::OdbcStatement stmt(conn_);
+            std::string query = "SELECT COUNT(*) FROM " + target_table;
+            try {
+                stmt.execute(query);
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Failed to execute `" + query + "`: " + e.what();
+                return;
+            }
 
-        SQLSMALLINT sql_type = 0;
-        SQLULEN col_size = 0;
-        SQLSMALLINT scale = 0;
-        SQLSMALLINT nullable = 0;
-        SQLCHAR col_name[256] = {0};
-        SQLSMALLINT col_name_len = 0;
+            SQLSMALLINT sql_type = 0;
+            SQLULEN col_size = 0;
+            SQLSMALLINT scale = 0;
+            SQLSMALLINT nullable = 0;
+            SQLCHAR col_name[256] = {0};
+            SQLSMALLINT col_name_len = 0;
 
-        SQLRETURN rc = SQLDescribeCol(stmt.get_handle(), 1,
-                                      col_name, sizeof(col_name), &col_name_len,
-                                      &sql_type, &col_size, &scale, &nullable);
+            SQLRETURN rc = SQLDescribeCol(stmt.get_handle(), 1,
+                                          col_name, sizeof(col_name), &col_name_len,
+                                          &sql_type, &col_size, &scale, &nullable);
 
-        SQLLEN unsigned_attr = -1;
-        SQLColAttribute(stmt.get_handle(), 1, SQL_DESC_UNSIGNED,
-                        nullptr, 0, nullptr, &unsigned_attr);
+            SQLLEN unsigned_attr = -1;
+            SQLColAttribute(stmt.get_handle(), 1, SQL_DESC_UNSIGNED,
+                            nullptr, 0, nullptr, &unsigned_attr);
 
-        if (!SQL_SUCCEEDED(rc)) {
-            result.status = TestStatus::SKIP_INCONCLUSIVE;
-            result.actual = "SQLDescribeCol returned " + std::to_string(rc);
-            result.duration = elapsed();
-            return result;
-        }
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "SQLDescribeCol returned " + std::to_string(rc);
+                return;
+            }
 
-        std::ostringstream actual;
-        actual << "Table=" << target_table
-               << " sql_type=" << sql_type
-               << " precision=" << col_size
-               << " scale=" << scale
-               << " unsigned=" << (unsigned_attr == SQL_TRUE ? "TRUE" :
-                                   unsigned_attr == SQL_FALSE ? "FALSE" : "UNKNOWN");
-        result.actual = actual.str();
-        result.duration = elapsed();
-
-    } catch (const core::OdbcError& e) {
-        result.status = TestStatus::ERR;
-        result.actual = e.what();
-        result.diagnostic = e.format_diagnostics();
-        result.duration = elapsed();
-    }
-
-    return result;
+            std::ostringstream actual;
+            actual << "Table=" << target_table
+                   << " sql_type=" << sql_type
+                   << " precision=" << col_size
+                   << " scale=" << scale
+                   << " unsigned=" << (unsigned_attr == SQL_TRUE ? "TRUE" :
+                                       unsigned_attr == SQL_FALSE ? "FALSE" : "UNKNOWN");
+            r.actual = actual.str();
+        });
 }
 
 } // namespace odbc_crusher::tests
