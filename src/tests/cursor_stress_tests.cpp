@@ -5,12 +5,20 @@
 #include <vector>
 #include <memory>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <sql.h>
+#include <sqlext.h>
+
 namespace odbc_crusher::tests {
 
 std::vector<TestResult> CursorStressTests::run() {
     return {
         test_rapid_cursor_lifecycle(),
-        test_concurrent_statements()
+        test_concurrent_statements(),
+        test_open_close_hammer_loop(),
+        test_handle_reuse_no_leak()
     };
 }
 
@@ -134,6 +142,158 @@ TestResult CursorStressTests::test_concurrent_statements() {
                 r.status = TestStatus::FAIL;
                 r.severity = Severity::WARNING;
                 r.suggestion = "Concurrent statement results were incorrect — driver may not support multiple active statements";
+            }
+        });
+}
+
+// ── PORT plan §4.5 — phase-separated open/close hammer loop ────────────────
+//
+// 500 iterations of (alloc + ExecDirect "SELECT 1") / (CloseCursor +
+// FreeHandle). Times the two phases independently so drivers that
+// re-fetch remaining rows on close show up as outliers. The whole-
+// iteration timing in test_rapid_cursor_lifecycle hides this — a
+// 50µs open + 250µs close looks the same as 150µs each in aggregate.
+
+TestResult CursorStressTests::test_open_close_hammer_loop() {
+    return run_test(
+        "test_open_close_hammer_loop",
+        "SQLAllocHandle/SQLExecDirect/SQLCloseCursor/SQLFreeHandle",
+        "Cursor open and close phases scale independently — close not "
+        "more than 10× the cost of open",
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 — SQLCloseCursor must not re-fetch remaining rows",
+        [&](TestResult& r) {
+            constexpr int kIterations = 500;
+            long long open_total_us = 0;
+            long long close_total_us = 0;
+            int successful = 0;
+
+            for (int i = 0; i < kIterations; ++i) {
+                // OPEN phase
+                auto open_start = std::chrono::high_resolution_clock::now();
+                SQLHSTMT hstmt = SQL_NULL_HSTMT;
+                SQLRETURN rc = SQLAllocHandle(SQL_HANDLE_STMT,
+                                              conn_.get_handle(), &hstmt);
+                if (!SQL_SUCCEEDED(rc)) continue;
+                rc = SQLExecDirect(hstmt,
+                    reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT 1")),
+                    SQL_NTS);
+                auto open_end = std::chrono::high_resolution_clock::now();
+                open_total_us += std::chrono::duration_cast<std::chrono::microseconds>(
+                    open_end - open_start).count();
+
+                if (!SQL_SUCCEEDED(rc)) {
+                    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+                    continue;
+                }
+
+                // CLOSE phase
+                auto close_start = std::chrono::high_resolution_clock::now();
+                SQLCloseCursor(hstmt);
+                SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+                auto close_end = std::chrono::high_resolution_clock::now();
+                close_total_us += std::chrono::duration_cast<std::chrono::microseconds>(
+                    close_end - close_start).count();
+                ++successful;
+            }
+
+            if (successful == 0) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not complete a single open/close cycle";
+                return;
+            }
+
+            const long long open_mean  = open_total_us  / successful;
+            const long long close_mean = close_total_us / successful;
+
+            std::ostringstream oss;
+            oss << successful << "/" << kIterations
+                << " cycles | open_mean=" << open_mean << "us"
+                << " close_mean=" << close_mean << "us"
+                << " ratio=" << (open_mean > 0 ?
+                    static_cast<double>(close_mean) / static_cast<double>(open_mean) : 0.0);
+            r.actual = oss.str();
+
+            // Threshold: close > 10× open mean is the documented red flag.
+            if (open_mean > 0 && close_mean > open_mean * 10) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::WARNING;
+                r.suggestion = "SQLCloseCursor is dramatically slower than the "
+                               "open path — driver likely re-fetches remaining "
+                               "rows or holds a server-side resource until "
+                               "close. Spec: close should be a near-no-op when "
+                               "the cursor has been fully consumed.";
+            }
+        });
+}
+
+// ── PORT plan §4.5 — handle reuse, no leak ─────────────────────────────────
+//
+// Same statement handle, 500 ExecDirect → CloseCursor cycles. After every
+// iteration, walk the diagnostic queue and assert it has zero records (the
+// handle's diagnostic state was cleared by the next operation). Drivers
+// that leak state into the next iteration accumulate records.
+
+TestResult CursorStressTests::test_handle_reuse_no_leak() {
+    return run_test(
+        "test_handle_reuse_no_leak",
+        "SQLExecDirect/SQLCloseCursor on shared handle",
+        "Reused statement handle: 500 cycles complete without diagnostic "
+        "queue accumulation",
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 — diagnostic state is per-statement, cleared on next call",
+        [&](TestResult& r) {
+            constexpr int kIterations = 500;
+            core::OdbcStatement stmt(conn_);
+            int successful = 0;
+            int max_diag_records = 0;
+
+            for (int i = 0; i < kIterations; ++i) {
+                SQLRETURN rc = SQLExecDirect(stmt.get_handle(),
+                    reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT 1")),
+                    SQL_NTS);
+                if (!SQL_SUCCEEDED(rc)) continue;
+                SQLCloseCursor(stmt.get_handle());
+
+                // Count diagnostic records still present after close. Spec:
+                // SQLExecDirect clears the queue at entry; if records linger
+                // across cycles the count grows.
+                int rec = 0;
+                for (SQLSMALLINT j = 1; j <= 32; ++j) {
+                    char state[6] = {0};
+                    SQLINTEGER native = 0;
+                    SQLCHAR msg[128] = {0};
+                    SQLSMALLINT msg_len = 0;
+                    SQLRETURN dr = SQLGetDiagRec(SQL_HANDLE_STMT,
+                        stmt.get_handle(), j,
+                        reinterpret_cast<SQLCHAR*>(state),
+                        &native, msg, sizeof(msg), &msg_len);
+                    if (dr == SQL_NO_DATA || !SQL_SUCCEEDED(dr)) break;
+                    ++rec;
+                }
+                if (rec > max_diag_records) max_diag_records = rec;
+                ++successful;
+            }
+
+            std::ostringstream oss;
+            oss << successful << "/" << kIterations
+                << " reuse cycles | max_diag_records_observed=" << max_diag_records;
+            r.actual = oss.str();
+
+            if (successful < kIterations * 9 / 10) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.suggestion = "Driver couldn't survive " +
+                    std::to_string(kIterations) + " execute/close cycles on "
+                    "the same handle — likely cursor state corruption.";
+                return;
+            }
+            if (max_diag_records > 1) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::WARNING;
+                r.suggestion = "Diagnostic queue grew past one record across "
+                               "reuse cycles — SQLExecDirect should clear the "
+                               "queue at entry per spec.";
             }
         });
 }
