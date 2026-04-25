@@ -41,19 +41,19 @@ $Drivers = [ordered]@{
     mysql = @{
         RepoUrl  = 'https://github.com/mysql/mysql-connector-odbc.git'
         RepoName = 'mysql-connector-odbc'
-        Tag      = '9.2.0'                # Binary download: 9.2.0
+        Tag      = '9.7.0'                # Binary download: 9.7.0
         Artifact = 'report-mysql'
     }
     duckdb = @{
         RepoUrl  = 'https://github.com/duckdb/duckdb-odbc.git'
         RepoName = 'duckdb-odbc'
-        Tag      = 'v1.4.4.0'             # Binary download: 1.4.4.0
+        Tag      = 'v1.5.2.0'             # Binary download: 1.5.2.0
         Artifact = 'report-duckdb'
     }
     clickhouse = @{
         RepoUrl  = 'https://github.com/ClickHouse/clickhouse-odbc.git'
         RepoName = 'clickhouse-odbc'
-        Tag      = 'v1.5.0.20251127'      # Binary download: 1.5.0.20251127
+        Tag      = 'v1.5.3.20260311'      # Binary download: 1.5.3.20260311
         Artifact = 'report-clickhouse'
     }
 }

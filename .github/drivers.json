@@ -9,7 +9,7 @@
       "install": {
         "method": "apt",
         "package": "odbc-postgresql",
-        "apt_version": "1:16.00.0000-0.4-1build1"
+        "apt_version": "1:16.00.0000-1"
       },
       "source": {
         "repo": "https://github.com/postgresql-interfaces/psqlodbc",
@@ -25,7 +25,7 @@
       "install": {
         "method": "apt",
         "package": "odbc-mariadb",
-        "apt_version": "3.1.15-1build3"
+        "apt_version": "3.1.15-3"
       },
       "source": {
         "repo": "https://github.com/mariadb-corporation/mariadb-connector-odbc",
@@ -37,16 +37,16 @@
 
     "mysql": {
       "display_name": "MySQL Connector/ODBC",
-      "version": "9.2.0",
+      "version": "9.7.0",
       "install": {
         "method": "binary_download",
-        "url": "https://dev.mysql.com/get/Downloads/Connector-ODBC/9.2/mysql-connector-odbc-9.2.0-linux-glibc2.28-x86-64bit.tar.gz",
+        "url": "https://dev.mysql.com/get/Downloads/Connector-ODBC/9.7/mysql-connector-odbc-9.7.0-linux-glibc2.28-x86-64bit.tar.gz",
         "library_name": "libmyodbc9w.so",
         "driver_section": "MySQL"
       },
       "source": {
         "repo": "https://github.com/mysql/mysql-connector-odbc",
-        "tag": "9.2.0"
+        "tag": "9.7.0"
       },
       "conn_string": "Driver={MySQL};Server=127.0.0.1;Port=3306;User=crusher;Password=crusher;",
       "platform": "linux"
@@ -54,16 +54,16 @@
 
     "duckdb": {
       "display_name": "DuckDB ODBC",
-      "version": "1.4.4.0",
+      "version": "1.5.2.0",
       "install": {
         "method": "binary_download",
-        "url": "https://github.com/duckdb/duckdb-odbc/releases/download/v1.4.4.0/duckdb_odbc-linux-amd64.zip",
+        "url": "https://github.com/duckdb/duckdb-odbc/releases/download/v1.5.2.0/duckdb_odbc-linux-amd64.zip",
         "library_name": "libduckdb_odbc.so",
         "driver_section": "DuckDB Driver"
       },
       "source": {
         "repo": "https://github.com/duckdb/duckdb-odbc",
-        "tag": "v1.4.4.0"
+        "tag": "v1.5.2.0"
       },
       "conn_string": "Driver={DuckDB Driver};",
       "platform": "linux"
@@ -71,17 +71,17 @@
 
     "clickhouse": {
       "display_name": "ClickHouse ODBC",
-      "version": "1.5.0.20251127",
+      "version": "1.5.3.20260311",
       "install": {
         "method": "binary_download",
-        "url": "https://github.com/ClickHouse/clickhouse-odbc/releases/download/v1.5.0.20251127/clickhouse-odbc-linux-Clang-UnixODBC-Release.zip",
+        "url": "https://github.com/ClickHouse/clickhouse-odbc/releases/download/v1.5.3.20260311/clickhouse-odbc-linux-Clang-UnixODBC-Release.zip",
         "library_name": "libclickhouseodbcw.so",
         "driver_section": "ClickHouse",
         "_note": "Server brought up via ClickHouse's own deb repo; server version is not part of the triage contract — only the driver version is pinned."
       },
       "source": {
         "repo": "https://github.com/ClickHouse/clickhouse-odbc",
-        "tag": "v1.5.0.20251127"
+        "tag": "v1.5.3.20260311"
       },
       "conn_string": "Driver={ClickHouse};Server=127.0.0.1;Port=8123;",
       "platform": "linux"

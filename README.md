@@ -314,9 +314,9 @@ consumed by both the workflow (at runtime via `jq`) and the
 |---|---|---|
 | **PostgreSQL** (psqlodbc) | 16.00.0000 | [postgresql-interfaces/psqlodbc](https://github.com/postgresql-interfaces/psqlodbc) |
 | **MariaDB Connector/ODBC** | 3.1.15 | [mariadb-corporation/mariadb-connector-odbc](https://github.com/mariadb-corporation/mariadb-connector-odbc) |
-| **MySQL Connector/ODBC** | 9.2.0 | [mysql/mysql-connector-odbc](https://github.com/mysql/mysql-connector-odbc) |
-| **DuckDB ODBC** | 1.4.4.0 | [duckdb/duckdb-odbc](https://github.com/duckdb/duckdb-odbc) |
-| **ClickHouse ODBC** | 1.5.0.20251127 | [ClickHouse/clickhouse-odbc](https://github.com/ClickHouse/clickhouse-odbc) |
+| **MySQL Connector/ODBC** | 9.7.0 | [mysql/mysql-connector-odbc](https://github.com/mysql/mysql-connector-odbc) |
+| **DuckDB ODBC** | 1.5.2.0 | [duckdb/duckdb-odbc](https://github.com/duckdb/duckdb-odbc) |
+| **ClickHouse ODBC** | 1.5.3.20260311 | [ClickHouse/clickhouse-odbc](https://github.com/ClickHouse/clickhouse-odbc) |
 | **Mock ODBC Driver** (in-repo) | tracks master | `mock-driver/` |
 
 > **Firebird ODBC Driver** is not yet in the matrix — intentionally

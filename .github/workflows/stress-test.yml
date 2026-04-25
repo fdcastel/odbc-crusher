@@ -273,12 +273,8 @@ jobs:
         DRIVER_LIB=$(jq -er '.drivers.clickhouse.install.library_name' .github/drivers.json)
         DRIVER_SECTION=$(jq -er '.drivers.clickhouse.install.driver_section' .github/drivers.json)
         CONN=$(jq -er '.drivers.clickhouse.conn_string' .github/drivers.json)
-        # The inner tarball is named clickhouse-odbc-X.Y.Z-Linux (3 segments,
-        # not 4 — even though `version` carries the full 4-segment date suffix).
-        DRIVER_VERSION_SHORT=$(echo "$DRIVER_VERSION" | awk -F. '{print $1"."$2"."$3}')
         {
           echo "DRIVER_VERSION=$DRIVER_VERSION"
-          echo "DRIVER_VERSION_SHORT=$DRIVER_VERSION_SHORT"
           echo "DRIVER_URL=$DRIVER_URL"
           echo "DRIVER_LIB_NAME=$DRIVER_LIB"
           echo "DRIVER_SECTION=$DRIVER_SECTION"
@@ -299,8 +295,8 @@ jobs:
 
         curl --no-progress-meter -LO "${DRIVER_URL}"
         unzip clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
-        tar xJf "clickhouse-odbc-${DRIVER_VERSION_SHORT}-Linux.tar.xz"
-        DRIVER_PATH=$(readlink -f "clickhouse-odbc-${DRIVER_VERSION_SHORT}-Linux/lib/${DRIVER_LIB_NAME}")
+        tar xJf "clickhouse-odbc-${DRIVER_VERSION}-Linux.tar.xz"
+        DRIVER_PATH=$(readlink -f "clickhouse-odbc-${DRIVER_VERSION}-Linux/lib/${DRIVER_LIB_NAME}")
         echo "ClickHouse ODBC driver ${DRIVER_VERSION}: ${DRIVER_PATH}"
         {
           echo "[${DRIVER_SECTION}]"
@@ -308,7 +304,7 @@ jobs:
           echo "Driver = ${DRIVER_PATH}"
         } | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
-        echo "CLICKHOUSE_DRIVER_LIB=$(readlink -f "clickhouse-odbc-${DRIVER_VERSION_SHORT}-Linux/lib")" >> "$GITHUB_ENV"
+        echo "CLICKHOUSE_DRIVER_LIB=$(readlink -f "clickhouse-odbc-${DRIVER_VERSION}-Linux/lib")" >> "$GITHUB_ENV"
 
     - name: Record actual installed version (provenance for triage)
       run: |
