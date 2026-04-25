@@ -61,6 +61,27 @@ jobs:
     - name: Build
       run: cmake --build build --config Release -j 4
 
+    - name: Smoke test (binary launches and reports its version)
+      # Catches DLL-load failures, stripped symbols, and "binary built
+      # but won't run" classes of release-only breakage before we publish
+      # the artifact. The version string also has to match the tag —
+      # a release of "v0.5.0" that prints "0.4.5-dirty" indicates the
+      # version-from-git-tag pipeline broke.
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          BIN=build/src/Release/odbc-crusher.exe
+        else
+          BIN=build/src/odbc-crusher
+        fi
+        VERSION_OUTPUT=$("$BIN" --version)
+        echo "Binary reports: $VERSION_OUTPUT"
+        EXPECTED="${GITHUB_REF#refs/tags/v}"
+        case "$VERSION_OUTPUT" in
+          *"$EXPECTED"*) echo "OK: version matches tag $EXPECTED" ;;
+          *) echo "::error::Binary version '$VERSION_OUTPUT' doesn't contain tag '$EXPECTED'"; exit 1 ;;
+        esac
+
     - name: Package
       run: ${{ matrix.package_cmd }}
 
