@@ -87,14 +87,14 @@ jobs:
         curl --no-progress-meter -LO "${MYSQL_ODBC_LIB_URL}"
         tar xzf mysql-connector-odbc-*.tar.gz
         DRIVER_DIR=$(ls -d mysql-connector-odbc-*/lib/)
-        DRIVER_PATH=$(readlink -f ${DRIVER_DIR}/libmyodbc9w.so)
+        DRIVER_PATH=$(readlink -f "${DRIVER_DIR}/libmyodbc9w.so")
         echo "MySQL ODBC driver ${MYSQL_ODBC_VERSION}: ${DRIVER_PATH}"
         echo "[MySQL]" | sudo tee -a /etc/odbcinst.ini
         echo "Description = MySQL ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
         echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
         # Persist the driver dir for the run step to extend LD_LIBRARY_PATH.
-        echo "MYSQL_DRIVER_LIB=$(readlink -f $DRIVER_DIR)" >> $GITHUB_ENV
+        echo "MYSQL_DRIVER_LIB=$(readlink -f "$DRIVER_DIR")" >> "$GITHUB_ENV"
 
     - uses: ./.github/actions/run-crusher
       with:
@@ -131,7 +131,7 @@ jobs:
         echo "Description = DuckDB ODBC Driver" | sudo tee -a /etc/odbcinst.ini
         echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
-        echo "DUCKDB_DRIVER_LIB=$(readlink -f duckdb_odbc)" >> $GITHUB_ENV
+        echo "DUCKDB_DRIVER_LIB=$(readlink -f duckdb_odbc)" >> "$GITHUB_ENV"
 
     - uses: ./.github/actions/run-crusher
       with:
@@ -167,14 +167,14 @@ jobs:
 
         curl --no-progress-meter -LO "${CLICKHOUSE_ODBC_LIB_URL}"
         unzip clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
-        tar xJf clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux.tar.xz
-        DRIVER_PATH=$(readlink -f clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib/libclickhouseodbcw.so)
+        tar xJf "clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux.tar.xz"
+        DRIVER_PATH=$(readlink -f "clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib/libclickhouseodbcw.so")
         echo "ClickHouse ODBC driver ${CLICKHOUSE_ODBC_VERSION}: ${DRIVER_PATH}"
         echo "[ClickHouse]" | sudo tee -a /etc/odbcinst.ini
         echo "Description = ClickHouse ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
         echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
-        echo "CLICKHOUSE_DRIVER_LIB=$(readlink -f clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib)" >> $GITHUB_ENV
+        echo "CLICKHOUSE_DRIVER_LIB=$(readlink -f "clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib")" >> "$GITHUB_ENV"
 
     - uses: ./.github/actions/run-crusher
       with:
