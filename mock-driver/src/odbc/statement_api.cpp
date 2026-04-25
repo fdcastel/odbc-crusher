@@ -625,11 +625,12 @@ SQLRETURN SQL_API SQLGetData(
     SQLPOINTER rgbValue,
     SQLLEN cbValueMax,
     SQLLEN* pcbValue) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
-    
+    stmt->clear_diagnostics();
+
     if (!stmt->executed_ || stmt->current_row_ < 0) {
         stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,
                             "No current row");
@@ -897,14 +898,16 @@ SQLRETURN SQL_API SQLGetData(
 SQLRETURN SQL_API SQLNumResultCols(
     SQLHSTMT hstmt,
     SQLSMALLINT* pccol) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     if (pccol) {
         *pccol = stmt->num_result_cols_;
     }
-    
+
     return SQL_SUCCESS;
 }
 
@@ -918,10 +921,12 @@ SQLRETURN SQL_API SQLDescribeCol(
     SQLULEN* pcbColDef,
     SQLSMALLINT* pibScale,
     SQLSMALLINT* pfNullable) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     if (icol < 1 || icol > static_cast<SQLUSMALLINT>(stmt->column_names_.size())) {
         stmt->add_diagnostic(sqlstate::INVALID_PARAMETER_NUMBER, 0,
                             "Invalid column number");
@@ -969,10 +974,12 @@ SQLRETURN SQL_API SQLBindCol(
     SQLPOINTER rgbValue,
     SQLLEN cbValueMax,
     SQLLEN* pcbValue) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     if (icol == 0) {
         // Unbind bookmark column - not supported
         return SQL_SUCCESS;
@@ -1008,10 +1015,12 @@ SQLRETURN SQL_API SQLBindParameter(
     SQLLEN* pcbValue) {
     
     (void)ibScale;
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     if (ipar == 0) {
         stmt->add_diagnostic(sqlstate::INVALID_PARAMETER_NUMBER, 0,
                             "Parameter number must be >= 1");
@@ -1070,21 +1079,25 @@ SQLRETURN SQL_API SQLBindParameter(
 SQLRETURN SQL_API SQLRowCount(
     SQLHSTMT hstmt,
     SQLLEN* pcrow) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     if (pcrow) {
         *pcrow = stmt->row_count_;
     }
-    
+
     return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT hstmt) {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     if (!stmt->cursor_open_) {
         stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,
                             "Cursor not open");
@@ -1101,7 +1114,9 @@ SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT hstmt) {
 SQLRETURN SQL_API SQLMoreResults(SQLHSTMT hstmt) {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     // Mock driver doesn't support multiple result sets
     return SQL_NO_DATA;
 }
@@ -1120,7 +1135,8 @@ SQLRETURN SQL_API SQLGetStmtAttr(
         return SQL_INVALID_HANDLE;
     }
     HandleLock lock(stmt);
-    
+    stmt->clear_diagnostics();
+
     switch (fAttribute) {
         case SQL_ATTR_CURSOR_TYPE: {
             if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->cursor_type_;
@@ -1218,10 +1234,12 @@ SQLRETURN SQL_API SQLSetStmtAttr(
     SQLINTEGER cbValue) {
     
     (void)cbValue;
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     SQLULEN value = reinterpret_cast<SQLULEN>(rgbValue);
     
     switch (fAttribute) {
@@ -1285,10 +1303,15 @@ SQLRETURN SQL_API SQLSetStmtAttr(
 SQLRETURN SQL_API SQLFreeStmt(
     SQLHSTMT hstmt,
     SQLUSMALLINT fOption) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    // SQL_DROP deletes `stmt`; take the lock/clear only for the other
+    // options so we don't touch freed memory when fOption == SQL_DROP.
+    if (fOption != SQL_DROP) {
+        stmt->clear_diagnostics();
+    }
+
     switch (fOption) {
         case SQL_CLOSE:
             stmt->cursor_open_ = false;
@@ -1315,20 +1338,24 @@ SQLRETURN SQL_API SQLFreeStmt(
 SQLRETURN SQL_API SQLCancel(SQLHSTMT hstmt) {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     // Mock: just reset state
     stmt->cursor_open_ = false;
-    
+
     return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLNumParams(
     SQLHSTMT hstmt,
     SQLSMALLINT* pcpar) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     // Count ? placeholders in SQL
     int count = 0;
     for (char c : stmt->sql_) {
@@ -1347,10 +1374,12 @@ SQLRETURN SQL_API SQLDescribeParam(
     SQLULEN* pcbParamDef,
     SQLSMALLINT* pibScale,
     SQLSMALLINT* pfNullable) {
-    
+
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
     if (!stmt->prepared_) {
         stmt->add_diagnostic(sqlstate::FUNCTION_SEQUENCE_ERROR, 0,
                             "Statement not prepared");
