@@ -109,6 +109,11 @@ TEST(ConfigTest, ParseSilentCorruptionTruncateNumeric) {
     EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::TruncateNumeric);
 }
 
+TEST(ConfigTest, ParseSilentCorruptionNullAsEmpty) {
+    DriverConfig config = parse_connection_string("SilentCorruption=NullAsEmpty;");
+    EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::NullAsEmpty);
+}
+
 TEST(ConfigTest, ParseSilentCorruptionUnknownFallsBackToNone) {
     DriverConfig config = parse_connection_string("SilentCorruption=Bogus;");
     EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::None);

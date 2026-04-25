@@ -676,9 +676,30 @@ SQLRETURN SQL_API SQLGetData(
     }
     
     const auto& cell = stmt->result_data_[stmt->current_row_][icol - 1];
-    
+
     // Handle NULL
     if (std::holds_alternative<std::monostate>(cell)) {
+        // SilentCorruption=NullAsEmpty — Oracle-style "empty string and NULL
+        // are the same thing" misbehaviour: for character target types the
+        // mock returns an empty buffer with indicator=0 instead of
+        // SQL_NULL_DATA. Drives the PORT plan port 2 e2e canary; correct
+        // drivers/applications must distinguish the two.
+        const auto& config = BehaviorController::instance().config();
+        if (config.silent_corruption ==
+                DriverConfig::SilentCorruptionMode::NullAsEmpty &&
+            (fCType == SQL_C_CHAR || fCType == SQL_C_WCHAR ||
+             fCType == SQL_C_DEFAULT || fCType == SQL_ARD_TYPE)) {
+            if (rgbValue && cbValueMax > 0) {
+                if (fCType == SQL_C_WCHAR) {
+                    auto* w = static_cast<SQLWCHAR*>(rgbValue);
+                    w[0] = 0;
+                } else {
+                    static_cast<char*>(rgbValue)[0] = '\0';
+                }
+            }
+            if (pcbValue) *pcbValue = 0;
+            return SQL_SUCCESS;
+        }
         if (pcbValue) *pcbValue = SQL_NULL_DATA;
         return SQL_SUCCESS;
     }

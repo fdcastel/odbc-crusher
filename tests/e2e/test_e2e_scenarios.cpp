@@ -193,3 +193,38 @@ TEST_F(CrusherE2EFixture, SilentCorruptionTruncateNumericTripsFractionalRoundTri
         << "Under TruncateNumeric, the SQL_NUMERIC_STRUCT byte-equality probe "
            "MUST fail (stored 12345.67 → 12345.0 changes the mantissa).";
 }
+
+// ── SilentCorruption=NullAsEmpty: the NULL-vs-empty contrast probe FAILs ──
+// PORT plan port 2.E. Under NullAsEmpty the mock returns NULL char cells as
+// empty string with indicator=0 — Oracle-style empty-vs-null conflation.
+// The new contrast probe in datatype_edge_tests catches this; the integer
+// and numeric variants are unaffected (NullAsEmpty only touches char/wchar).
+
+TEST_F(CrusherE2EFixture, SilentCorruptionNullAsEmptyTripsNullVsEmptyContrast) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "SilentCorruption=NullAsEmpty;ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("summary"));
+
+    auto t = find_test(run.report, "Data Type Edge Cases",
+                       "test_null_vs_empty_distinction_varchar");
+    ASSERT_TRUE(t.has_value())
+        << "NULL-vs-empty contrast probe missing — was it removed?";
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+        << "Under NullAsEmpty, the contrast probe MUST fail "
+           "(both rows return indicator=0).";
+
+    // Sibling cells stay PASS — NullAsEmpty only affects char/wchar fetch.
+    auto t_int = find_test(run.report, "Data Type Edge Cases",
+                           "test_null_vs_zero_distinction_integer");
+    ASSERT_TRUE(t_int.has_value());
+    EXPECT_EQ(t_int->value("status", std::string{}), "PASS")
+        << "NullAsEmpty must not affect SQL_C_SLONG fetches.";
+    auto t_num = find_test(run.report, "Data Type Edge Cases",
+                           "test_null_in_numeric_struct");
+    ASSERT_TRUE(t_num.has_value());
+    EXPECT_EQ(t_num->value("status", std::string{}), "PASS")
+        << "NullAsEmpty must not affect SQL_C_NUMERIC fetches.";
+}

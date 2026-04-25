@@ -228,6 +228,8 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::MangleVarchar;
     } else if (corruption_str == "truncatenumeric") {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::TruncateNumeric;
+    } else if (corruption_str == "nullasempty") {
+        config.silent_corruption = DriverConfig::SilentCorruptionMode::NullAsEmpty;
     } else {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::None;
     }

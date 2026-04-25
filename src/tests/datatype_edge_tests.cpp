@@ -26,7 +26,10 @@ std::vector<TestResult> DataTypeEdgeCaseTests::run() {
         test_integer_as_string(),
         test_string_as_integer(),
         test_decimal_values(),
-        test_varchar_raw_byte_integrity()
+        test_varchar_raw_byte_integrity(),
+        test_null_vs_empty_distinction_varchar(),
+        test_null_vs_zero_distinction_integer(),
+        test_null_in_numeric_struct()
     };
 }
 
@@ -639,6 +642,242 @@ TestResult DataTypeEdgeCaseTests::test_varchar_raw_byte_integrity() {
             actual << " (informational; engines with inline length prefixes "
                       "should NOT show ASCII 'A'=0x41 in the first prefix bytes)";
             r.actual = actual.str();
+        });
+}
+
+// ── NULL-vs-non-NULL contrast probes (PORT plan §4.2) ──────────────────────
+//
+// The existing test_null_{integer,varchar} probes verify that a NULL value
+// returns SQL_NULL_DATA, but drivers that conflate empty/zero with NULL pass
+// those individually. The contrast is what catches the bug: round-trip both
+// NULL and a non-NULL sentinel through the same column, and assert the two
+// indicators differ.
+//
+// All three probes use INFRA-1 RoundTripTableGuard for cleanup.
+
+namespace {
+
+// Walks rows in PK order, reads VAL with the given C type, fills `inds`
+// with the indicator from each row. Returns true on a clean fetch chain.
+template <typename Buf>
+bool collect_indicators(core::OdbcConnection& conn,
+                        const std::string& table_name,
+                        SQLSMALLINT c_type,
+                        Buf& bufA, SQLLEN& indA,
+                        Buf& bufB, SQLLEN& indB) {
+    core::OdbcStatement sel(conn);
+    sel.execute("SELECT VAL FROM " + table_name + " ORDER BY ID");
+    SQLRETURN rc = SQLFetch(sel.get_handle());
+    if (!SQL_SUCCEEDED(rc)) return false;
+    rc = SQLGetData(sel.get_handle(), 1, c_type,
+                    &bufA, sizeof(bufA), &indA);
+    if (!SQL_SUCCEEDED(rc)) return false;
+    rc = SQLFetch(sel.get_handle());
+    if (!SQL_SUCCEEDED(rc)) return false;
+    rc = SQLGetData(sel.get_handle(), 1, c_type,
+                    &bufB, sizeof(bufB), &indB);
+    return SQL_SUCCEEDED(rc);
+}
+
+} // namespace
+
+TestResult DataTypeEdgeCaseTests::test_null_vs_empty_distinction_varchar() {
+    return run_test(
+        "test_null_vs_empty_distinction_varchar", "SQLGetData",
+        "Empty string ('') and NULL VARCHAR produce different indicators "
+        "(0 vs SQL_NULL_DATA)",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetData: SQL_NULL_DATA distinguishes NULL from empty data",
+        [&](TestResult& r) {
+            const std::string table = "ODBC_TEST_NULL_VARCHAR";
+            RoundTripTableGuard tbl(conn_, table, "VARCHAR(8)");
+            if (!tbl.ok()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create round-trip table: " + tbl.last_error();
+                return;
+            }
+
+            try {
+                core::OdbcStatement ins1(conn_);
+                ins1.execute("INSERT INTO " + table + " (ID, VAL) VALUES (1, '')");
+                core::OdbcStatement ins2(conn_);
+                ins2.execute("INSERT INTO " + table + " (ID, VAL) VALUES (2, NULL)");
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = std::string("INSERT failed: ") + e.what();
+                return;
+            }
+
+            char bufEmpty[16];
+            char bufNull[16];
+            std::memset(bufEmpty, 'X', sizeof(bufEmpty));
+            std::memset(bufNull,  'X', sizeof(bufNull));
+            SQLLEN indEmpty = 999;
+            SQLLEN indNull  = 999;
+            if (!collect_indicators(conn_, table, SQL_C_CHAR,
+                                    bufEmpty, indEmpty,
+                                    bufNull,  indNull)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Failed to fetch both rows from " + table;
+                return;
+            }
+
+            std::ostringstream summary;
+            summary << "row1 ('') indicator=" << indEmpty
+                    << "; row2 (NULL) indicator=" << indNull;
+            r.actual = summary.str();
+
+            if (indEmpty == SQL_NULL_DATA && indNull == SQL_NULL_DATA) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Driver appears to treat empty string as NULL "
+                               "(Oracle-style conflation). Empty VARCHAR must "
+                               "return indicator=0, not SQL_NULL_DATA.";
+                return;
+            }
+            if (indNull != SQL_NULL_DATA) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "NULL VARCHAR must produce SQL_NULL_DATA "
+                               "(spec: ODBC 3.8 SQLGetData).";
+                return;
+            }
+            if (indEmpty == SQL_NULL_DATA) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Empty VARCHAR must NOT produce SQL_NULL_DATA — "
+                               "use indicator=0 for an empty string.";
+            }
+        });
+}
+
+TestResult DataTypeEdgeCaseTests::test_null_vs_zero_distinction_integer() {
+    return run_test(
+        "test_null_vs_zero_distinction_integer", "SQLGetData",
+        "Integer 0 and NULL produce different indicators "
+        "(sizeof(SQLINTEGER) vs SQL_NULL_DATA), buffer not zeroed for NULL",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetData: indicator distinguishes NULL from value=0",
+        [&](TestResult& r) {
+            const std::string table = "ODBC_TEST_NULL_INT";
+            RoundTripTableGuard tbl(conn_, table, "INTEGER");
+            if (!tbl.ok()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create round-trip table: " + tbl.last_error();
+                return;
+            }
+
+            try {
+                core::OdbcStatement ins1(conn_);
+                ins1.execute("INSERT INTO " + table + " (ID, VAL) VALUES (1, 0)");
+                core::OdbcStatement ins2(conn_);
+                ins2.execute("INSERT INTO " + table + " (ID, VAL) VALUES (2, NULL)");
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = std::string("INSERT failed: ") + e.what();
+                return;
+            }
+
+            // Sentinel value for the NULL row: a driver that zeroes the buffer
+            // instead of setting SQL_NULL_DATA leaves us unable to distinguish
+            // VAL=0 from NULL.
+            SQLINTEGER bufZero = 0xDEADBEEF;
+            SQLINTEGER bufNull = 0xDEADBEEF;
+            SQLLEN indZero = 999, indNull = 999;
+            if (!collect_indicators(conn_, table, SQL_C_SLONG,
+                                    bufZero, indZero,
+                                    bufNull, indNull)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Failed to fetch both rows from " + table;
+                return;
+            }
+
+            std::ostringstream summary;
+            summary << "row1 (0) indicator=" << indZero << " buf=" << bufZero
+                    << "; row2 (NULL) indicator=" << indNull
+                    << " buf=0x" << std::hex << bufNull << std::dec;
+            r.actual = summary.str();
+
+            if (indNull != SQL_NULL_DATA) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "NULL INTEGER must produce SQL_NULL_DATA. A "
+                               "zeroed buffer with indicator != SQL_NULL_DATA "
+                               "is indistinguishable from a real value of 0.";
+                return;
+            }
+            if (indZero != static_cast<SQLLEN>(sizeof(SQLINTEGER)) || bufZero != 0) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Stored 0 must round-trip as buf=0 with "
+                               "indicator=sizeof(SQLINTEGER), distinct from "
+                               "the SQL_NULL_DATA path.";
+            }
+        });
+}
+
+TestResult DataTypeEdgeCaseTests::test_null_in_numeric_struct() {
+    return run_test(
+        "test_null_in_numeric_struct", "SQLGetData(SQL_C_NUMERIC)",
+        "NULL DECIMAL produces SQL_NULL_DATA when read as SQL_C_NUMERIC",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetData: SQL_NULL_DATA on the indicator for NULL numeric",
+        [&](TestResult& r) {
+            const std::string table = "ODBC_TEST_NULL_NUM";
+            RoundTripTableGuard tbl(conn_, table, "DECIMAL(10, 2)");
+            if (!tbl.ok()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create round-trip table: " + tbl.last_error();
+                return;
+            }
+
+            try {
+                core::OdbcStatement ins(conn_);
+                ins.execute("INSERT INTO " + table + " (ID, VAL) VALUES (1, NULL)");
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = std::string("INSERT failed: ") + e.what();
+                return;
+            }
+
+            core::OdbcStatement sel(conn_);
+            sel.execute("SELECT VAL FROM " + table);
+            SQLRETURN rc = SQLFetch(sel.get_handle());
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "SQLFetch failed";
+                return;
+            }
+
+            // Configure ARD descriptor; some drivers reject SQL_C_NUMERIC
+            // without it. The struct content for a NULL is unconstrained
+            // by spec — only the indicator must be SQL_NULL_DATA.
+            SQLHDESC ard = SQL_NULL_HDESC;
+            SQLGetStmtAttr(sel.get_handle(), SQL_ATTR_APP_ROW_DESC, &ard, 0, nullptr);
+            if (ard != SQL_NULL_HDESC) {
+                SQLSetDescField(ard, 1, SQL_DESC_TYPE,
+                                reinterpret_cast<SQLPOINTER>(SQL_C_NUMERIC), 0);
+                SQLSetDescField(ard, 1, SQL_DESC_PRECISION,
+                                reinterpret_cast<SQLPOINTER>(static_cast<intptr_t>(10)), 0);
+                SQLSetDescField(ard, 1, SQL_DESC_SCALE,
+                                reinterpret_cast<SQLPOINTER>(static_cast<intptr_t>(2)), 0);
+            }
+
+            SQL_NUMERIC_STRUCT ns;
+            std::memset(&ns, 0xAA, sizeof(ns));  // sentinel
+            SQLLEN ind = 999;
+            rc = SQLGetData(sel.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "SQLGetData(SQL_C_NUMERIC) returned " + std::to_string(rc);
+                return;
+            }
+
+            std::ostringstream summary;
+            summary << "indicator=" << ind
+                    << " (expected SQL_NULL_DATA = " << SQL_NULL_DATA << ")";
+            r.actual = summary.str();
+            if (ind != SQL_NULL_DATA) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "NULL numeric must produce SQL_NULL_DATA; the "
+                               "SQL_NUMERIC_STRUCT contents are unspecified for "
+                               "NULL but the indicator is the contract.";
+            }
         });
 }
 

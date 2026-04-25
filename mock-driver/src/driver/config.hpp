@@ -83,7 +83,9 @@ struct DriverConfig {
         None,             // Default — store/return values verbatim
         DropInserts,      // Accept INSERT, return SUCCESS, store nothing
         MangleVarchar,    // Replace each stored string with a transformed copy
-        TruncateNumeric   // Round stored doubles to integer, lose precision
+        TruncateNumeric,  // Round stored doubles to integer, lose precision
+        NullAsEmpty       // Fetch NULL char/wchar cells as empty string + ind=0
+                          // (Oracle-style empty-vs-null conflation)
     };
     SilentCorruptionMode silent_corruption = SilentCorruptionMode::None;
 

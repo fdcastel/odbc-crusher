@@ -33,6 +33,13 @@ private:
     TestResult test_string_as_integer();
     TestResult test_decimal_values();
     TestResult test_varchar_raw_byte_integrity();
+
+    // PORT plan §4.2 — NULL-vs-non-NULL contrast probes. The existing
+    // test_null_{integer,varchar} only checks NULL alone; drivers that
+    // conflate empty/zero with NULL pass those individually but FAIL these.
+    TestResult test_null_vs_empty_distinction_varchar();
+    TestResult test_null_vs_zero_distinction_integer();
+    TestResult test_null_in_numeric_struct();
 };
 
 } // namespace odbc_crusher::tests

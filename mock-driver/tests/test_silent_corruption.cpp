@@ -9,6 +9,7 @@
 #endif
 #include <sql.h>
 #include <sqlext.h>
+#include <cstring>
 #include <string>
 
 class SilentCorruptionTest : public ::testing::Test {
@@ -141,6 +142,51 @@ TEST_F(SilentCorruptionTest, TruncateNumericDropsFractionalPart) {
 
     EXPECT_EQ(CountRows("T_TRUNC"), 1);
     EXPECT_DOUBLE_EQ(FetchFirstDouble("SELECT V FROM T_TRUNC"), 3.0);
+}
+
+// NullAsEmpty — NULL char/wchar cells fetch as empty string + ind=0,
+// Oracle-style empty-vs-null conflation. Drives the PORT plan port 2 e2e
+// canary in tests/e2e/test_e2e_scenarios.cpp.
+TEST_F(SilentCorruptionTest, NullAsEmptyCollapsesNullAndEmptyString) {
+    Connect("SilentCorruption=NullAsEmpty;");
+    Exec("CREATE TABLE T_NULLEMPTY (ID INTEGER, V VARCHAR(8))");
+    Exec("INSERT INTO T_NULLEMPTY (ID, V) VALUES (1, '')");
+    Exec("INSERT INTO T_NULLEMPTY (ID, V) VALUES (2, NULL)");
+
+    ASSERT_EQ(SQLExecDirect(hstmt,
+        (SQLCHAR*)"SELECT V FROM T_NULLEMPTY ORDER BY ID", SQL_NTS),
+        SQL_SUCCESS);
+
+    char bufA[16]; char bufB[16];
+    std::memset(bufA, 'X', sizeof(bufA));
+    std::memset(bufB, 'X', sizeof(bufB));
+    SQLLEN indA = 999, indB = 999;
+
+    ASSERT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
+    ASSERT_EQ(SQLGetData(hstmt, 1, SQL_C_CHAR, bufA, sizeof(bufA), &indA), SQL_SUCCESS);
+    ASSERT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
+    ASSERT_EQ(SQLGetData(hstmt, 1, SQL_C_CHAR, bufB, sizeof(bufB), &indB), SQL_SUCCESS);
+
+    EXPECT_EQ(indA, 0) << "Empty string must come back as indicator=0";
+    EXPECT_EQ(indB, 0) << "NullAsEmpty must collapse NULL to indicator=0";
+    SQLCloseCursor(hstmt);
+}
+
+// NullAsEmpty must NOT touch non-character fetches — integer/numeric NULLs
+// still report SQL_NULL_DATA (the e2e canary leans on this isolation).
+TEST_F(SilentCorruptionTest, NullAsEmptyLeavesIntegerNullsAlone) {
+    Connect("SilentCorruption=NullAsEmpty;");
+    Exec("CREATE TABLE T_NULLINT (ID INTEGER, V INTEGER)");
+    Exec("INSERT INTO T_NULLINT (ID, V) VALUES (1, NULL)");
+
+    ASSERT_EQ(SQLExecDirect(hstmt,
+        (SQLCHAR*)"SELECT V FROM T_NULLINT", SQL_NTS), SQL_SUCCESS);
+    SQLINTEGER v = 0xDEADBEEF;
+    SQLLEN ind = 999;
+    ASSERT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
+    ASSERT_EQ(SQLGetData(hstmt, 1, SQL_C_SLONG, &v, sizeof(v), &ind), SQL_SUCCESS);
+    EXPECT_EQ(ind, SQL_NULL_DATA);
+    SQLCloseCursor(hstmt);
 }
 
 // Default mode is None even when other knobs are set — sanity check that
