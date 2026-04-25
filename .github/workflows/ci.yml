@@ -171,6 +171,10 @@ jobs:
         which odbcinst || echo "which: not found"
         ls -la /usr/bin/odbcinst /opt/homebrew/bin/odbcinst /usr/local/bin/odbcinst 2>&1 || true
         sudo which odbcinst || echo "sudo which: not found"
+        echo "--- dpkg -L unixodbc ---"
+        dpkg -L unixodbc 2>&1 | head -30 || echo "dpkg failed"
+        echo "--- find odbcinst ---"
+        sudo find / -name 'odbcinst*' -type f 2>/dev/null | head -10 || true
         echo "============================"
 
         # Linux generates libmockodbc.so directly under build/ (single-
