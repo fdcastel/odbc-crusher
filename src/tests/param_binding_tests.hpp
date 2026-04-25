@@ -70,6 +70,7 @@ private:
 
     TestResult test_sqldescribeparam_varchar();
     TestResult test_sqldescribeparam_integer();
+    TestResult test_sqldescribeparam_decimal();
 
     TestResult test_sqlrowcount_after_insert();
     TestResult test_sqlrowcount_after_update();

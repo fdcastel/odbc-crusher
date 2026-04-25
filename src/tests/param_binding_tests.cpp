@@ -32,6 +32,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_bindparam_int_to_wvarchar_roundtrip());
     results.push_back(test_sqldescribeparam_varchar());
     results.push_back(test_sqldescribeparam_integer());
+    results.push_back(test_sqldescribeparam_decimal());
     results.push_back(test_sqlrowcount_after_insert());
     results.push_back(test_sqlrowcount_after_update());
     results.push_back(test_sqlrowcount_after_delete());
@@ -1110,6 +1111,99 @@ TestResult ParameterBindingTests::test_param_bind_once_execute_many_endtran() {
     }
 
     drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+// §1.7 DECIMAL cell — same shape as INTEGER/VARCHAR but the column is
+// DECIMAL(10, 2). Uses its own table so the regular round-trip table
+// schema stays unchanged.
+TestResult ParameterBindingTests::test_sqldescribeparam_decimal() {
+    TestResult result = make_result(
+        "test_sqldescribeparam_decimal",
+        "SQLDescribeParam",
+        TestStatus::PASS,
+        "After PREPARE on `INSERT INTO t (decimal_col) VALUES (?)`, "
+        "SQLDescribeParam returns the column type, precision, and scale",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLDescribeParam"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    const std::string table_name = "ODBC_TEST_ROUNDTRIP_DEC";
+
+    if (!create_roundtrip_table(table_name, "DECIMAL(10, 2)")) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE " + table_name +
+                        " (ID INTEGER, VAL DECIMAL(10, 2))";
+        result.diagnostic = last_ddl_error_;
+        result.suggestion =
+            "Driver may not accept inline DECIMAL(p,s) DDL or the user "
+            "lacks DDL privileges. Skip — cannot probe SQLDescribeParam "
+            "for the DECIMAL shape.";
+        result.duration = elapsed();
+        return result;
+    }
+
+    SQLSMALLINT param_type = 0;
+    SQLULEN col_size = 0;
+    SQLSMALLINT scale = 0;
+    SQLSMALLINT nullable = 0;
+    SQLRETURN describe_rc = SQL_ERROR;
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        const std::string insert_sql =
+            "INSERT INTO " + table_name + " (ID, VAL) VALUES (?, ?)";
+        SQLRETURN rc = SQLPrepare(
+            stmt.get_handle(),
+            (SQLCHAR*)insert_sql.c_str(), SQL_NTS);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "SQLPrepare returned " + std::to_string(rc);
+            drop_roundtrip_table(table_name);
+            result.duration = elapsed();
+            return result;
+        }
+
+        // Probe parameter 2 (the DECIMAL column).
+        describe_rc = SQLDescribeParam(stmt.get_handle(), 2,
+                                       &param_type, &col_size, &scale, &nullable);
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+        drop_roundtrip_table(table_name);
+        result.duration = elapsed();
+        return result;
+    }
+
+    if (!SQL_SUCCEEDED(describe_rc)) {
+        result.status = TestStatus::SKIP_UNSUPPORTED;
+        result.actual = "SQLDescribeParam returned " + std::to_string(describe_rc);
+        result.suggestion =
+            "Driver does not implement SQLDescribeParam (Firebird ≤3.5.0 "
+            "returns SQL_ERROR). Scanner-style consumers must fall back to "
+            "static type knowledge for the DECIMAL shape too.";
+    } else {
+        std::ostringstream actual;
+        actual << "param_type=" << param_type
+               << " (expected SQL_DECIMAL=" << SQL_DECIMAL
+               << " or SQL_NUMERIC=" << SQL_NUMERIC << ")"
+               << " precision=" << col_size
+               << " scale=" << scale
+               << " nullable=" << nullable;
+        result.actual = actual.str();
+    }
+
+    drop_roundtrip_table(table_name);
     result.duration = elapsed();
     return result;
 }
