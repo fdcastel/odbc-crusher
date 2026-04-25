@@ -27,6 +27,9 @@ private:
     TestResult test_param_rebind_execute();
     TestResult test_bindparam_int_to_varchar_roundtrip();
     TestResult test_sqldescribeparam_varchar();
+    TestResult test_sqlrowcount_after_insert();
+    TestResult test_sqlrowcount_after_update();
+    TestResult test_sqlrowcount_after_delete();
 };
 
 } // namespace odbc_crusher::tests

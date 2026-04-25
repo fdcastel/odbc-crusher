@@ -22,6 +22,9 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_param_rebind_execute());
     results.push_back(test_bindparam_int_to_varchar_roundtrip());
     results.push_back(test_sqldescribeparam_varchar());
+    results.push_back(test_sqlrowcount_after_insert());
+    results.push_back(test_sqlrowcount_after_update());
+    results.push_back(test_sqlrowcount_after_delete());
 
     return results;
 }
@@ -625,6 +628,196 @@ TestResult ParameterBindingTests::test_sqldescribeparam_varchar() {
                << " scale=" << scale
                << " nullable=" << nullable;
         result.actual = actual.str();
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+// ── §1.8: SQLRowCount reliability matrix ───────────────────────────────────
+//
+// IMPROVEMENT_PLAN.md §1.8. Per the spec `SQLRowCount` returns the number
+// of rows affected by the most recent INSERT/UPDATE/DELETE on the
+// statement. In practice it lies on some drivers (-1 vs 0 confusion on
+// stored-procedure paths in particular). These three tests probe each
+// mutation path and report the actual value.
+namespace {
+
+// Record an explicit FAIL when SQLRowCount produces a wrong answer; the
+// test message includes both expected and observed counts.
+void record_rowcount_mismatch(TestResult& result, const std::string& op,
+                              SQLLEN expected, SQLLEN observed) {
+    result.status = TestStatus::FAIL;
+    std::ostringstream actual;
+    actual << "SQLRowCount after " << op << " returned " << observed
+           << " (expected " << expected << ")";
+    result.actual = actual.str();
+    result.suggestion =
+        "Driver's SQLRowCount is unreliable for this DML shape. "
+        "Consumers that key on row count must round-trip via "
+        "SELECT COUNT(*) instead.";
+}
+
+}  // namespace
+
+TestResult ParameterBindingTests::test_sqlrowcount_after_insert() {
+    TestResult result = make_result(
+        "test_sqlrowcount_after_insert",
+        "SQLRowCount",
+        TestStatus::PASS,
+        "After INSERT INTO t VALUES (?, ?), SQLRowCount returns 1",
+        "",
+        Severity::WARNING,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLRowCount"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE for SQLRowCount probe";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        stmt.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (1, '1')");
+        SQLLEN row_count = -2;
+        SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "SQLRowCount returned " + std::to_string(rc);
+        } else if (row_count != 1) {
+            record_rowcount_mismatch(result, "INSERT", 1, row_count);
+        } else {
+            result.actual = "SQLRowCount = 1 after single-row INSERT";
+        }
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+TestResult ParameterBindingTests::test_sqlrowcount_after_update() {
+    TestResult result = make_result(
+        "test_sqlrowcount_after_update",
+        "SQLRowCount",
+        TestStatus::PASS,
+        "After UPDATE t SET v=…, SQLRowCount returns the inserted row count",
+        "",
+        Severity::WARNING,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLRowCount"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    try {
+        core::OdbcStatement seed(conn_);
+        seed.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (1, 'a')");
+        core::OdbcStatement seed2(conn_);
+        seed2.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (2, 'b')");
+        core::OdbcStatement seed3(conn_);
+        seed3.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (3, 'c')");
+        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+        core::OdbcStatement stmt(conn_);
+        stmt.execute("UPDATE ODBC_TEST_ROUNDTRIP SET VAL = 'X'");
+        SQLLEN row_count = -2;
+        SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "SQLRowCount returned " + std::to_string(rc);
+        } else if (row_count != 3) {
+            record_rowcount_mismatch(result, "UPDATE", 3, row_count);
+        } else {
+            result.actual = "SQLRowCount = 3 after UPDATE matching all 3 rows";
+        }
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+TestResult ParameterBindingTests::test_sqlrowcount_after_delete() {
+    TestResult result = make_result(
+        "test_sqlrowcount_after_delete",
+        "SQLRowCount",
+        TestStatus::PASS,
+        "After DELETE FROM t WHERE …, SQLRowCount returns the matched row count",
+        "",
+        Severity::WARNING,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLRowCount"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    try {
+        core::OdbcStatement seed(conn_);
+        seed.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (1, 'a')");
+        core::OdbcStatement seed2(conn_);
+        seed2.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (2, 'b')");
+        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+        core::OdbcStatement stmt(conn_);
+        stmt.execute("DELETE FROM ODBC_TEST_ROUNDTRIP");
+        SQLLEN row_count = -2;
+        SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "SQLRowCount returned " + std::to_string(rc);
+        } else if (row_count != 2) {
+            record_rowcount_mismatch(result, "DELETE", 2, row_count);
+        } else {
+            result.actual = "SQLRowCount = 2 after DELETE matching all 2 rows";
+        }
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
     }
 
     drop_roundtrip_table();
