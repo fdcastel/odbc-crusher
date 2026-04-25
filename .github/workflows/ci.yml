@@ -180,12 +180,10 @@ jobs:
         # Use sudo for system-wide registration (/etc/odbcinst.ini) —
         # the per-user ~/.odbcinst.ini fallback isn't in unixODBC's
         # default driver lookup path, so the SQLDriverConnect from the
-        # e2e binary wouldn't find the registration.
-        #
-        # `sudo env PATH=$PATH` keeps the runner's PATH so register.sh
-        # finds odbcinst via `command -v` — the sudoers default
-        # secure_path on the GitHub runner image strips it otherwise.
-        sudo env "PATH=$PATH" ./mock-driver-artifact/install/register.sh "$DRIVER_ABS"
+        # e2e binary wouldn't find the registration. register.sh has
+        # built-in fallback paths for odbcinst, so sudoers' secure_path
+        # stripping PATH no longer matters.
+        sudo ./mock-driver-artifact/install/register.sh "$DRIVER_ABS"
         ctest --test-dir build -C Release --output-on-failure -L e2e
 
     - name: Upload build artifacts

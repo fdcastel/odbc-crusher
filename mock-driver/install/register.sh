@@ -38,7 +38,18 @@ if [[ -z "$DRIVER_PATH" || ! -f "$DRIVER_PATH" ]]; then
     exit 1
 fi
 
-if ! command -v odbcinst >/dev/null 2>&1; then
+# Find odbcinst. `command -v` honours $PATH, but Linux sudo's secure_path
+# can override what the caller passed in (Ubuntu defaults set it explicitly,
+# macOS doesn't), so check the standard locations as a fallback.
+if command -v odbcinst >/dev/null 2>&1; then
+    ODBCINST=$(command -v odbcinst)
+elif [[ -x /usr/bin/odbcinst ]]; then
+    ODBCINST=/usr/bin/odbcinst
+elif [[ -x /opt/homebrew/bin/odbcinst ]]; then
+    ODBCINST=/opt/homebrew/bin/odbcinst
+elif [[ -x /usr/local/bin/odbcinst ]]; then
+    ODBCINST=/usr/local/bin/odbcinst
+else
     echo "error: 'odbcinst' not found. Install unixODBC first:" >&2
     echo "       apt-get install unixodbc   # Debian/Ubuntu" >&2
     echo "       brew install unixodbc      # macOS" >&2
@@ -48,7 +59,7 @@ fi
 if [[ "$(id -u)" -eq 0 ]]; then
     INSTALL_SCOPE="system"
     INI_FLAG=""
-    INI_PATH="$(odbcinst -j 2>/dev/null | awk -F': +' '/DRIVERS/ {print $2}')"
+    INI_PATH="$("$ODBCINST" -j 2>/dev/null | awk -F': +' '/DRIVERS/ {print $2}')"
 else
     INSTALL_SCOPE="user"
     INI_FLAG="-h"
@@ -73,7 +84,7 @@ EOF
 
 # -i install, -d driver-section, -f template file. -h sets user scope.
 # shellcheck disable=SC2086
-odbcinst -i -d $INI_FLAG -f "$template"
+"$ODBCINST" -i -d $INI_FLAG -f "$template"
 
 echo
 echo "Mock ODBC Driver registered."
