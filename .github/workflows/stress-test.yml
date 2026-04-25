@@ -339,30 +339,49 @@ jobs:
         CONN=$(jq -er '.drivers["mock-driver"].conn_string' .github/drivers.json)
         echo "CONN_STRING=$CONN" >> "$GITHUB_ENV"
 
-    - name: Download + register mock driver
+    - name: Resolve latest master CI run (mock + crusher source)
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "mock-odbc-driver-windows-x64.zip" --dir .
-        unzip mock-odbc-driver-windows-x64.zip -d mock-driver
-        ls -la mock-driver/
+        # Same resolution as run-crusher composite, but we need the run ID
+        # earlier so we can also pull the mock driver from this run. The
+        # composite re-resolves it later — that's fine, both will pick the
+        # same run since master moves forward only between calls.
+        RUN_ID=$(gh run list --workflow ci.yml --branch master \
+          --status success --limit 1 \
+          --json databaseId -q '.[0].databaseId')
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "::error::No successful master CI run found — cannot fetch mock-driver build."
+          exit 1
+        fi
+        echo "MASTER_CI_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+
+    - name: Download mock driver from master CI run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh run download "$MASTER_CI_RUN_ID" --repo "${{ github.repository }}" \
+          -n mock-odbc-driver-Windows-Release -D mock-driver
+        ls -la mock-driver/build/Release/
 
     - name: Register Mock Driver
       shell: pwsh
       run: |
         $driverDest = "C:\Windows\System32\mockodbc.dll"
-        Copy-Item mock-driver\mockodbc.dll -Destination $driverDest
-        & mock-driver\register.ps1 -DriverPath $driverDest
+        Copy-Item mock-driver/build/Release/mockodbc.dll -Destination $driverDest
+        & mock-driver/install/register.ps1 -DriverPath $driverDest
 
     - name: Record actual installed version (provenance for triage)
       shell: bash
       run: |
-        # Mock driver version is whatever the latest release tagged. Capture
-        # the release tag so the triage skill knows which workspace SHA to
-        # diff against.
-        TAG=$(gh release view --repo fdcastel/odbc-crusher --json tagName -q '.tagName' 2>/dev/null || echo "unknown")
-        echo "$TAG" > actual_version.txt
+        # Mock driver tracks master HEAD now (PORT plan §7.5). Record the
+        # short SHA of the run's commit so the triage skill knows which
+        # workspace state to diff against.
+        SHA=$(gh run view "$MASTER_CI_RUN_ID" --repo "${{ github.repository }}" \
+          --json headSha -q '.headSha' | cut -c1-12)
+        echo "${SHA:-unknown}" > actual_version.txt
       env:
         GH_TOKEN: ${{ github.token }}
 
@@ -370,5 +389,3 @@ jobs:
       with:
         artifact-name: mock-driver
         conn-string: ${{ env.CONN_STRING }}
-        release-asset: odbc-crusher-windows-x64.zip
-        binary: ./odbc-crusher.exe
