@@ -166,14 +166,12 @@ jobs:
       if: runner.os != 'Windows' && matrix.build_type == 'Release'
       shell: bash
       run: |
-        # Re-ensure odbcinst is present. The earlier "Install ODBC
-        # dependencies (Ubuntu)" step's `unixodbc` package gets removed
-        # somewhere between that step and this one on the GitHub
-        # ubuntu-latest image (likely an apt autoremove triggered by a
-        # subsequent step that pulls a conflicting dep). Re-install
-        # here defensively — it's cheap and idempotent.
+        # On Ubuntu 24.04 (noble), the `odbcinst` binary lives in its
+        # own package (not the main `unixodbc` package — apt installs
+        # that one cleanly but it doesn't ship /usr/bin/odbcinst). The
+        # script we call below needs that binary to register the driver.
         if [[ "${{ runner.os }}" == "Linux" ]]; then
-          sudo apt-get install -y --no-install-recommends unixodbc
+          sudo apt-get install -y --no-install-recommends odbcinst
         fi
 
         # Linux generates libmockodbc.so directly under build/ (single-
