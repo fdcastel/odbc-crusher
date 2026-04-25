@@ -115,8 +115,12 @@ jobs:
         cmake --build build --config ${{ matrix.build_type }} -j 4
         
     - name: Run unit tests (without ODBC drivers)
+      # `-L unit` selects every test tagged with the "unit" label in
+      # tests/CMakeLists.txt — currently the 27 plumbing tests under
+      # tests/unit/. Replaces a brittle name-regex that silently dropped
+      # any new unit test that didn't happen to match.
       run: |
-        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -R "Environment|Error|DriverInfo|TypeInfo|FunctionInfo"
+        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -L unit
       continue-on-error: true
       
     - name: Download Mock Driver (Windows)

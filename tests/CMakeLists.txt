@@ -37,9 +37,13 @@ target_link_libraries(odbc_crusher_tests PRIVATE
 # a fresh Windows CI runner needs >5s to cold-load ODBC32.dll + the
 # driver search path before `--gtest_list_tests` can exit, and the build
 # fails intermittently when discovery hits the timeout.
+#
+# LABELS unit lets the CI workflow run "tests that don't need a registered
+# ODBC driver" via `ctest -L unit` instead of a brittle name regex.
 include(GoogleTest)
 gtest_discover_tests(odbc_crusher_tests
     DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "unit"
 )
 
 # ── E2E harness — IMPROVEMENT_PLAN.md §5.1 ────────────────────────────────
@@ -66,4 +70,5 @@ add_dependencies(odbc_crusher_e2e_tests odbc-crusher)
 
 gtest_discover_tests(odbc_crusher_e2e_tests
     DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "e2e"
 )
