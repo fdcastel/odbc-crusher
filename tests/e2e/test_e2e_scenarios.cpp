@@ -204,6 +204,42 @@ TEST_F(CrusherE2EFixture, SilentCorruptionTruncateNumericTripsFractionalRoundTri
            "(every 0.01 → 0.0; total_mantissa goes from 100 to 0).";
 }
 
+// ── NativeSqlPassThrough=true: SQLNativeSql translation probes FAIL ───────
+// PORT plan port 4. Mock returns SQLNativeSql input verbatim — escape
+// sequences survive untouched. All four SQLNativeSql cells in
+// EscapeSequenceTests must trip; execution-side tests
+// (test_outer_join_escape, test_string_scalar_functions, etc.) stay PASS
+// because the mock SQLExecDirect path still translates internally.
+
+TEST_F(CrusherE2EFixture, NativeSqlPassThroughTripsTranslationProbes) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "NativeSqlPassThrough=true;ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("summary"));
+
+    for (const char* name : {
+            "test_native_sql_scalar_functions",
+            "test_native_sql_datetime_literals",
+            "test_native_sql_call_escape",
+            "test_native_sql_outer_join_escape"}) {
+        auto t = find_test(run.report, "Escape Sequence Tests", name);
+        ASSERT_TRUE(t.has_value()) << "Probe missing: " << name;
+        EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+            << name << " MUST fail under NativeSqlPassThrough.";
+    }
+
+    // Sanity: SQLExecDirect-side tests still pass — the mock translates at
+    // execution time independently of SQLNativeSql.
+    auto exec_oj = find_test(run.report, "Escape Sequence Tests",
+                             "test_outer_join_escape");
+    ASSERT_TRUE(exec_oj.has_value());
+    EXPECT_EQ(exec_oj->value("status", std::string{}), "PASS")
+        << "Execution-time {oj} translation must remain intact under the "
+           "SQLNativeSql-only pass-through.";
+}
+
 // ── SilentCorruption=MangleUnicode: WCHAR round-trip probes FAIL ───────────
 // PORT plan port 7. Every non-ASCII byte in a fetched char/wchar cell becomes
 // '?'; the codepoint-comparison round-trip catches it. Both the BMP probe

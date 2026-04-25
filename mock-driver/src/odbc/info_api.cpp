@@ -700,11 +700,16 @@ SQLRETURN SQL_API SQLNativeSql(
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
-    
+
     std::string sql = sql_to_string(szSqlStrIn, static_cast<SQLSMALLINT>(cbSqlStrIn));
-    
-    // Translate ODBC escape sequences to native SQL
-    std::string translated = translate_escape_sequences(sql);
+
+    // PORT plan port 4 canary — when NativeSqlPassThrough=true, return the
+    // input verbatim. Mimics drivers that accept SQLNativeSql calls and
+    // claim success without doing the spec-required escape translation.
+    const auto& cfg = BehaviorController::instance().config();
+    std::string translated = cfg.native_sql_pass_through
+        ? sql
+        : translate_escape_sequences(sql);
     
     if (pcbSqlStr) {
         *pcbSqlStr = static_cast<SQLINTEGER>(translated.length());

@@ -91,6 +91,12 @@ struct DriverConfig {
     };
     SilentCorruptionMode silent_corruption = SilentCorruptionMode::None;
 
+    // SQLNativeSql pass-through — when true, SQLNativeSql returns the input
+    // string verbatim without translating any ODBC escape sequences. Drives
+    // the PORT plan port 4 e2e canary; correct drivers must translate
+    // `{fn ...}`, `{d ...}`, `{oj ...}`, etc. to native SQL.
+    bool native_sql_pass_through = false;
+
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
     

@@ -34,10 +34,11 @@ private:
     TestResult test_scalar_function_capabilities();
     TestResult test_convert_function_capabilities();
 
-    // SQLNativeSql translation (3 tests)
+    // SQLNativeSql translation (4 tests)
     TestResult test_native_sql_scalar_functions();
     TestResult test_native_sql_datetime_literals();
     TestResult test_native_sql_call_escape();
+    TestResult test_native_sql_outer_join_escape();
 
     // Scalar function execution (6 tests)
     TestResult test_string_scalar_functions();

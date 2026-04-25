@@ -352,6 +352,48 @@ TEST_F(ConnectionTest, SQLNativeSql_Basic) {
     EXPECT_STREQ(reinterpret_cast<char*>(outSql), "SELECT * FROM users");
 }
 
+// PORT plan port 4 — confirm SQLNativeSql actually translates ODBC escapes.
+// Without translation, the input survives verbatim; with translation, the
+// output differs and contains no `{fn` substring.
+TEST_F(ConnectionTest, SQLNativeSql_TranslatesScalarFunctionEscape) {
+    SQLRETURN ret = SQLConnect(hdbc,
+        reinterpret_cast<SQLCHAR*>(const_cast<char*>("TestDSN")), SQL_NTS,
+        nullptr, 0, nullptr, 0);
+    ASSERT_EQ(ret, SQL_SUCCESS);
+
+    SQLCHAR outSql[256] = {0};
+    SQLINTEGER outLen = 0;
+    const char* input = "SELECT {fn UCASE('hi')}";
+    ret = SQLNativeSql(hdbc,
+        reinterpret_cast<SQLCHAR*>(const_cast<char*>(input)), SQL_NTS,
+        outSql, sizeof(outSql), &outLen);
+    EXPECT_EQ(ret, SQL_SUCCESS);
+    std::string out(reinterpret_cast<char*>(outSql));
+    EXPECT_NE(out.find("UPPER"), std::string::npos)
+        << "Mock should translate {fn UCASE} → UPPER. got: " << out;
+    EXPECT_EQ(out.find("{fn"), std::string::npos)
+        << "Mock should remove the {fn brace. got: " << out;
+}
+
+// Same input, NativeSqlPassThrough=true → input survives verbatim.
+TEST_F(ConnectionTest, SQLNativeSql_PassThroughKnobReturnsInputVerbatim) {
+    SQLRETURN ret = SQLDriverConnect(hdbc, nullptr,
+        reinterpret_cast<SQLCHAR*>(const_cast<char*>(
+            "Driver={Mock ODBC Driver};NativeSqlPassThrough=true;")),
+        SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT);
+    ASSERT_TRUE(SQL_SUCCEEDED(ret));
+
+    SQLCHAR outSql[256] = {0};
+    SQLINTEGER outLen = 0;
+    const char* input = "SELECT {fn UCASE('hi')}";
+    ret = SQLNativeSql(hdbc,
+        reinterpret_cast<SQLCHAR*>(const_cast<char*>(input)), SQL_NTS,
+        outSql, sizeof(outSql), &outLen);
+    EXPECT_EQ(ret, SQL_SUCCESS);
+    EXPECT_STREQ(reinterpret_cast<char*>(outSql), input)
+        << "PassThrough must return input untouched (escape sequences and all).";
+}
+
 TEST_F(ConnectionTest, SQLNativeSql_InvalidHandle) {
     SQLCHAR outSql[256] = {0};
     SQLINTEGER outLen = 0;

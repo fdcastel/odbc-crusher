@@ -236,6 +236,11 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::None;
     }
 
+    // SQLNativeSql pass-through — only the literal string "true" enables it.
+    std::string pass_through_str =
+        to_lower(get_string_value(pairs, "nativesqlpassthrough", "false"));
+    config.native_sql_pass_through = (pass_through_str == "true");
+
     return config;
 }
 

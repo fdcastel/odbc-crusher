@@ -15,6 +15,7 @@ std::vector<TestResult> EscapeSequenceTests::run() {
         test_native_sql_scalar_functions(),
         test_native_sql_datetime_literals(),
         test_native_sql_call_escape(),
+        test_native_sql_outer_join_escape(),
 
         // Scalar function execution
         test_string_scalar_functions(),
@@ -211,24 +212,41 @@ TestResult EscapeSequenceTests::test_native_sql_scalar_functions() {
         "SQLNativeSql translates {fn UCASE('hello')} to native SQL",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8, SQLNativeSql",
         [&](TestResult& r) {
-            auto translated = call_native_sql("SELECT {fn UCASE('hello')}");
+            const std::string input = "SELECT {fn UCASE('hello')}";
+            auto translated = call_native_sql(input);
             if (!translated) {
                 r.status = TestStatus::FAIL;
                 r.actual = "SQLNativeSql returned error";
                 r.severity = Severity::ERR;
-            } else if (translated->empty()) {
+                return;
+            }
+            if (translated->empty()) {
                 r.status = TestStatus::FAIL;
                 r.actual = "SQLNativeSql returned empty string";
                 r.severity = Severity::ERR;
-            } else {
-                r.actual = "Translated to: " + *translated;
-                // Verify the escape braces are removed
-                if (translated->find("{fn") != std::string::npos) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "Escape sequence not translated (still contains {fn): " + *translated;
-                    r.severity = Severity::WARNING;
-                    r.suggestion = "The driver should translate {fn UCASE(...)} to the native equivalent (e.g. UPPER(...))";
-                }
+                return;
+            }
+            r.actual = "Translated to: " + *translated;
+            // PORT plan port 4 — also catch drivers that return the input
+            // verbatim (pass-through). Both checks must hold.
+            if (translated->find("{fn") != std::string::npos) {
+                r.status = TestStatus::FAIL;
+                r.actual = "Escape sequence not translated (still contains {fn): "
+                         + *translated;
+                r.severity = Severity::WARNING;
+                r.suggestion = "The driver should translate {fn UCASE(...)} to "
+                               "the native equivalent (e.g. UPPER(...))";
+                return;
+            }
+            if (*translated == input) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLNativeSql returned the input verbatim — driver "
+                           "is pass-through. Got: " + *translated;
+                r.severity = Severity::WARNING;
+                r.suggestion = "SQLNativeSql must perform escape translation "
+                               "even if the native form happens to use the same "
+                               "function names; non-trivial escapes (e.g. {d "
+                               "'2026-01-01'}) require actual transformation.";
             }
         });
 }
@@ -304,6 +322,50 @@ TestResult EscapeSequenceTests::test_native_sql_call_escape() {
                 r.status = TestStatus::FAIL;
                 r.actual = oss.str();
                 r.severity = Severity::WARNING;
+            }
+        });
+}
+
+// PORT plan port 4.D — {oj …} outer-join escape translation. The literal
+// `{oj` must be removed from the SQLNativeSql output; pass-through drivers
+// fail this check. Distinct from test_outer_join_escape() further down,
+// which verifies {oj …} *executes* successfully via SQLExecDirect.
+TestResult EscapeSequenceTests::test_native_sql_outer_join_escape() {
+    return run_test(
+        "test_native_sql_outer_join_escape", "SQLNativeSql",
+        "SQLNativeSql strips {oj …} wrapper from a LEFT OUTER JOIN clause",
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8, Outer Join Escape Sequence",
+        [&](TestResult& r) {
+            const std::string input =
+                "SELECT * FROM {oj T1 LEFT OUTER JOIN T2 ON T1.ID = T2.FID}";
+            auto translated = call_native_sql(input);
+            if (!translated || translated->empty()) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLNativeSql returned " +
+                           std::string(translated ? "empty" : "error");
+                r.severity = Severity::ERR;
+                return;
+            }
+            r.actual = "Translated to: " + *translated;
+            const bool has_oj_marker = translated->find("{oj") != std::string::npos
+                                    || translated->find("{OJ") != std::string::npos;
+            if (has_oj_marker) {
+                r.status = TestStatus::FAIL;
+                r.actual = "Escape not translated (still contains {oj/{OJ): "
+                         + *translated;
+                r.severity = Severity::WARNING;
+                r.suggestion = "Strip the `{oj … }` wrapper and emit the "
+                               "interior LEFT/RIGHT/FULL OUTER JOIN clause "
+                               "verbatim into the native SQL.";
+                return;
+            }
+            if (*translated == input) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLNativeSql returned the input verbatim";
+                r.severity = Severity::WARNING;
+                r.suggestion = "Driver did not transform the input — likely "
+                               "pass-through implementation of SQLNativeSql.";
             }
         });
 }

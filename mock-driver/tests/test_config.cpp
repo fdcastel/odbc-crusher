@@ -119,6 +119,21 @@ TEST(ConfigTest, ParseSilentCorruptionMangleUnicode) {
     EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::MangleUnicode);
 }
 
+TEST(ConfigTest, ParseNativeSqlPassThroughDefaultsFalse) {
+    DriverConfig config = parse_connection_string("");
+    EXPECT_FALSE(config.native_sql_pass_through);
+}
+
+TEST(ConfigTest, ParseNativeSqlPassThroughTrue) {
+    DriverConfig config = parse_connection_string("NativeSqlPassThrough=true;");
+    EXPECT_TRUE(config.native_sql_pass_through);
+}
+
+TEST(ConfigTest, ParseNativeSqlPassThroughOnlyTrueLiteralEnables) {
+    DriverConfig config = parse_connection_string("NativeSqlPassThrough=yes;");
+    EXPECT_FALSE(config.native_sql_pass_through);
+}
+
 TEST(ConfigTest, ParseSilentCorruptionUnknownFallsBackToNone) {
     DriverConfig config = parse_connection_string("SilentCorruption=Bogus;");
     EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::None);

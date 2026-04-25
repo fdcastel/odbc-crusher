@@ -30,6 +30,7 @@ Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;
 | `ErrorCode` | SQLSTATE | Error code to return |
 | `Latency` | e.g., 10ms | Simulated delay |
 | `SilentCorruption` | None, DropInserts, MangleVarchar, TruncateNumeric, NullAsEmpty, MangleUnicode | Silently tamper with stored data while keeping ODBC return codes successful — used to validate that round-trip / verify-rows-persisted tests detect a misbehaving driver. `NullAsEmpty` returns NULL char/wchar cells as empty string with indicator=0 (Oracle-style empty-vs-null conflation). `MangleUnicode` replaces every non-ASCII byte in a fetched char/wchar cell with `?` (codepage-bound driver pattern). |
+| `NativeSqlPassThrough` | true, false | When `true`, `SQLNativeSql` returns its input verbatim without translating any ODBC escape sequence (`{fn ...}`, `{d ...}`, `{oj ...}`, `{CALL ...}`, etc.). Drives the PORT plan port 4 e2e canary; spec-compliant drivers must always translate. |
 
 ## Building
 
