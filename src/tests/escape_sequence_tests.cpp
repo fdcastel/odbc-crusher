@@ -1,6 +1,8 @@
 #include "escape_sequence_tests.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
+#include <algorithm>
+#include <cstring>
 #include <sstream>
 
 namespace odbc_crusher::tests {
@@ -924,10 +926,11 @@ CallProbeOutcome run_mock_inout_call(core::OdbcConnection& conn,
     out.out_int     = static_cast<SQLINTEGER>(0xDEADBEEFu);  // sentinel
     out.out_int_ind = sizeof(SQLINTEGER);
     char inout_buf[64] = {0};
-    std::strncpy(inout_buf, inout_initial,
-                 std::min<size_t>(sizeof(inout_buf) - 1,
-                                  std::strlen(inout_initial)));
-    out.inout_ind = static_cast<SQLLEN>(std::strlen(inout_buf));
+    const std::string initial(inout_initial);
+    const size_t copy_len = std::min<size_t>(sizeof(inout_buf) - 1, initial.size());
+    std::memcpy(inout_buf, initial.data(), copy_len);
+    inout_buf[copy_len] = '\0';
+    out.inout_ind = static_cast<SQLLEN>(copy_len);
 
     rc = SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
                           SQL_C_SLONG, SQL_INTEGER, 10, 0,
