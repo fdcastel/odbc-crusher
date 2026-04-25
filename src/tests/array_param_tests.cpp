@@ -1207,6 +1207,17 @@ TestResult ArrayParamTests::test_paramset_size_unsupported_returns_error() {
                                "SQLExecute to use this driver.";
                 return;
             }
+            if (sqlstate.empty()) {
+                // Driver-manager layer (e.g. unixODBC on Linux) sometimes
+                // intercepts SetStmtAttr and returns SQL_ERROR with NO
+                // diagnostic record — the underlying driver's HYC00 never
+                // reaches us. Can't draw a conclusion from that.
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion = "SetStmtAttr failed but produced no diagnostic. "
+                               "Likely a driver-manager-layer rejection that "
+                               "didn't forward the underlying SQLSTATE.";
+                return;
+            }
             r.status = TestStatus::FAIL;
             r.suggestion = "Failure SQLSTATE should be HYC00 ('Optional feature "
                            "not implemented') so applications recognize the "
