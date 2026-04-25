@@ -21,6 +21,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_bindparam_null_indicator());
     results.push_back(test_param_rebind_execute());
     results.push_back(test_bindparam_int_to_varchar_roundtrip());
+    results.push_back(test_sqldescribeparam_varchar());
 
     return results;
 }
@@ -534,6 +535,96 @@ TestResult ParameterBindingTests::test_bindparam_int_to_varchar_roundtrip() {
                 "Driver converted SQL_C_SLONG to VARCHAR incorrectly — "
                 "numeric-C → character-SQL conversion is broken.";
         }
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+// ── §1.7: SQLDescribeParam reliability probe (VARCHAR shape) ───────────────
+//
+// IMPROVEMENT_PLAN.md §1.7. Some drivers (e.g., Firebird ≤3.5.0) return
+// SQL_ERROR from SQLDescribeParam. Scanner-style consumers
+// (`odbc-scanner::Params::CollectTypes`) need to know per-driver whether
+// they can rely on this function at all, or have to fall back to static
+// type knowledge.
+TestResult ParameterBindingTests::test_sqldescribeparam_varchar() {
+    TestResult result = make_result(
+        "test_sqldescribeparam_varchar",
+        "SQLDescribeParam",
+        TestStatus::PASS,
+        "After PREPARE on `INSERT INTO t (varchar_col) VALUES (?)`, "
+        "SQLDescribeParam returns the column type and column_size",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLDescribeParam"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE for SQLDescribeParam probe";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    SQLSMALLINT param_type = 0;
+    SQLULEN col_size = 0;
+    SQLSMALLINT scale = 0;
+    SQLSMALLINT nullable = 0;
+    SQLRETURN describe_rc = SQL_ERROR;
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        SQLRETURN prepare_rc = SQLPrepare(
+            stmt.get_handle(),
+            (SQLCHAR*)"INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (?, ?)",
+            SQL_NTS);
+        if (!SQL_SUCCEEDED(prepare_rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "SQLPrepare returned " + std::to_string(prepare_rc);
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        // Probe parameter 2 (the VARCHAR column).
+        describe_rc = SQLDescribeParam(stmt.get_handle(), 2,
+                                       &param_type, &col_size, &scale, &nullable);
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    if (!SQL_SUCCEEDED(describe_rc)) {
+        result.status = TestStatus::SKIP_UNSUPPORTED;
+        result.actual = "SQLDescribeParam returned " + std::to_string(describe_rc);
+        result.suggestion =
+            "Driver does not implement SQLDescribeParam (Firebird ≤3.5.0 "
+            "returns SQL_ERROR here). Scanner-style consumers must fall back "
+            "to static type knowledge — record this driver as "
+            "describe-param-unreliable.";
+    } else {
+        std::ostringstream actual;
+        actual << "param_type=" << param_type
+               << " (expected SQL_VARCHAR=" << SQL_VARCHAR
+               << " or SQL_WVARCHAR=" << SQL_WVARCHAR << ")"
+               << " column_size=" << col_size
+               << " scale=" << scale
+               << " nullable=" << nullable;
+        result.actual = actual.str();
     }
 
     drop_roundtrip_table();

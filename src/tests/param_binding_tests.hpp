@@ -26,6 +26,7 @@ private:
     TestResult test_bindparam_null_indicator();
     TestResult test_param_rebind_execute();
     TestResult test_bindparam_int_to_varchar_roundtrip();
+    TestResult test_sqldescribeparam_varchar();
 };
 
 } // namespace odbc_crusher::tests
