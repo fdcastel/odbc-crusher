@@ -14,9 +14,25 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Pre-flight: lint every workflow YAML before burning a full matrix
+  # of CI minutes on a typo. Catches the kinds of mistakes the §6 cycle
+  # iterated on for half a dozen commits (sudoers PATH stripping,
+  # mistyped artifact paths, shell quoting in heredocs, etc.).
+  # Fast (<10s); the matrix jobs depend on it so bad YAML short-circuits.
+  lint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install actionlint
+      run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+    - name: Run actionlint
+      run: ./actionlint -color
+
   build-mock-driver:
     name: Build Mock ODBC Driver on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    needs: lint
     strategy:
       fail-fast: false
       matrix:
