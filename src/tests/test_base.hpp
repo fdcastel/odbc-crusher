@@ -154,6 +154,62 @@ protected:
         long expected_count);
 };
 
+// RAII guard for a round-trip test table.
+//
+// Generalizes the CREATE-with-fallback / DROP-on-scope-exit pattern that
+// param_binding_tests, transaction_tests, and array_param_tests each
+// re-implement. New ports (numeric byte-equality round-trip, NULL-vs-empty
+// distinction, NVARCHAR Unicode round-trip, etc.) use this helper directly
+// so that early-return on a probe failure still drops the table.
+//
+// Construction:
+//   - Saves SQL_ATTR_AUTOCOMMIT, sets it ON for DDL.
+//   - Tries `CREATE TABLE <name> (ID <id_ddl_variants[i]>, VAL <val_ddl>)`
+//     for each id_ddl variant in order until one succeeds.
+//   - On a failed CREATE, calls `SQLEndTran(SQL_HANDLE_DBC, ROLLBACK)` to
+//     unstick Firebird-style "DDL failure poisons the txn" state.
+//   - If every variant fails, attempts DROP + retry once (the table likely
+//     already exists from a prior aborted run).
+//   - Restores autocommit to its prior value.
+//
+// Destruction:
+//   - Best-effort DROP with the same autocommit handling. Errors are
+//     swallowed (a missing table on cleanup is not a probe failure).
+//
+// The guard is non-copyable, non-movable: tests instantiate it on the stack
+// inside the run_test body. `ok()` reports whether the table is usable;
+// when false, the probe should set SKIP_INCONCLUSIVE with `last_error()`.
+class RoundTripTableGuard {
+public:
+    // Default integer ID column variants — every existing helper in the
+    // project tries INTEGER first then INT, so keep that ordering here.
+    static const std::vector<std::string>& default_id_ddl_variants();
+
+    RoundTripTableGuard(
+        core::OdbcConnection& conn,
+        std::string table_name,
+        std::string val_ddl,
+        const std::vector<std::string>& id_ddl_variants = default_id_ddl_variants());
+
+    ~RoundTripTableGuard();
+
+    RoundTripTableGuard(const RoundTripTableGuard&) = delete;
+    RoundTripTableGuard& operator=(const RoundTripTableGuard&) = delete;
+    RoundTripTableGuard(RoundTripTableGuard&&) = delete;
+    RoundTripTableGuard& operator=(RoundTripTableGuard&&) = delete;
+
+    bool ok() const { return ok_; }
+    const std::string& name() const { return table_name_; }
+    const std::string& last_error() const { return last_error_; }
+
+private:
+    core::OdbcConnection& conn_;
+    std::string table_name_;
+    std::string val_ddl_;
+    bool ok_ = false;
+    std::string last_error_;
+};
+
 // Helper to convert conformance level to string
 inline const char* conformance_to_string(ConformanceLevel level) {
     switch (level) {

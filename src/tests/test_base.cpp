@@ -8,6 +8,8 @@
 #include <sql.h>
 #include <sqlext.h>
 
+#include <utility>
+
 namespace odbc_crusher::tests {
 
 TestResult TestBase::make_result(
@@ -112,6 +114,98 @@ RowVerification TestBase::verify_rows_persisted(
 
     v.ok = true;
     return v;
+}
+
+// ── RoundTripTableGuard ─────────────────────────────────────────────────────
+
+const std::vector<std::string>& RoundTripTableGuard::default_id_ddl_variants() {
+    static const std::vector<std::string> kVariants = {"INTEGER", "INT"};
+    return kVariants;
+}
+
+namespace {
+
+// Save / set / restore SQL_ATTR_AUTOCOMMIT around DDL so a failed CREATE/DROP
+// doesn't leave the connection in an inconsistent transaction state on
+// drivers (Firebird) where DDL failure poisons the open txn.
+class AutocommitForDdl {
+public:
+    explicit AutocommitForDdl(SQLHDBC hdbc) : hdbc_(hdbc) {
+        SQLGetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT, &saved_, 0, nullptr);
+        SQLSetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
+                          reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON), 0);
+    }
+    ~AutocommitForDdl() {
+        SQLSetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
+                          reinterpret_cast<SQLPOINTER>(
+                              static_cast<intptr_t>(saved_)), 0);
+    }
+    AutocommitForDdl(const AutocommitForDdl&) = delete;
+    AutocommitForDdl& operator=(const AutocommitForDdl&) = delete;
+private:
+    SQLHDBC hdbc_;
+    SQLUINTEGER saved_ = 0;
+};
+
+// Best-effort DROP: swallows errors, rolls back the connection-level txn on
+// failure so the caller's next statement isn't blocked by a poisoned state.
+void try_drop(core::OdbcConnection& conn, const std::string& table_name) {
+    try {
+        core::OdbcStatement s(conn);
+        s.execute("DROP TABLE " + table_name);
+    } catch (...) {
+        SQLEndTran(SQL_HANDLE_DBC, conn.get_handle(), SQL_ROLLBACK);
+    }
+}
+
+} // namespace
+
+RoundTripTableGuard::RoundTripTableGuard(
+    core::OdbcConnection& conn,
+    std::string table_name,
+    std::string val_ddl,
+    const std::vector<std::string>& id_ddl_variants)
+    : conn_(conn),
+      table_name_(std::move(table_name)),
+      val_ddl_(std::move(val_ddl))
+{
+    AutocommitForDdl ac(conn_.get_handle());
+
+    auto try_create_all = [&]() -> bool {
+        for (const auto& id_ddl : id_ddl_variants) {
+            const std::string sql = "CREATE TABLE " + table_name_ +
+                                    " (ID " + id_ddl + ", VAL " + val_ddl_ + ")";
+            try {
+                core::OdbcStatement s(conn_);
+                s.execute(sql);
+                return true;
+            } catch (const core::OdbcError& e) {
+                last_error_ = e.format_diagnostics();
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+            } catch (...) {
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+            }
+        }
+        return false;
+    };
+
+    if (try_create_all()) {
+        ok_ = true;
+        return;
+    }
+
+    // CREATE failed for every variant — most likely the table already exists
+    // from a prior aborted run. Drop and retry once.
+    try_drop(conn_, table_name_);
+    if (try_create_all()) {
+        ok_ = true;
+    }
+}
+
+RoundTripTableGuard::~RoundTripTableGuard() {
+    if (!ok_) return;
+    AutocommitForDdl ac(conn_.get_handle());
+    try_drop(conn_, table_name_);
 }
 
 } // namespace odbc_crusher::tests
