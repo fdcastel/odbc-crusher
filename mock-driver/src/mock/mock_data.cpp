@@ -1000,6 +1000,33 @@ ParsedQuery parse_sql(const std::string& sql) {
         } else {
             result.error_message = "DELETE without FROM clause";
         }
+    } else if (upper.find("CALL ") == 0 || upper.find("EXECUTE PROCEDURE ") == 0) {
+        // Stored procedure invocation:
+        //   CALL <name>(arg1, arg2, ...)
+        //   EXECUTE PROCEDURE <name>(arg1, arg2, ...)   (Firebird-style)
+        result.query_type = ParsedQuery::QueryType::Call;
+        const size_t skip = (upper.find("CALL ") == 0) ? 5 : 18;
+        std::string body = trim(trimmed.substr(skip));
+        auto open = body.find('(');
+        if (open == std::string::npos) {
+            // Bare procedure name with no args
+            result.proc_name = body;
+            result.is_valid = true;
+        } else {
+            result.proc_name = trim(body.substr(0, open));
+            auto close = body.rfind(')');
+            if (close != std::string::npos && close > open) {
+                std::string args = body.substr(open + 1, close - open - 1);
+                auto ivr = parse_insert_values(args);
+                result.proc_args = std::move(ivr.values);
+                // Track which args are parameter markers so the executor's
+                // substitute_params path can replace them later.
+                result.insert_param_markers = std::move(ivr.param_markers);
+                result.is_valid = true;
+            } else {
+                result.error_message = "CALL: unbalanced parentheses";
+            }
+        }
     } else {
         result.query_type = ParsedQuery::QueryType::Other;
         result.error_message = "Unsupported SQL statement type";
@@ -1062,6 +1089,36 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
         catalog.remove_table(query.table_name);
         result.success = true;
         result.affected_rows = 0;
+        return result;
+    }
+
+    // ---- CALL <proc>(args) ----
+    if (query.query_type == ParsedQuery::QueryType::Call) {
+        auto proc = catalog.find_procedure(query.proc_name);
+        if (!proc) {
+            result.success = false;
+            result.error_message = "Procedure not found: " + query.proc_name;
+            result.error_sqlstate = "42000";
+            return result;
+        }
+        if (proc->input_param_count != 0 &&
+            static_cast<SQLSMALLINT>(query.proc_args.size()) !=
+                proc->input_param_count) {
+            result.success = false;
+            result.error_message = "Procedure " + query.proc_name +
+                                   " expects " +
+                                   std::to_string(proc->input_param_count) +
+                                   " arguments, got " +
+                                   std::to_string(query.proc_args.size());
+            result.error_sqlstate = "42000";
+            return result;
+        }
+        MockProcedureResult pr = proc->callback(catalog, query.proc_args);
+        result.success = pr.success;
+        result.error_message = pr.error_message;
+        result.error_sqlstate =
+            pr.error_sqlstate.empty() ? "42000" : pr.error_sqlstate;
+        result.affected_rows = pr.affected_rows;
         return result;
     }
     

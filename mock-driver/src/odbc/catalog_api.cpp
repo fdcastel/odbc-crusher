@@ -504,18 +504,32 @@ SQLRETURN SQL_API SQLProcedures(
     (void)cbCatalogName;
     (void)szSchemaName;
     (void)cbSchemaName;
-    (void)szProcName;
-    (void)cbProcName;
 
-    // Mock: no procedures
     setup_catalog_result(stmt,
         {"PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "NUM_INPUT_PARAMS",
          "NUM_OUTPUT_PARAMS", "NUM_RESULT_SETS", "REMARKS", "PROCEDURE_TYPE"},
         {SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR, SQL_INTEGER,
          SQL_INTEGER, SQL_INTEGER, SQL_WVARCHAR, SQL_SMALLINT});
-    
-    stmt->row_count_ = 0;
-    
+
+    std::string proc_pattern = sql_to_string(szProcName, cbProcName);
+    if (proc_pattern.empty()) proc_pattern = "%";
+
+    auto procedures = MockCatalog::instance().snapshot_procedures();
+    for (const auto& p : procedures) {
+        if (!MockCatalog::matches_pattern(p.name, proc_pattern)) continue;
+        std::vector<std::variant<std::monostate, long long, double, std::string>> row;
+        row.push_back(std::monostate{});  // PROCEDURE_CAT
+        row.push_back(std::monostate{});  // PROCEDURE_SCHEM
+        row.push_back(p.name);            // PROCEDURE_NAME
+        row.push_back(static_cast<long long>(p.input_param_count));
+        row.push_back(static_cast<long long>(0));  // NUM_OUTPUT_PARAMS
+        row.push_back(static_cast<long long>(0));  // NUM_RESULT_SETS
+        row.push_back(p.remarks);                  // REMARKS
+        row.push_back(static_cast<long long>(SQL_PT_PROCEDURE));
+        stmt->result_data_.push_back(std::move(row));
+    }
+    stmt->row_count_ = static_cast<SQLLEN>(stmt->result_data_.size());
+
     return SQL_SUCCESS;
 }
 

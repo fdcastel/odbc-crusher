@@ -25,6 +25,7 @@ void MockCatalog::initialize(const std::string& preset) {
     tables_.clear();
     indexes_.clear();
     inserted_data_.clear();
+    procedures_.clear();
 
     std::string lower_preset = preset;
     std::transform(lower_preset.begin(), lower_preset.end(), lower_preset.begin(),
@@ -36,6 +37,58 @@ void MockCatalog::initialize(const std::string& preset) {
         create_large_catalog();
     } else {
         create_default_catalog();
+    }
+
+    // Register canonical procedures available in every preset. Tests rely on
+    // INSERT_N_ROWS for the §1.8 SQLRowCount-after-EXECUTE-PROCEDURE probe.
+    {
+        MockProcedure insert_n;
+        insert_n.name = "INSERT_N_ROWS";
+        insert_n.input_param_count = 2;
+        insert_n.remarks =
+            "INSERT_N_ROWS(table_name VARCHAR, n INTEGER) — appends N rows "
+            "with auto-incremented IDs into table_name. Used by the §1.8 "
+            "SQLRowCount-after-EXECUTE-PROCEDURE probe.";
+        insert_n.callback =
+            [](MockCatalog& catalog,
+               const std::vector<CellValue>& args) -> MockProcedureResult {
+                MockProcedureResult res;
+                if (args.size() < 2) {
+                    res.success = false;
+                    res.error_sqlstate = "42000";
+                    res.error_message =
+                        "INSERT_N_ROWS expects (table_name VARCHAR, n INTEGER)";
+                    return res;
+                }
+                if (!std::holds_alternative<std::string>(args[0])) {
+                    res.success = false;
+                    res.error_sqlstate = "07006";
+                    res.error_message = "INSERT_N_ROWS arg 0 must be VARCHAR";
+                    return res;
+                }
+                if (!std::holds_alternative<long long>(args[1])) {
+                    res.success = false;
+                    res.error_sqlstate = "07006";
+                    res.error_message = "INSERT_N_ROWS arg 1 must be INTEGER";
+                    return res;
+                }
+                const std::string& table = std::get<std::string>(args[0]);
+                long long n = std::get<long long>(args[1]);
+                if (n < 0) n = 0;
+                for (long long i = 1; i <= n; ++i) {
+                    MockRow row;
+                    row.push_back(static_cast<long long>(i));        // ID
+                    row.push_back(std::string(std::to_string(i)));   // VAL
+                    catalog.insert_row(table, std::move(row));
+                }
+                // Per ODBC spec, SQLRowCount after EXECUTE PROCEDURE is
+                // commonly -1 ("driver doesn't know"). Use -1 here so
+                // consumers that expect spec-baseline behaviour pass.
+                res.affected_rows = -1;
+                return res;
+            };
+        // Pre-existing lock is held; insert directly.
+        procedures_.push_back(std::move(insert_n));
     }
 }
 
@@ -294,6 +347,28 @@ std::vector<MockIndex> MockCatalog::get_statistics(const std::string& table_name
         }
     }
     return result;
+}
+
+void MockCatalog::register_procedure(MockProcedure procedure) {
+    std::lock_guard<std::mutex> g(mu_);
+    procedures_.push_back(std::move(procedure));
+}
+
+std::optional<MockProcedure> MockCatalog::find_procedure(
+    const std::string& name) const {
+    std::lock_guard<std::mutex> g(mu_);
+    std::string upper_name = to_upper(name);
+    for (const auto& p : procedures_) {
+        if (to_upper(p.name) == upper_name) {
+            return p;  // by-value copy; lock released on return
+        }
+    }
+    return std::nullopt;
+}
+
+std::vector<MockProcedure> MockCatalog::snapshot_procedures() const {
+    std::lock_guard<std::mutex> g(mu_);
+    return procedures_;
 }
 
 bool MockCatalog::matches_pattern(const std::string& value, const std::string& pattern) {

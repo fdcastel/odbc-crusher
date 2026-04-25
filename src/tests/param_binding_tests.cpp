@@ -36,6 +36,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_sqlrowcount_after_insert());
     results.push_back(test_sqlrowcount_after_update());
     results.push_back(test_sqlrowcount_after_delete());
+    results.push_back(test_sqlrowcount_after_execute_procedure());
     results.push_back(test_param_rebind_per_row_row_count());
     results.push_back(test_param_bind_once_execute_many_row_count());
     results.push_back(test_param_bind_once_execute_many_endtran());
@@ -1495,6 +1496,126 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_delete() {
         result.status = TestStatus::ERR;
         result.actual = e.what();
         result.diagnostic = e.format_diagnostics();
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+// §1.8 final cell — `SQLRowCount` after `EXECUTE PROCEDURE` /
+// `CALL <proc>(args)`. Per the ODBC spec this commonly returns -1
+// ("affected count unknown"), but engines vary — Firebird returns 0,
+// some engines return the actual row count from the SP body. The probe
+// is informational: it always PASSes when the CALL succeeds, dumps the
+// raw SQLRowCount value, and ALSO verifies via `verify_rows_persisted`
+// that the rows the SP claims to have inserted actually landed. This
+// catches "SP looked successful but didn't persist" bugs separately
+// from the count-reporting question.
+TestResult ParameterBindingTests::test_sqlrowcount_after_execute_procedure() {
+    TestResult result = make_result(
+        "test_sqlrowcount_after_execute_procedure",
+        "SQLRowCount",
+        TestStatus::PASS,
+        "After CALL INSERT_N_ROWS('ODBC_TEST_ROUNDTRIP', 5), report SQLRowCount "
+        "(spec baseline = -1, may vary) and verify 5 rows persisted",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLRowCount after EXECUTE PROCEDURE — Appendix B"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    constexpr int kRowCount = 5;
+    SQLRETURN exec_rc = SQL_ERROR;
+    SQLLEN row_count = -2;
+    bool sp_supported = false;
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        // Try the canonical INSERT_N_ROWS procedure (registered by the mock
+        // driver). On real drivers this likely won't exist; SKIP_UNSUPPORTED
+        // when the CALL fails because no such procedure exists, so the test
+        // doesn't fail spuriously.
+        exec_rc = SQLExecDirect(
+            stmt.get_handle(),
+            (SQLCHAR*)"CALL INSERT_N_ROWS('ODBC_TEST_ROUNDTRIP', 5)",
+            SQL_NTS);
+
+        if (!SQL_SUCCEEDED(exec_rc)) {
+            // Try Firebird-style syntax as a fallback.
+            exec_rc = SQLExecDirect(
+                stmt.get_handle(),
+                (SQLCHAR*)"EXECUTE PROCEDURE INSERT_N_ROWS('ODBC_TEST_ROUNDTRIP', 5)",
+                SQL_NTS);
+        }
+
+        if (SQL_SUCCEEDED(exec_rc)) {
+            sp_supported = true;
+            SQLRowCount(stmt.get_handle(), &row_count);
+        }
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    if (!sp_supported) {
+        result.status = TestStatus::SKIP_UNSUPPORTED;
+        result.actual = "Driver does not have INSERT_N_ROWS procedure "
+                        "(rc=" + std::to_string(exec_rc) + "). On real drivers "
+                        "create one matching the mock signature, or run this "
+                        "probe against the mock driver.";
+        result.suggestion =
+            "INSERT_N_ROWS(table_name VARCHAR, n INTEGER) is registered by "
+            "the mock driver to standardise §1.8 SP probing. For real-driver "
+            "runs, port the same shape (a procedure that inserts N rows) and "
+            "re-run the probe.";
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+    RowVerification v = verify_rows_persisted(
+        "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kRowCount);
+
+    std::ostringstream actual;
+    actual << "exec_rc=" << exec_rc
+           << " SQLRowCount=" << row_count
+           << " (spec baseline -1; some engines return 0 or the real count)"
+           << " verify=" << (v.ok ? "OK" : v.diagnostic)
+           << " persisted_rows=" << v.actual_count;
+    result.actual = actual.str();
+
+    if (!v.ok) {
+        // SQLRowCount is informational; the persistence check is the real
+        // test. If the SP claimed success but rows didn't land, that's a
+        // hard FAIL.
+        result.status = TestStatus::FAIL;
+        result.severity = Severity::CRITICAL;
+        result.suggestion =
+            "Procedure CALL returned SQL_SUCCESS but the rows it claimed to "
+            "insert are not visible. This is a silent-corruption shape — "
+            "either the SP body never ran, the txn rolled back, or the data "
+            "went somewhere unexpected.";
     }
 
     drop_roundtrip_table();

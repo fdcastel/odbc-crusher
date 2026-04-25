@@ -1,7 +1,9 @@
 #pragma once
 
 #include "../driver/common.hpp"
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -47,6 +49,27 @@ struct MockIndex {
     std::vector<std::string> columns;
 };
 
+// Stored-procedure registry entry. The body is a C++ callback rather than a
+// PSM-like body language — keeps the mock minimal. Callbacks receive the
+// parsed argument values (already substituted from any parameter markers)
+// and return (success, affected_rows, error_message).
+class MockCatalog;  // forward
+struct MockProcedureResult {
+    bool success = true;
+    SQLLEN affected_rows = -1;  // ODBC spec default for EXECUTE PROCEDURE
+    std::string error_message;
+    std::string error_sqlstate;
+};
+using MockProcedureCallback = std::function<MockProcedureResult(
+    MockCatalog& catalog, const std::vector<CellValue>& args)>;
+
+struct MockProcedure {
+    std::string name;
+    SQLSMALLINT input_param_count = 0;
+    MockProcedureCallback callback;
+    std::string remarks;
+};
+
 // The mock catalog
 //
 // Thread-safety: all public methods serialize on `mu_`. The getters that
@@ -90,6 +113,14 @@ public:
     // Index operations
     std::vector<MockIndex> get_statistics(const std::string& table_name) const;
 
+    // Stored procedure operations. `find_procedure` returns a *copy* so the
+    // caller can invoke the callback without holding the catalog lock —
+    // callbacks call back into MockCatalog (insert_row etc.) and would
+    // deadlock if the caller still held mu_.
+    void register_procedure(MockProcedure procedure);
+    std::optional<MockProcedure> find_procedure(const std::string& name) const;
+    std::vector<MockProcedure> snapshot_procedures() const;
+
     // Pattern matching (SQL LIKE)
     static bool matches_pattern(const std::string& value, const std::string& pattern);
 
@@ -105,6 +136,7 @@ private:
     std::vector<MockTable> tables_;
     std::vector<MockIndex> indexes_;
     std::unordered_map<std::string, std::vector<MockRow>> inserted_data_;
+    std::vector<MockProcedure> procedures_;
 };
 
 } // namespace mock_odbc

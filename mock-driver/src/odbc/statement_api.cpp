@@ -147,6 +147,23 @@ static void substitute_params(
         return;
     }
 
+    // CALL <proc>(args) — same shape as INSERT but populates `proc_args`.
+    if (parsed.query_type == ParsedQuery::QueryType::Call) {
+        SQLUSMALLINT param_idx = 0;
+        for (size_t ai = 0; ai < parsed.proc_args.size(); ++ai) {
+            bool is_marker = ai < parsed.insert_param_markers.size()
+                             && parsed.insert_param_markers[ai];
+            if (is_marker) {
+                param_idx++;
+                auto it = bindings.find(param_idx);
+                if (it != bindings.end()) {
+                    parsed.proc_args[ai] = read_param_value(it->second, row, param_bind_type);
+                }
+            }
+        }
+        return;
+    }
+
     // Literal SELECT parameter substitution
     if (parsed.is_literal_select) {
         SQLUSMALLINT param_idx = 0;
@@ -234,8 +251,13 @@ SQLRETURN SQL_API SQLExecDirect(
     stmt->cursor_open_ = !result.data.empty();
     stmt->current_row_ = -1;
     stmt->num_result_cols_ = static_cast<SQLSMALLINT>(result.column_names.size());
-    stmt->row_count_ = result.affected_rows > 0 ? result.affected_rows : 
-                       static_cast<SQLLEN>(result.data.size());
+    // Propagate the executor's affected_rows verbatim when it set one — this
+    // includes the spec-baseline -1 from `EXECUTE PROCEDURE` (affected count
+    // unknown). Only fall back to the result-set size when `affected_rows`
+    // is exactly 0 (no DML happened, the rows are query results).
+    stmt->row_count_ = result.affected_rows != 0
+                       ? result.affected_rows
+                       : static_cast<SQLLEN>(result.data.size());
     
     stmt->column_names_ = std::move(result.column_names);
     stmt->column_types_.clear();
@@ -447,9 +469,12 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
     stmt->cursor_open_ = !result.data.empty();
     stmt->current_row_ = -1;
     stmt->num_result_cols_ = static_cast<SQLSMALLINT>(result.column_names.size());
-    stmt->row_count_ = result.affected_rows > 0 ? result.affected_rows :
-                       static_cast<SQLLEN>(result.data.size());
-    
+    // Same `affected_rows != 0` semantics as SQLExecDirect — propagates -1
+    // from EXECUTE PROCEDURE verbatim into SQLRowCount.
+    stmt->row_count_ = result.affected_rows != 0
+                       ? result.affected_rows
+                       : static_cast<SQLLEN>(result.data.size());
+
     stmt->column_names_ = std::move(result.column_names);
     stmt->column_types_.clear();
     for (auto t : result.column_types) {
@@ -463,7 +488,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
         }
         stmt->result_data_.push_back(std::move(converted_row));
     }
-    
+
     return SQL_SUCCESS;
 }
 

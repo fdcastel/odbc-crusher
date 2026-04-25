@@ -22,7 +22,9 @@ CellValue generate_value(const MockColumn& column, int row_index);
 
 // Parse simple SQL and determine result
 struct ParsedQuery {
-    enum class QueryType { Select, Insert, Update, Delete, CreateTable, DropTable, Other };
+    enum class QueryType {
+        Select, Insert, Update, Delete, CreateTable, DropTable, Call, Other
+    };
     QueryType query_type = QueryType::Other;
     std::string table_name;
     std::vector<std::string> columns;  // For SELECT: requested columns (* = all)
@@ -32,6 +34,10 @@ struct ParsedQuery {
     bool is_literal_select = false;    // SELECT without FROM (literal values)
     bool is_count_query = false;       // SELECT COUNT(*) FROM table
     std::string error_message;
+
+    // For CALL <name>(arg1, arg2, ...)
+    std::string proc_name;
+    std::vector<CellValue> proc_args;
 
     // For literal SELECT: parsed expressions
     struct LiteralExpr {
