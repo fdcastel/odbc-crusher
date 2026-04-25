@@ -124,4 +124,6 @@ target_include_directories(mock-odbc-tests PRIVATE
 )
 
 include(GoogleTest)
-gtest_discover_tests(mock-odbc-tests)
+gtest_discover_tests(mock-odbc-tests
+    DISCOVERY_TIMEOUT 60
+)

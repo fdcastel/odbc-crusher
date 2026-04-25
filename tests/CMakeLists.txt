@@ -47,6 +47,11 @@ target_link_libraries(odbc_crusher_tests PRIVATE
     GTest::gmock
 )
 
-# Discover tests for CTest
+# Discover tests for CTest. Bump DISCOVERY_TIMEOUT past the 5s default —
+# a fresh Windows CI runner needs >5s to cold-load ODBC32.dll + the
+# driver search path before `--gtest_list_tests` can exit, and the build
+# fails intermittently when discovery hits the timeout.
 include(GoogleTest)
-gtest_discover_tests(odbc_crusher_tests)
+gtest_discover_tests(odbc_crusher_tests
+    DISCOVERY_TIMEOUT 60
+)
