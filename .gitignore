@@ -17,6 +17,12 @@ tmp/
 .vscode/
 .idea/
 .claude/
+# …but project-level Claude Code skills are repo-tracked. Negate the
+# skills/ subtree so committing them doesn't require `git add -f`.
+!.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 *.swp
 *.swo
 *~
