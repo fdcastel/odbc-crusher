@@ -20,12 +20,12 @@ on:
   workflow_dispatch:
     inputs:
       driver:
-        description: 'Driver to test (empty = all)'
+        description: 'Driver to test (all = run every job)'
         required: false
-        default: ''
+        default: 'all'
         type: choice
         options:
-          - ''
+          - all
           - postgresql
           - mariadb
           - mysql
@@ -39,7 +39,7 @@ jobs:
   # Driver / version / source: see `.github/drivers.json` → drivers.postgresql
   # (manifest is authoritative; the inline values below are pulled from it).
   postgresql:
-    if: ${{ inputs.driver == '' || inputs.driver == 'postgresql' }}
+    if: ${{ inputs.driver == 'all' || inputs.driver == 'postgresql' }}
     name: PostgreSQL (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -50,9 +50,11 @@ jobs:
         APT_VERSION=$(jq -er '.drivers.postgresql.install.apt_version' .github/drivers.json)
         DRIVER_VERSION=$(jq -er '.drivers.postgresql.version' .github/drivers.json)
         CONN=$(jq -er '.drivers.postgresql.conn_string' .github/drivers.json)
-        echo "APT_VERSION=$APT_VERSION" >> "$GITHUB_ENV"
-        echo "DRIVER_VERSION=$DRIVER_VERSION" >> "$GITHUB_ENV"
-        echo "CONN_STRING=$CONN" >> "$GITHUB_ENV"
+        {
+          echo "APT_VERSION=$APT_VERSION"
+          echo "DRIVER_VERSION=$DRIVER_VERSION"
+          echo "CONN_STRING=$CONN"
+        } >> "$GITHUB_ENV"
 
     - name: Install unixODBC + start PostgreSQL + install driver (pinned)
       run: |
@@ -83,7 +85,7 @@ jobs:
   # ── MariaDB on Linux ────────────────────────────────────────
   # Driver / version / source: see `.github/drivers.json` → drivers.mariadb
   mariadb:
-    if: ${{ inputs.driver == '' || inputs.driver == 'mariadb' }}
+    if: ${{ inputs.driver == 'all' || inputs.driver == 'mariadb' }}
     name: MariaDB (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -94,9 +96,11 @@ jobs:
         APT_VERSION=$(jq -er '.drivers.mariadb.install.apt_version' .github/drivers.json)
         DRIVER_VERSION=$(jq -er '.drivers.mariadb.version' .github/drivers.json)
         CONN=$(jq -er '.drivers.mariadb.conn_string' .github/drivers.json)
-        echo "APT_VERSION=$APT_VERSION" >> "$GITHUB_ENV"
-        echo "DRIVER_VERSION=$DRIVER_VERSION" >> "$GITHUB_ENV"
-        echo "CONN_STRING=$CONN" >> "$GITHUB_ENV"
+        {
+          echo "APT_VERSION=$APT_VERSION"
+          echo "DRIVER_VERSION=$DRIVER_VERSION"
+          echo "CONN_STRING=$CONN"
+        } >> "$GITHUB_ENV"
 
     - name: Install unixODBC + MariaDB server + driver (pinned)
       run: |
@@ -125,7 +129,7 @@ jobs:
   # ── MySQL on Linux ──────────────────────────────────────────
   # Driver / version / source: see `.github/drivers.json` → drivers.mysql
   mysql:
-    if: ${{ inputs.driver == '' || inputs.driver == 'mysql' }}
+    if: ${{ inputs.driver == 'all' || inputs.driver == 'mysql' }}
     name: MySQL (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -172,8 +176,15 @@ jobs:
     - name: Record actual installed version (provenance for triage)
       run: |
         # The MySQL tarball name embeds the version — extract from the dir.
-        INSTALLED_DIR=$(ls -d mysql-connector-odbc-*/ | head -1)
-        INSTALLED=$(echo "$INSTALLED_DIR" | sed -E 's|^mysql-connector-odbc-||; s|-linux-.*||')
+        # Uses a shell glob (not `ls`) per shellcheck SC2012.
+        shopt -s nullglob
+        DIRS=( mysql-connector-odbc-*/ )
+        if [ ${#DIRS[@]} -eq 0 ]; then
+          echo "::error::No mysql-connector-odbc-*/ directory after extraction"
+          exit 1
+        fi
+        INSTALLED_DIR="${DIRS[0]}"
+        INSTALLED=$(echo "$INSTALLED_DIR" | sed -E 's|^mysql-connector-odbc-||; s|-linux-.*||; s|/$||')
         echo "$INSTALLED" > actual_version.txt
         if [ "$INSTALLED" != "$DRIVER_VERSION" ]; then
           echo "::error::Downloaded mysql-connector-odbc=$INSTALLED but manifest pinned $DRIVER_VERSION"
@@ -189,7 +200,7 @@ jobs:
   # ── DuckDB on Linux ─────────────────────────────────────────
   # Driver / version / source: see `.github/drivers.json` → drivers.duckdb
   duckdb:
-    if: ${{ inputs.driver == '' || inputs.driver == 'duckdb' }}
+    if: ${{ inputs.driver == 'all' || inputs.driver == 'duckdb' }}
     name: DuckDB (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -249,7 +260,7 @@ jobs:
   # (Server brought up via ClickHouse's deb repo; only the driver version is
   # part of the triage provenance contract.)
   clickhouse:
-    if: ${{ inputs.driver == '' || inputs.driver == 'clickhouse' }}
+    if: ${{ inputs.driver == 'all' || inputs.driver == 'clickhouse' }}
     name: ClickHouse (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -316,7 +327,7 @@ jobs:
   # The mock's "source" is this repo's mock-driver/ directory — the triage
   # skill special-cases it (no clone step).
   mock-driver:
-    if: ${{ inputs.driver == '' || inputs.driver == 'mock-driver' }}
+    if: ${{ inputs.driver == 'all' || inputs.driver == 'mock-driver' }}
     name: Mock Driver (Windows)
     runs-on: windows-latest
     steps:
