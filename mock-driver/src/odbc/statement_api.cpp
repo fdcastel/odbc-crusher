@@ -145,6 +145,113 @@ static CellValue read_param_value(
     }
 }
 
+// PORT plan port 3 — write a procedure output value back to a bound OUT/INOUT
+// parameter buffer. Handles the C types most often used at the application
+// layer; unrecognised target types are a no-op (the indicator is left
+// untouched). `value` is the CellValue produced by the MockProcedure callback.
+static void write_output_to_binding(
+    const StatementHandle::ParameterBinding& pb,
+    const CellValue& value)
+{
+    if (!pb.param_value) return;
+
+    // NULL output — set indicator and bail.
+    if (std::holds_alternative<std::monostate>(value)) {
+        if (pb.str_len_or_ind) *pb.str_len_or_ind = SQL_NULL_DATA;
+        return;
+    }
+
+    auto write_int = [&](long long v) {
+        switch (pb.value_type) {
+            case SQL_C_SLONG:
+            case SQL_C_LONG:
+                *static_cast<SQLINTEGER*>(pb.param_value) =
+                    static_cast<SQLINTEGER>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLINTEGER);
+                break;
+            case SQL_C_SBIGINT:
+                *static_cast<SQLBIGINT*>(pb.param_value) =
+                    static_cast<SQLBIGINT>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLBIGINT);
+                break;
+            case SQL_C_SSHORT: {
+                auto sv = static_cast<SQLSMALLINT>(v);
+                *static_cast<SQLSMALLINT*>(pb.param_value) = sv;
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLSMALLINT);
+                break;
+            }
+            case SQL_C_DOUBLE:
+                *static_cast<SQLDOUBLE*>(pb.param_value) =
+                    static_cast<SQLDOUBLE>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLDOUBLE);
+                break;
+            case SQL_C_CHAR:
+            default: {
+                std::string s = std::to_string(v);
+                size_t copy_len = std::min<size_t>(s.size(),
+                    static_cast<size_t>(pb.buffer_length > 0 ? pb.buffer_length - 1 : 0));
+                std::memcpy(pb.param_value, s.data(), copy_len);
+                static_cast<char*>(pb.param_value)[copy_len] = '\0';
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = static_cast<SQLLEN>(copy_len);
+                break;
+            }
+        }
+    };
+
+    auto write_string = [&](const std::string& s) {
+        if (pb.value_type == SQL_C_WCHAR) {
+            SQLSMALLINT wbytes = 0;
+            copy_string_to_wbuffer(s, static_cast<SQLWCHAR*>(pb.param_value),
+                                   static_cast<SQLINTEGER>(pb.buffer_length),
+                                   &wbytes);
+            if (pb.str_len_or_ind) *pb.str_len_or_ind = static_cast<SQLLEN>(wbytes);
+        } else {
+            // SQL_C_CHAR / default
+            size_t cap = pb.buffer_length > 0
+                ? static_cast<size_t>(pb.buffer_length - 1) : 0;
+            size_t copy_len = std::min<size_t>(s.size(), cap);
+            std::memcpy(pb.param_value, s.data(), copy_len);
+            static_cast<char*>(pb.param_value)[copy_len] = '\0';
+            if (pb.str_len_or_ind) *pb.str_len_or_ind = static_cast<SQLLEN>(copy_len);
+        }
+    };
+
+    if (std::holds_alternative<long long>(value)) {
+        write_int(std::get<long long>(value));
+    } else if (std::holds_alternative<double>(value)) {
+        if (pb.value_type == SQL_C_DOUBLE) {
+            *static_cast<SQLDOUBLE*>(pb.param_value) = std::get<double>(value);
+            if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLDOUBLE);
+        } else if (pb.value_type == SQL_C_CHAR || pb.value_type == SQL_C_WCHAR) {
+            write_string(std::to_string(std::get<double>(value)));
+        }
+    } else if (std::holds_alternative<std::string>(value)) {
+        write_string(std::get<std::string>(value));
+    }
+}
+
+// PORT plan port 3 — after a CALL completes, copy the procedure's output
+// values back to bound OUT/INOUT parameter buffers. params[i] maps to
+// binding (i+1). SQL_PARAM_INPUT slots are skipped.
+static void apply_proc_output_writeback(
+    StatementHandle* stmt,
+    const std::string& proc_name,
+    const std::vector<CellValue>& output_values)
+{
+    if (output_values.empty() || !stmt) return;
+    auto proc = MockCatalog::instance().find_procedure(proc_name);
+    if (!proc) return;
+    for (size_t i = 0; i < proc->params.size() && i < output_values.size(); ++i) {
+        const SQLSMALLINT dir = proc->params[i].direction;
+        if (dir != SQL_PARAM_OUTPUT &&
+            dir != SQL_PARAM_INPUT_OUTPUT &&
+            dir != SQL_RETURN_VALUE) continue;
+        auto it = stmt->parameter_bindings_.find(static_cast<SQLUSMALLINT>(i + 1));
+        if (it == stmt->parameter_bindings_.end()) continue;
+        write_output_to_binding(it->second, output_values[i]);
+    }
+}
+
 // Substitute bound parameter values into a ParsedQuery for param-set 'row'.
 // Handles both INSERT (insert_values) and literal SELECT (literal_exprs).
 static void substitute_params(
@@ -264,12 +371,17 @@ SQLRETURN SQL_API SQLExecDirect(
     }
     
     auto result = execute_query(parsed, config.result_set_size);
-    
+
     if (!result.success) {
         stmt->add_diagnostic(result.error_sqlstate, 0, result.error_message);
         return SQL_ERROR;
     }
-    
+
+    // PORT plan port 3 — write OUT/INOUT/RETURN values back to bound params.
+    if (!result.proc_name.empty()) {
+        apply_proc_output_writeback(stmt, result.proc_name, result.proc_output_values);
+    }
+
     // Store result
     stmt->executed_ = true;
     stmt->prepared_ = false;
@@ -476,12 +588,17 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
     substitute_params(parsed, stmt->parameter_bindings_, 0, stmt->param_bind_type_);
     
     auto result = execute_query(parsed, config.result_set_size);
-    
+
     if (!result.success) {
         stmt->add_diagnostic(result.error_sqlstate, 0, result.error_message);
         return SQL_ERROR;
     }
-    
+
+    // PORT plan port 3 — write OUT/INOUT/RETURN values back to bound params.
+    if (!result.proc_name.empty()) {
+        apply_proc_output_writeback(stmt, result.proc_name, result.proc_output_values);
+    }
+
     // Set params processed for single execution too
     if (stmt->params_processed_ptr_) {
         *stmt->params_processed_ptr_ = 1;
@@ -489,7 +606,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
     if (stmt->param_status_ptr_) {
         stmt->param_status_ptr_[0] = SQL_PARAM_SUCCESS;
     }
-    
+
     stmt->executed_ = true;
     stmt->cursor_open_ = !result.data.empty();
     stmt->current_row_ = -1;

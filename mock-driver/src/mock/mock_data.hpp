@@ -79,6 +79,13 @@ struct QueryResult {
     std::vector<SQLULEN> column_sizes;
     std::vector<MockRow> data;
     SQLLEN affected_rows = 0;
+
+    // CALL-specific — when this was an `EXECUTE PROCEDURE`, holds the
+    // procedure name (so SQLExecute can look up params for writeback) and
+    // the output values to copy into bound OUT/INOUT parameter buffers.
+    // Empty for non-CALL queries.
+    std::string proc_name;
+    std::vector<CellValue> proc_output_values;
 };
 
 QueryResult execute_query(const ParsedQuery& query, int result_set_size);

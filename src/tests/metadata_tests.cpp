@@ -21,7 +21,9 @@ std::vector<TestResult> MetadataTests::run() {
         test_special_columns(),
         test_table_privileges(),
         test_desc_unsigned_on_signed_integer(),
-        test_count_star_result_metadata()
+        test_count_star_result_metadata(),
+        test_sqlprocedures_smoke(),
+        test_sqlprocedurecolumns_smoke()
     };
 }
 
@@ -762,6 +764,184 @@ TestResult MetadataTests::test_count_star_result_metadata() {
                    << " unsigned=" << (unsigned_attr == SQL_TRUE ? "TRUE" :
                                        unsigned_attr == SQL_FALSE ? "FALSE" : "UNKNOWN");
             r.actual = actual.str();
+        });
+}
+
+// ── PORT plan §4.8 — Procedure catalog discovery ──────────────────────────
+
+namespace {
+
+// Read column N as a string from the current row. Returns empty on NULL or
+// fetch error. Used to dump the SQLProcedures / SQLProcedureColumns rows
+// into the result's `actual` field for diagnostics.
+std::string fetch_string_col(SQLHSTMT h, SQLUSMALLINT col) {
+    char buf[256] = {0};
+    SQLLEN ind = 0;
+    SQLRETURN rc = SQLGetData(h, col, SQL_C_CHAR, buf, sizeof(buf), &ind);
+    if (!SQL_SUCCEEDED(rc) || ind == SQL_NULL_DATA) return {};
+    return std::string(buf);
+}
+
+long long fetch_int_col(SQLHSTMT h, SQLUSMALLINT col) {
+    SQLBIGINT v = 0;
+    SQLLEN ind = 0;
+    SQLRETURN rc = SQLGetData(h, col, SQL_C_SBIGINT, &v, sizeof(v), &ind);
+    if (!SQL_SUCCEEDED(rc) || ind == SQL_NULL_DATA) return 0;
+    return static_cast<long long>(v);
+}
+
+} // namespace
+
+TestResult MetadataTests::test_sqlprocedures_smoke() {
+    return run_test(
+        "test_sqlprocedures_smoke", "SQLProcedures",
+        "SQLProcedures returns a result set with the documented column shape",
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLProcedures — Core conformance, columns 1..8",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            SQLRETURN ret = SQLProcedures(
+                stmt.get_handle(),
+                nullptr, 0,   // CatalogName
+                nullptr, 0,   // SchemaName
+                nullptr, 0);  // ProcName
+            if (ret == SQL_ERROR) {
+                // SQLSTATE IM001 — Driver doesn't support SQLProcedures.
+                char state[6] = {0};
+                SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
+                              reinterpret_cast<SQLCHAR*>(state),
+                              nullptr, nullptr, 0, nullptr);
+                if (std::string(state) == "IM001") {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "Driver returned IM001 — SQLProcedures not supported";
+                    return;
+                }
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLProcedures returned SQL_ERROR (state="
+                         + std::string(state) + ")";
+                return;
+            }
+
+            // Verify the result set has at least 8 columns. ODBC defines
+            // exactly 8 for SQLProcedures (PROCEDURE_CAT, PROCEDURE_SCHEM,
+            // PROCEDURE_NAME, NUM_INPUT_PARAMS, NUM_OUTPUT_PARAMS,
+            // NUM_RESULT_SETS, REMARKS, PROCEDURE_TYPE) plus optional
+            // driver-specific columns.
+            SQLSMALLINT ncols = 0;
+            SQLNumResultCols(stmt.get_handle(), &ncols);
+            if (ncols < 8) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLProcedures result set has " + std::to_string(ncols)
+                         + " columns; expected at least 8 per spec.";
+                return;
+            }
+
+            // Walk the result, count rows, capture the first procedure name.
+            int row_count = 0;
+            std::string first_name;
+            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS) {
+                if (row_count == 0) {
+                    first_name = fetch_string_col(stmt.get_handle(), 3);
+                }
+                ++row_count;
+            }
+            std::ostringstream oss;
+            oss << "ncols=" << ncols << " rows=" << row_count;
+            if (!first_name.empty()) oss << " first=" << first_name;
+            r.actual = oss.str();
+            // Empty procedure list is valid — many DBMSs ship without stored
+            // procedures by default. Don't FAIL on row_count==0.
+        });
+}
+
+TestResult MetadataTests::test_sqlprocedurecolumns_smoke() {
+    return run_test(
+        "test_sqlprocedurecolumns_smoke", "SQLProcedureColumns",
+        "SQLProcedureColumns enumerates parameters with COLUMN_TYPE codes",
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLProcedureColumns — direction codes SQL_PARAM_INPUT, "
+        "SQL_PARAM_OUTPUT, SQL_PARAM_INPUT_OUTPUT, SQL_RESULT_COL, SQL_RETURN_VALUE",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            SQLRETURN ret = SQLProcedureColumns(
+                stmt.get_handle(),
+                nullptr, 0,   // CatalogName
+                nullptr, 0,   // SchemaName
+                nullptr, 0,   // ProcName  — match all
+                nullptr, 0);  // ColumnName
+            if (ret == SQL_ERROR) {
+                char state[6] = {0};
+                SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
+                              reinterpret_cast<SQLCHAR*>(state),
+                              nullptr, nullptr, 0, nullptr);
+                if (std::string(state) == "IM001") {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "Driver returned IM001 — SQLProcedureColumns not supported";
+                    return;
+                }
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLProcedureColumns returned SQL_ERROR (state="
+                         + std::string(state) + ")";
+                return;
+            }
+
+            // Confirm shape — at least the documented 8 columns.
+            SQLSMALLINT ncols = 0;
+            SQLNumResultCols(stmt.get_handle(), &ncols);
+            if (ncols < 8) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLProcedureColumns result has " + std::to_string(ncols)
+                         + " columns; expected at least 8.";
+                return;
+            }
+
+            int row_count = 0;
+            int input_count = 0, output_count = 0, inout_count = 0,
+                result_count = 0, return_count = 0, other_count = 0;
+            std::ostringstream first_rows;
+            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS) {
+                ++row_count;
+                std::string proc = fetch_string_col(stmt.get_handle(), 3);
+                std::string colname = fetch_string_col(stmt.get_handle(), 4);
+                long long ctype = fetch_int_col(stmt.get_handle(), 5);
+                switch (static_cast<SQLSMALLINT>(ctype)) {
+                    case SQL_PARAM_INPUT:        ++input_count;  break;
+                    case SQL_PARAM_OUTPUT:       ++output_count; break;
+                    case SQL_PARAM_INPUT_OUTPUT: ++inout_count;  break;
+                    case SQL_RESULT_COL:         ++result_count; break;
+                    case SQL_RETURN_VALUE:       ++return_count; break;
+                    default:                     ++other_count; break;
+                }
+                if (row_count <= 3) {
+                    if (row_count > 1) first_rows << ", ";
+                    first_rows << proc << "." << colname << "(type=" << ctype << ")";
+                }
+            }
+            std::ostringstream oss;
+            oss << "rows=" << row_count
+                << " IN=" << input_count
+                << " OUT=" << output_count
+                << " INOUT=" << inout_count
+                << " RESULT=" << result_count
+                << " RETURN=" << return_count;
+            if (other_count) oss << " OTHER=" << other_count;
+            if (row_count > 0) oss << " sample=[" << first_rows.str() << "]";
+            r.actual = oss.str();
+
+            if (row_count == 0) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion = "Driver returned zero parameter rows. If the "
+                               "DBMS has registered procedures, this is a "
+                               "conformance gap; if not, the test cannot run.";
+                return;
+            }
+            if (other_count > 0) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Some COLUMN_TYPE codes are outside the documented "
+                               "set {SQL_PARAM_INPUT, SQL_PARAM_OUTPUT, "
+                               "SQL_PARAM_INPUT_OUTPUT, SQL_RESULT_COL, "
+                               "SQL_RETURN_VALUE}.";
+            }
         });
 }
 

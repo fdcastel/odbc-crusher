@@ -1188,6 +1188,10 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
         result.error_sqlstate =
             pr.error_sqlstate.empty() ? "42000" : pr.error_sqlstate;
         result.affected_rows = pr.affected_rows;
+        // PORT plan port 3 — propagate procedure name + output values so
+        // SQLExecute can write them back into bound OUT/INOUT parameters.
+        result.proc_name = query.proc_name;
+        result.proc_output_values = std::move(pr.output_values);
         return result;
     }
     

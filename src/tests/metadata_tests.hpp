@@ -23,6 +23,12 @@ private:
     TestResult test_table_privileges();
     TestResult test_desc_unsigned_on_signed_integer();
     TestResult test_count_star_result_metadata();
+
+    // PORT plan §4.8 — `SQLProcedures` / `SQLProcedureColumns` discovery.
+    // Both are Core conformance and are commonly forgotten by driver
+    // developers who tested the table-side catalog functions.
+    TestResult test_sqlprocedures_smoke();
+    TestResult test_sqlprocedurecolumns_smoke();
 };
 
 } // namespace odbc_crusher::tests

@@ -90,6 +90,49 @@ void MockCatalog::initialize(const std::string& preset) {
         // Pre-existing lock is held; insert directly.
         procedures_.push_back(std::move(insert_n));
     }
+
+    // PORT plan §4.3 / port 3 — IN/OUT/INOUT canonical procedure for the
+    // {?=CALL …} escape probes. Three params: an IN integer that doubles
+    // into the OUT integer, and an INOUT VARCHAR that gets uppercased.
+    // The probes assert the OUT/INOUT slots are mutated post-execute.
+    {
+        MockProcedure inout;
+        inout.name = "MOCK_INOUT";
+        inout.params = {
+            {"P_IN_INT",     SQL_PARAM_INPUT,         SQL_INTEGER, 10, 0},
+            {"P_OUT_INT",    SQL_PARAM_OUTPUT,        SQL_INTEGER, 10, 0},
+            {"P_INOUT_TEXT", SQL_PARAM_INPUT_OUTPUT,  SQL_VARCHAR, 64, 0},
+        };
+        inout.input_param_count = 3;  // total bound positions, IN+INOUT
+        inout.remarks =
+            "MOCK_INOUT(IN n INTEGER, OUT m INTEGER, INOUT s VARCHAR(64)) — "
+            "sets m := n*2 and s := UPPER(s). Drives the PORT plan port 3 "
+            "{?=CALL …} IN/OUT/INOUT escape probes.";
+        inout.callback =
+            [](MockCatalog&, const std::vector<CellValue>& args)
+                -> MockProcedureResult {
+                MockProcedureResult res;
+                res.output_values.resize(3);
+                long long in_n = 0;
+                if (args.size() > 0 && std::holds_alternative<long long>(args[0])) {
+                    in_n = std::get<long long>(args[0]);
+                }
+                std::string in_s;
+                if (args.size() > 2 && std::holds_alternative<std::string>(args[2])) {
+                    in_s = std::get<std::string>(args[2]);
+                }
+                std::string upper = in_s;
+                for (auto& c : upper) {
+                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                }
+                // Slot 0 is IN — leave untouched (driver should not write back).
+                res.output_values[1] = static_cast<long long>(in_n * 2);
+                res.output_values[2] = upper;
+                res.affected_rows = -1;
+                return res;
+            };
+        procedures_.push_back(std::move(inout));
+    }
 }
 
 void MockCatalog::create_default_catalog() {

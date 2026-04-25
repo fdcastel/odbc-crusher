@@ -518,12 +518,25 @@ SQLRETURN SQL_API SQLProcedures(
     auto procedures = MockCatalog::instance().snapshot_procedures();
     for (const auto& p : procedures) {
         if (!MockCatalog::matches_pattern(p.name, proc_pattern)) continue;
+        // Prefer the new MockProcedure::params for accurate IN/OUT counts;
+        // fall back to legacy input_param_count for procedures that haven't
+        // been migrated to the typed-param model.
+        SQLSMALLINT in_count  = p.params.empty()
+            ? p.input_param_count
+            : static_cast<SQLSMALLINT>(
+                p.count_params_with_direction(SQL_PARAM_INPUT) +
+                p.count_params_with_direction(SQL_PARAM_INPUT_OUTPUT));
+        SQLSMALLINT out_count = p.params.empty()
+            ? 0
+            : static_cast<SQLSMALLINT>(
+                p.count_params_with_direction(SQL_PARAM_OUTPUT) +
+                p.count_params_with_direction(SQL_PARAM_INPUT_OUTPUT));
         std::vector<std::variant<std::monostate, long long, double, std::string>> row;
         row.push_back(std::monostate{});  // PROCEDURE_CAT
         row.push_back(std::monostate{});  // PROCEDURE_SCHEM
         row.push_back(p.name);            // PROCEDURE_NAME
-        row.push_back(static_cast<long long>(p.input_param_count));
-        row.push_back(static_cast<long long>(0));  // NUM_OUTPUT_PARAMS
+        row.push_back(static_cast<long long>(in_count));
+        row.push_back(static_cast<long long>(out_count));
         row.push_back(static_cast<long long>(0));  // NUM_RESULT_SETS
         row.push_back(p.remarks);                  // REMARKS
         row.push_back(static_cast<long long>(SQL_PT_PROCEDURE));
@@ -560,20 +573,54 @@ SQLRETURN SQL_API SQLProcedureColumns(
     (void)cbCatalogName;
     (void)szSchemaName;
     (void)cbSchemaName;
-    (void)szProcName;
-    (void)cbProcName;
-    (void)szColumnName;
-    (void)cbColumnName;
 
-    // Mock: no procedure columns
     setup_catalog_result(stmt,
         {"PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "COLUMN_NAME",
          "COLUMN_TYPE", "DATA_TYPE", "TYPE_NAME", "COLUMN_SIZE"},
         {SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR,
          SQL_SMALLINT, SQL_SMALLINT, SQL_WVARCHAR, SQL_INTEGER});
-    
-    stmt->row_count_ = 0;
-    
+
+    // PORT plan §4.8 — enumerate one row per (procedure, parameter) for every
+    // registered procedure with a typed `params` vector. Procedures using
+    // the legacy `input_param_count` (no per-param metadata) contribute zero
+    // rows here — that's what the existing INSERT_N_ROWS shape produces.
+    std::string proc_pattern = sql_to_string(szProcName, cbProcName);
+    if (proc_pattern.empty()) proc_pattern = "%";
+    std::string col_pattern = sql_to_string(szColumnName, cbColumnName);
+    if (col_pattern.empty()) col_pattern = "%";
+
+    auto type_name_for = [](SQLSMALLINT t) -> std::string {
+        switch (t) {
+            case SQL_INTEGER:  return "INTEGER";
+            case SQL_VARCHAR:  return "VARCHAR";
+            case SQL_WVARCHAR: return "NVARCHAR";
+            case SQL_DECIMAL:  return "DECIMAL";
+            case SQL_NUMERIC:  return "NUMERIC";
+            case SQL_DOUBLE:   return "DOUBLE";
+            case SQL_SMALLINT: return "SMALLINT";
+            default: return "UNKNOWN";
+        }
+    };
+
+    auto procedures = MockCatalog::instance().snapshot_procedures();
+    for (const auto& p : procedures) {
+        if (!MockCatalog::matches_pattern(p.name, proc_pattern)) continue;
+        for (const auto& pm : p.params) {
+            if (!MockCatalog::matches_pattern(pm.name, col_pattern)) continue;
+            std::vector<std::variant<std::monostate, long long, double, std::string>> row;
+            row.push_back(std::monostate{});                    // PROCEDURE_CAT
+            row.push_back(std::monostate{});                    // PROCEDURE_SCHEM
+            row.push_back(p.name);                              // PROCEDURE_NAME
+            row.push_back(pm.name);                             // COLUMN_NAME
+            row.push_back(static_cast<long long>(pm.direction));// COLUMN_TYPE
+            row.push_back(static_cast<long long>(pm.sql_type)); // DATA_TYPE
+            row.push_back(type_name_for(pm.sql_type));          // TYPE_NAME
+            row.push_back(static_cast<long long>(pm.column_size)); // COLUMN_SIZE
+            stmt->result_data_.push_back(std::move(row));
+        }
+    }
+    stmt->row_count_ = static_cast<SQLLEN>(stmt->result_data_.size());
+
     return SQL_SUCCESS;
 }
 

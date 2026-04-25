@@ -52,22 +52,52 @@ struct MockIndex {
 // Stored-procedure registry entry. The body is a C++ callback rather than a
 // PSM-like body language — keeps the mock minimal. Callbacks receive the
 // parsed argument values (already substituted from any parameter markers)
-// and return (success, affected_rows, error_message).
+// and return (success, affected_rows, error_message, output_values).
 class MockCatalog;  // forward
+
+// Parameter metadata for stored procedures (PORT plan §4.3 / port 8).
+// Drives both SQLProcedureColumns enumeration AND the output-value writeback
+// at SQLExecute time when direction is SQL_PARAM_OUTPUT / SQL_PARAM_INPUT_OUTPUT.
+struct MockProcParam {
+    std::string name;
+    SQLSMALLINT direction;     // SQL_PARAM_INPUT / SQL_PARAM_OUTPUT / SQL_PARAM_INPUT_OUTPUT
+                               // (or SQL_RETURN_VALUE for a function's `?=`).
+    SQLSMALLINT sql_type;      // SQL_INTEGER / SQL_VARCHAR / SQL_DECIMAL / ...
+    SQLULEN     column_size = 0;
+    SQLSMALLINT scale = 0;
+};
+
 struct MockProcedureResult {
     bool success = true;
     SQLLEN affected_rows = -1;  // ODBC spec default for EXECUTE PROCEDURE
     std::string error_message;
     std::string error_sqlstate;
+    // Output values indexed by parameter position (0-based, matches MockProcedure::params).
+    // Slots for SQL_PARAM_INPUT params are ignored. Empty when the procedure
+    // has no OUT/INOUT/RETURN parameters.
+    std::vector<CellValue> output_values;
 };
 using MockProcedureCallback = std::function<MockProcedureResult(
     MockCatalog& catalog, const std::vector<CellValue>& args)>;
 
 struct MockProcedure {
     std::string name;
+    // Either set `params` for full IN/OUT/INOUT/RETURN metadata (drives
+    // SQLProcedureColumns + output writeback), or set `input_param_count`
+    // alone for a legacy IN-only procedure with no enumerable columns.
+    std::vector<MockProcParam> params;
     SQLSMALLINT input_param_count = 0;
     MockProcedureCallback callback;
     std::string remarks;
+
+    // Helper — count direction-specific parameters from `params`.
+    SQLSMALLINT count_params_with_direction(SQLSMALLINT direction) const {
+        SQLSMALLINT n = 0;
+        for (const auto& p : params) {
+            if (p.direction == direction) ++n;
+        }
+        return n;
+    }
 };
 
 // The mock catalog
