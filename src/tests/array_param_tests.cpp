@@ -1030,12 +1030,18 @@ TestResult ArrayParamTests::test_param_status_per_row_partial_failure() {
             core::OdbcStatement stmt(conn_);
             constexpr SQLULEN kSize = 5;
 
+            const char* sql_a = "INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)";
             SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-                SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(),
-                SQL_NTS);
+                SqlWcharBuf(sql_a).ptr(), SQL_NTS);
+            if (!SQL_SUCCEEDED(ret)) {
+                ret = SQLPrepare(stmt.get_handle(),
+                    reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql_a)),
+                    SQL_NTS);
+            }
             if (!SQL_SUCCEEDED(ret)) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not prepare INSERT (DDL setup may have failed)";
+                r.actual = "Could not prepare INSERT (W and ANSI both failed; "
+                           "DDL setup may have failed)";
                 return;
             }
 
@@ -1145,13 +1151,20 @@ TestResult ArrayParamTests::test_paramset_size_unsupported_returns_error() {
         "ODBC 3.x SQL_ATTR_PARAMSET_SIZE — HYC00 fallback contract",
         [&](TestResult& r) {
             core::OdbcStatement stmt(conn_);
-            // Prepare a trivial statement so the SET is well-defined.
+            // Prepare a trivial statement so the SET is well-defined. Try W
+            // first, fall back to ANSI — unixODBC's W path is fragile on
+            // some driver/manager combinations.
+            const char* sql_a = "INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)";
             SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-                SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(),
-                SQL_NTS);
+                SqlWcharBuf(sql_a).ptr(), SQL_NTS);
+            if (!SQL_SUCCEEDED(ret)) {
+                ret = SQLPrepare(stmt.get_handle(),
+                    reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql_a)),
+                    SQL_NTS);
+            }
             if (!SQL_SUCCEEDED(ret)) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not prepare INSERT";
+                r.actual = "Could not prepare INSERT (W and ANSI both failed)";
                 return;
             }
 
