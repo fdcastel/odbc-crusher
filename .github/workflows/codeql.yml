@@ -23,6 +23,11 @@ on:
     # hours for the maintainers.
     - cron: '0 6 * * 0'
 
+# Cancel superseded PR runs but let push runs to master complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   security-events: write   # required to upload SARIF results

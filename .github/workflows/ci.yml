@@ -2,9 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [main, master]
+
+# Cancel superseded runs on the same branch — pushing N commits to a PR
+# no longer queues N full matrix runs. Skip cancellation on push to
+# main/master so a release-tag-adjacent run isn't killed mid-flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-mock-driver:
@@ -199,9 +206,11 @@ jobs:
       if: matrix.build_type == 'Release'
       with:
         name: odbc-crusher-${{ runner.os }}-${{ matrix.build_type }}
+        # Single per-OS path — Windows MSBuild emits build/src/Release/
+        # while Linux/macOS Make emit build/src/. The upload step is
+        # only enabled on Release, so no Debug/ confusion.
         path: |
-          build/src/Release/odbc-crusher*
-          build/src/Debug/odbc-crusher*
+          build/src/Release/odbc-crusher.exe
           build/src/odbc-crusher
         if-no-files-found: ignore
 
