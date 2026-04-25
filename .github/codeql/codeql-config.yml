@@ -4,12 +4,15 @@
 # (googletest, nlohmann/json, CLI11) under build/_deps/. That produced
 # ~14 of the 16 high-severity alerts on the first run — all in
 # third-party code we don't own and don't want to maintain warnings for.
-# The same goes for the cmake build dirs themselves.
+#
+# `paths-ignore` doesn't reliably filter compiled-language analysis
+# (CodeQL analyses anything that ends up in the compilation database,
+# regardless). Use the inverse `paths:` (positive list) — explicitly
+# scope analysis to our source trees only.
 name: ODBC Crusher CodeQL config
 
-paths-ignore:
-  - 'build/**'
-  - 'build-san/**'
-  - 'build-tidy/**'
-  - 'mock-driver/build/**'
-  - '**/_deps/**'
+paths:
+  - 'src'
+  - 'mock-driver/src'
+  - 'tests'
+  - 'include'
