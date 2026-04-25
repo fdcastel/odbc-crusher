@@ -208,6 +208,7 @@ jobs:
   sanitizers:
     name: ASan + UBSan (Linux Debug)
     runs-on: ubuntu-latest
+    needs: build-mock-driver  # we want to run e2e under sanitizers too
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -217,7 +218,7 @@ jobs:
     - name: Install ODBC dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y unixodbc unixodbc-dev
+        sudo apt-get install -y unixodbc unixodbc-dev odbcinst
 
     - name: Configure with ASan + UBSan
       # `-fno-sanitize-recover=all` upgrades UBSan warnings into errors so a
@@ -232,10 +233,28 @@ jobs:
     - name: Build
       run: cmake --build build-san --config Debug -j 4
 
-    - name: Run unit tests
-      # Mock-driver-backed tests are skipped on Linux anyway (Windows-only
-      # driver), so the value here is in the Debug test harness running under
-      # sanitizers — that covers the core RAII / error-path code.
+    - name: Download Mock Driver
+      uses: actions/download-artifact@v4
+      with:
+        name: mock-odbc-driver-Linux-Release
+        path: mock-driver-artifact
+
+    - name: Register Mock Driver
+      # Same registration story as the build-and-test Linux job, just
+      # against the unsanitized mock-driver build (the .so itself doesn't
+      # need ASan instrumentation — ASan still tracks malloc/free in the
+      # caller, so leaks/UB in the application are caught regardless).
+      run: |
+        chmod +x mock-driver-artifact/install/register.sh
+        DRIVER=$(find mock-driver-artifact/build -name 'libmockodbc.so' | head -n1)
+        DRIVER_ABS=$(readlink -f "$DRIVER")
+        sudo ./mock-driver-artifact/install/register.sh "$DRIVER_ABS"
+
+    - name: Run tests under sanitizers
+      # Run unit + e2e together — the sanitizer build catches application-
+      # side leaks/UB in both the test plumbing and the §5.1 subprocess
+      # harness (subprocess spawn / file IO / JSON parse is exactly where
+      # ASan tends to find real bugs).
       #
       # CrashGuardTest deliberately dereferences NULL / triggers
       # AV-equivalent faults so we can verify the SEH/VEH guard catches them.
