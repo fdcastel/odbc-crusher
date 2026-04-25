@@ -14,23 +14,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Export compile commands for IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Platform-specific settings
+# Platform-specific defines (Windows-only — odbc.h needs these to behave)
 if(WIN32)
     add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX)
-    set(ODBC_LIBRARIES odbc32)
-elseif(APPLE)
-    find_library(ODBC_FRAMEWORK ODBC)
-    set(ODBC_LIBRARIES ${ODBC_FRAMEWORK})
-else()
-    # Linux
-    find_package(PkgConfig)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(ODBC QUIET odbc)
-    endif()
-    if(NOT ODBC_FOUND)
-        set(ODBC_LIBRARIES odbc)
-    endif()
 endif()
+
+# Use CMake's FindODBC consistently across all three platforms — it
+# resolves Homebrew unixODBC paths on macOS (/opt/homebrew/include),
+# system unixODBC on Linux, and odbc32 on Windows. Mirrors the main
+# project's src/core/CMakeLists.txt usage. The previous hand-rolled
+# block missed the macOS Homebrew include path entirely, breaking the
+# §6.2 cross-platform CI build.
+find_package(ODBC REQUIRED)
 
 # Core sources — shared between the driver DLL and unit tests
 set(MOCK_DRIVER_CORE_SOURCES
@@ -62,6 +57,14 @@ add_library(mock-odbc-driver SHARED ${MOCK_DRIVER_CORE_SOURCES})
 
 target_include_directories(mock-odbc-driver PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# ODBC headers — sql.h, sqlext.h, sqltypes.h. ODBC::ODBC carries both
+# the headers and the link library (odbc32 / unixodbc / iODBC). The
+# driver itself doesn't link against the DM (it IS the driver), but
+# the test exe below does need the link.
+target_include_directories(mock-odbc-driver PRIVATE
+    $<TARGET_PROPERTY:ODBC::ODBC,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
 # Platform-specific output name
@@ -117,7 +120,7 @@ add_executable(mock-odbc-tests
 target_link_libraries(mock-odbc-tests PRIVATE
     GTest::gtest
     GTest::gtest_main
-    ${ODBC_LIBRARIES}
+    ODBC::ODBC
 )
 
 target_include_directories(mock-odbc-tests PRIVATE

@@ -228,25 +228,33 @@ SQLRETURN SQL_API SQLSetConnectAttr(
     
     conn->clear_diagnostics();
     
+    // ODBC encodes integer attribute values inside SQLPOINTER on the
+    // wire (per Driver Manager convention). On 64-bit Linux GCC treats
+    // a direct reinterpret_cast<SQLUINTEGER> as a precision-losing
+    // error; the canonical idiom is to widen through uintptr_t first.
+    auto ptr_to_uint = [](SQLPOINTER p) {
+        return static_cast<SQLUINTEGER>(reinterpret_cast<uintptr_t>(p));
+    };
+
     switch (fAttribute) {
         case SQL_ATTR_ACCESS_MODE:
-            conn->access_mode_ = reinterpret_cast<SQLUINTEGER>(rgbValue);
+            conn->access_mode_ = ptr_to_uint(rgbValue);
             break;
-            
+
         case SQL_ATTR_AUTOCOMMIT:
-            conn->autocommit_ = reinterpret_cast<SQLUINTEGER>(rgbValue);
+            conn->autocommit_ = ptr_to_uint(rgbValue);
             break;
-            
+
         case SQL_ATTR_CONNECTION_TIMEOUT:
-            conn->connection_timeout_ = reinterpret_cast<SQLUINTEGER>(rgbValue);
+            conn->connection_timeout_ = ptr_to_uint(rgbValue);
             break;
-            
+
         case SQL_ATTR_LOGIN_TIMEOUT:
-            conn->login_timeout_ = reinterpret_cast<SQLUINTEGER>(rgbValue);
+            conn->login_timeout_ = ptr_to_uint(rgbValue);
             break;
-            
+
         case SQL_ATTR_TXN_ISOLATION:
-            conn->txn_isolation_ = reinterpret_cast<SQLUINTEGER>(rgbValue);
+            conn->txn_isolation_ = ptr_to_uint(rgbValue);
             break;
             
         case SQL_ATTR_CONNECTION_DEAD:
