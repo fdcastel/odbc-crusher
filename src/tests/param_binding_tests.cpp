@@ -26,6 +26,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_sqlrowcount_after_update());
     results.push_back(test_sqlrowcount_after_delete());
     results.push_back(test_param_rebind_per_row_row_count());
+    results.push_back(test_param_bind_once_execute_many_row_count());
 
     return results;
 }
@@ -954,6 +955,142 @@ TestResult ParameterBindingTests::test_param_rebind_per_row_row_count() {
                             " bind/execute calls reported errors (first: " +
                             first_error + ")";
         }
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+// ── §1.3: Bind-once-execute-many stability ────────────────────────────────
+//
+// IMPROVEMENT_PLAN.md §1.3. The mirror image of §1.2: bind a parameter
+// once into a stack variable, mutate the variable in a loop, and call
+// SQLExecute repeatedly without re-binding or re-preparing. This is the
+// `odbc-scanner` shape that produced HY010 "Function sequence error" on
+// DuckDB after the second SQLExecute. The test records:
+//
+//   - whether all 50 SQLExecute calls succeed
+//   - whether the post-loop COMMIT succeeds
+//   - whether all 50 rows actually persist
+//
+// On HY010 / loop failure we PASS-with-warning rather than FAIL — the
+// spec is genuinely ambiguous here and "the driver demands SQLFreeStmt
+// (SQL_CLOSE) between executes" is a known-supported variant. The test
+// surfaces the behaviour for the consumer to plan around.
+TestResult ParameterBindingTests::test_param_bind_once_execute_many_row_count() {
+    TestResult result = make_result(
+        "test_param_bind_once_execute_many_row_count",
+        "SQLBindParameter+SQLExecute",
+        TestStatus::PASS,
+        "Bind once, mutate variable, execute N times — all rows persist",
+        "",
+        Severity::WARNING,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter (parameter values persist across executions)"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    constexpr int kRowCount = 50;
+    int execute_errors = 0;
+    std::string first_error;
+    SQLINTEGER id_val = 0;
+    SQLINTEGER val_val = 0;
+    SQLLEN id_ind = 0;
+    SQLLEN val_ind = 0;
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        SQLRETURN rc = SQLPrepare(
+            stmt.get_handle(),
+            (SQLCHAR*)"INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (?, ?)",
+            SQL_NTS);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "SQLPrepare returned " + std::to_string(rc);
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        // Bind ONCE, before the loop. The variables persist between executes.
+        SQLRETURN bid = SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
+                                         SQL_C_SLONG, SQL_INTEGER, 0, 0,
+                                         &id_val, 0, &id_ind);
+        SQLRETURN bvl = SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_SLONG, SQL_VARCHAR, 32, 0,
+                                         &val_val, 0, &val_ind);
+        if (!SQL_SUCCEEDED(bid) || !SQL_SUCCEEDED(bvl)) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "Initial SQLBindParameter failed (id_rc=" +
+                            std::to_string(bid) + ", val_rc=" +
+                            std::to_string(bvl) + ")";
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        for (int i = 1; i <= kRowCount; ++i) {
+            id_val = i;
+            val_val = i;
+            SQLRETURN exec_rc = SQLExecute(stmt.get_handle());
+            if (!SQL_SUCCEEDED(exec_rc)) {
+                ++execute_errors;
+                if (first_error.empty()) {
+                    first_error = "SQLExecute row " + std::to_string(i) +
+                                  " returned " + std::to_string(exec_rc);
+                }
+            }
+        }
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = std::string("Loop threw: ") + e.what();
+        result.diagnostic = e.format_diagnostics();
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    SQLRETURN commit_rc = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+    RowVerification v = verify_rows_persisted(
+        "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kRowCount);
+
+    std::ostringstream actual;
+    actual << "executes=" << kRowCount
+           << " errors=" << execute_errors
+           << " commit_rc=" << commit_rc
+           << " verify=" << (v.ok ? "OK" : v.diagnostic)
+           << " count=" << v.actual_count;
+    result.actual = actual.str();
+
+    if (!v.ok) {
+        result.status = TestStatus::FAIL;
+        if (!first_error.empty()) result.diagnostic = first_error;
+        result.suggestion =
+            "Bind-once-execute-many lost rows. If the executes returned "
+            "HY010, the driver requires SQLFreeStmt(SQL_CLOSE) between "
+            "executes (DuckDB ODBC behaviour). Application-side fix: close "
+            "the cursor between iterations, or rebind per row.";
+    } else if (execute_errors > 0) {
+        // Rows landed but executes errored — record but don't fail.
+        result.suggestion =
+            "Driver returned errors during execute but the rows still "
+            "persisted. Worth checking SQLGetDiagRec on each non-success "
+            "return to see if the driver expected SQLFreeStmt(SQL_CLOSE).";
     }
 
     drop_roundtrip_table();

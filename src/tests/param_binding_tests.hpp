@@ -31,6 +31,7 @@ private:
     TestResult test_sqlrowcount_after_update();
     TestResult test_sqlrowcount_after_delete();
     TestResult test_param_rebind_per_row_row_count();
+    TestResult test_param_bind_once_execute_many_row_count();
 };
 
 } // namespace odbc_crusher::tests
