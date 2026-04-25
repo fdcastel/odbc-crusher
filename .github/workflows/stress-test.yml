@@ -1,3 +1,11 @@
+# Stress-test the latest released odbc-crusher against five real ODBC
+# drivers + the mock driver, on demand.
+#
+# Each driver job does its unique DB-and-driver setup, then delegates
+# the common "download crusher / run text+JSON / upload report" tail to
+# the .github/actions/run-crusher composite action (§6.9). Adding a new
+# driver means writing one job with the install steps, no
+# copy-pasting the upload boilerplate.
 name: Stress Test
 
 on:
@@ -12,52 +20,23 @@ jobs:
   postgresql:
     name: PostgreSQL (Linux)
     runs-on: ubuntu-latest
-    env:
-      ODBC_CONN: "Driver={PostgreSQL Unicode};Server=127.0.0.1;Port=5432;Database=postgres;Uid=postgres;Pwd=postgres;"
     steps:
-    - name: Install unixODBC
+    - uses: actions/checkout@v4
+
+    - name: Install unixODBC + start PostgreSQL + install driver
       run: |
         sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev
-
-    - name: Start PostgreSQL
-      run: |
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst
         sudo systemctl start postgresql
-        sudo systemctl status postgresql
         sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres'"
-
-    - name: Install PostgreSQL ODBC driver
-      run: |
         sudo apt-get install -y -q odbc-postgresql
         dpkg -s odbc-postgresql | grep Version
         cat /etc/odbcinst.ini
 
-    - name: Download odbc-crusher
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
-        tar xzf odbc-crusher-linux-x64.tar.gz
-        chmod +x odbc-crusher
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      run: |
-        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
-        echo "EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      run: ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
+    - uses: ./.github/actions/run-crusher
       with:
-        name: report-postgresql
-        path: |
-          crusher-report.txt
-          crusher-report.json
+        artifact-name: postgresql
+        conn-string: "Driver={PostgreSQL Unicode};Server=127.0.0.1;Port=5432;Database=postgres;Uid=postgres;Pwd=postgres;"
 
   # ── MariaDB on Linux ────────────────────────────────────────
   # Driver: MariaDB Connector/ODBC 3.1.15 (Ubuntu 24.04 apt package)
@@ -66,52 +45,22 @@ jobs:
   mariadb:
     name: MariaDB (Linux)
     runs-on: ubuntu-latest
-    env:
-      ODBC_CONN: "Driver={MariaDB Unicode};Server=127.0.0.1;Port=3306;User=root;Password=root;"
     steps:
-    - name: Install unixODBC
+    - uses: actions/checkout@v4
+
+    - name: Install unixODBC + MariaDB server + driver
       run: |
         sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev
-
-    - name: Start MariaDB
-      run: |
-        sudo apt-get install -y -q mariadb-server
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst mariadb-server odbc-mariadb
         sudo systemctl start mariadb
-        sudo systemctl status mariadb
         sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root';"
-
-    - name: Install MariaDB ODBC driver
-      run: |
-        sudo apt-get install -y -q odbc-mariadb
         dpkg -s odbc-mariadb | grep Version
         cat /etc/odbcinst.ini
 
-    - name: Download odbc-crusher
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
-        tar xzf odbc-crusher-linux-x64.tar.gz
-        chmod +x odbc-crusher
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      run: |
-        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      run: ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
+    - uses: ./.github/actions/run-crusher
       with:
-        name: report-mariadb
-        path: |
-          crusher-report.txt
-          crusher-report.json
+        artifact-name: mariadb
+        conn-string: "Driver={MariaDB Unicode};Server=127.0.0.1;Port=3306;User=root;Password=root;"
 
   # ── MySQL on Linux ──────────────────────────────────────────
   # Driver: MySQL Connector/ODBC 9.2.0 (binary download)
@@ -121,25 +70,20 @@ jobs:
     name: MySQL (Linux)
     runs-on: ubuntu-latest
     env:
-      ODBC_CONN: "Driver={MySQL};Server=127.0.0.1;Port=3306;User=crusher;Password=crusher;"
       MYSQL_ODBC_VERSION: "9.2.0"
       MYSQL_ODBC_LIB_URL: https://dev.mysql.com/get/Downloads/Connector-ODBC/9.2/mysql-connector-odbc-9.2.0-linux-glibc2.28-x86-64bit.tar.gz
     steps:
-    - name: Install unixODBC
+    - uses: actions/checkout@v4
+
+    - name: Install unixODBC + start MySQL + install MySQL ODBC driver
       run: |
         sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev
-
-    - name: Start MySQL
-      run: |
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst
         sudo systemctl start mysql
-        sudo systemctl status mysql
         # On Ubuntu 24.04, MySQL 8.4+ uses caching_sha2_password by default
         sudo mysql --defaults-file=/etc/mysql/debian.cnf -e "CREATE USER 'crusher'@'%' IDENTIFIED BY 'crusher'; GRANT ALL ON *.* TO 'crusher'@'%'; FLUSH PRIVILEGES;"
         mysql -u crusher -pcrusher -e "SELECT VERSION();"
 
-    - name: Install MySQL ODBC driver
-      run: |
         curl --no-progress-meter -LO "${MYSQL_ODBC_LIB_URL}"
         tar xzf mysql-connector-odbc-*.tar.gz
         DRIVER_DIR=$(ls -d mysql-connector-odbc-*/lib/)
@@ -149,35 +93,14 @@ jobs:
         echo "Description = MySQL ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
         echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
+        # Persist the driver dir for the run step to extend LD_LIBRARY_PATH.
+        echo "MYSQL_DRIVER_LIB=$(readlink -f $DRIVER_DIR)" >> $GITHUB_ENV
 
-    - name: Download odbc-crusher
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
-        tar xzf odbc-crusher-linux-x64.tar.gz
-        chmod +x odbc-crusher
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      run: |
-        export LD_LIBRARY_PATH=$(ls -d mysql-connector-odbc-*/lib/):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      run: |
-        export LD_LIBRARY_PATH=$(ls -d mysql-connector-odbc-*/lib/):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
+    - uses: ./.github/actions/run-crusher
       with:
-        name: report-mysql
-        path: |
-          crusher-report.txt
-          crusher-report.json
+        artifact-name: mysql
+        conn-string: "Driver={MySQL};Server=127.0.0.1;Port=3306;User=crusher;Password=crusher;"
+        ld-library-path: ${{ env.MYSQL_DRIVER_LIB }}
 
   # ── DuckDB on Linux ─────────────────────────────────────────
   # Driver: DuckDB ODBC 1.4.4.0 (binary download)
@@ -187,57 +110,34 @@ jobs:
     name: DuckDB (Linux)
     runs-on: ubuntu-latest
     env:
-      ODBC_CONN: "Driver={DuckDB Driver};"
       DUCKDB_ODBC_VERSION: "1.4.4.0"
       DUCKDB_ODBC_URL: https://github.com/duckdb/duckdb-odbc/releases/download/v1.4.4.0/duckdb_odbc-linux-amd64.zip
     steps:
-    - name: Install unixODBC
+    - uses: actions/checkout@v4
+
+    - name: Install unixODBC + DuckDB ODBC driver
       run: |
         sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst
 
-    - name: Install DuckDB ODBC driver
-      run: |
         mkdir duckdb_odbc
         cd duckdb_odbc
         curl --no-progress-meter -LO "${DUCKDB_ODBC_URL}"
         unzip -q duckdb_odbc-linux-amd64.zip
         DRIVER_PATH=$(readlink -f libduckdb_odbc.so)
-        echo "DuckDB ODBC driver ${DUCKDB_ODBC_VERSION}: ${DRIVER_PATH}"
         cd ..
+        echo "DuckDB ODBC driver ${DUCKDB_ODBC_VERSION}: ${DRIVER_PATH}"
         echo "[DuckDB Driver]" | sudo tee -a /etc/odbcinst.ini
         echo "Description = DuckDB ODBC Driver" | sudo tee -a /etc/odbcinst.ini
         echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
+        echo "DUCKDB_DRIVER_LIB=$(readlink -f duckdb_odbc)" >> $GITHUB_ENV
 
-    - name: Download odbc-crusher
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
-        tar xzf odbc-crusher-linux-x64.tar.gz
-        chmod +x odbc-crusher
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      run: |
-        export LD_LIBRARY_PATH=$(readlink -f duckdb_odbc):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      run: |
-        export LD_LIBRARY_PATH=$(readlink -f duckdb_odbc):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
+    - uses: ./.github/actions/run-crusher
       with:
-        name: report-duckdb
-        path: |
-          crusher-report.txt
-          crusher-report.json
+        artifact-name: duckdb
+        conn-string: "Driver={DuckDB Driver};"
+        ld-library-path: ${{ env.DUCKDB_DRIVER_LIB }}
 
   # ── ClickHouse on Linux ─────────────────────────────────────
   # Driver: ClickHouse ODBC 1.5.0.20251127 (binary download)
@@ -247,28 +147,24 @@ jobs:
     name: ClickHouse (Linux)
     runs-on: ubuntu-latest
     env:
-      ODBC_CONN: "Driver={ClickHouse};Server=127.0.0.1;Port=8123;"
       CLICKHOUSE_ODBC_VERSION: "1.5.0"
       CLICKHOUSE_ODBC_TAG: "v1.5.0.20251127"
       CLICKHOUSE_ODBC_LIB_URL: https://github.com/ClickHouse/clickhouse-odbc/releases/download/v1.5.0.20251127/clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
     steps:
-    - name: Install unixODBC
+    - uses: actions/checkout@v4
+
+    - name: Install unixODBC + start ClickHouse + install driver
       run: |
         sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst
 
-    - name: Start ClickHouse
-      run: |
         curl --no-progress-meter -fsSL 'https://packages.clickhouse.com/rpm/stable/repodata/repomd.xml.key' | sudo gpg --dearmor -o /usr/share/keyrings/clickhouse-keyring.gpg
         ARCH=$(dpkg --print-architecture)
         echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg arch=${ARCH}] https://packages.clickhouse.com/deb stable main" | sudo tee /etc/apt/sources.list.d/clickhouse.list
         sudo apt-get update -y -q
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q clickhouse-server
         sudo systemctl start clickhouse-server
-        sudo systemctl status clickhouse-server
 
-    - name: Install ClickHouse ODBC driver
-      run: |
         curl --no-progress-meter -LO "${CLICKHOUSE_ODBC_LIB_URL}"
         unzip clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
         tar xJf clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux.tar.xz
@@ -278,84 +174,40 @@ jobs:
         echo "Description = ClickHouse ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
         echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
+        echo "CLICKHOUSE_DRIVER_LIB=$(readlink -f clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib)" >> $GITHUB_ENV
 
-    - name: Download odbc-crusher
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-linux-x64.tar.gz" --dir .
-        tar xzf odbc-crusher-linux-x64.tar.gz
-        chmod +x odbc-crusher
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      run: |
-        export LD_LIBRARY_PATH=$(readlink -f clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      run: |
-        export LD_LIBRARY_PATH=$(readlink -f clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib):$LD_LIBRARY_PATH
-        ./odbc-crusher "${ODBC_CONN}" -o json -f crusher-report.json
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
+    - uses: ./.github/actions/run-crusher
       with:
-        name: report-clickhouse
-        path: |
-          crusher-report.txt
-          crusher-report.json
+        artifact-name: clickhouse
+        conn-string: "Driver={ClickHouse};Server=127.0.0.1;Port=8123;"
+        ld-library-path: ${{ env.CLICKHOUSE_DRIVER_LIB }}
 
   # ── Mock Driver on Windows ──────────────────────────────────
   mock-driver:
     name: Mock Driver (Windows)
     runs-on: windows-latest
-    env:
-      ODBC_CONN: "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;"
     steps:
-    - name: Download mock driver
+    - uses: actions/checkout@v4
+
+    - name: Download + register mock driver
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         gh release download --repo fdcastel/odbc-crusher --pattern "mock-odbc-driver-windows-x64.zip" --dir .
         unzip mock-odbc-driver-windows-x64.zip -d mock-driver
         ls -la mock-driver/
-      env:
-        GH_TOKEN: ${{ github.token }}
 
     - name: Register Mock Driver
-      shell: powershell
+      shell: pwsh
       run: |
         $driverDest = "C:\Windows\System32\mockodbc.dll"
         Copy-Item mock-driver\mockodbc.dll -Destination $driverDest
         & mock-driver\register.ps1 -DriverPath $driverDest
 
-    - name: Download odbc-crusher
-      shell: bash
-      run: |
-        gh release download --repo fdcastel/odbc-crusher --pattern "odbc-crusher-windows-x64.zip" --dir .
-        unzip odbc-crusher-windows-x64.zip
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Run odbc-crusher
-      shell: bash
-      run: |
-        ./odbc-crusher.exe "${ODBC_CONN}" -v 2>&1 | tee crusher-report.txt || true
-      continue-on-error: true
-
-    - name: Run odbc-crusher (JSON)
-      shell: bash
-      run: |
-        ./odbc-crusher.exe "${ODBC_CONN}" -o json -f crusher-report.json || true
-      continue-on-error: true
-
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      if: always()
+    - uses: ./.github/actions/run-crusher
       with:
-        name: report-mock-driver
-        path: |
-          crusher-report.txt
-          crusher-report.json
+        artifact-name: mock-driver
+        conn-string: "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;"
+        release-asset: odbc-crusher-windows-x64.zip
+        binary: ./odbc-crusher.exe
