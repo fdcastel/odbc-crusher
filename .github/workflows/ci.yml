@@ -166,6 +166,13 @@ jobs:
       if: runner.os != 'Windows' && matrix.build_type == 'Release'
       shell: bash
       run: |
+        # Debug: verify odbcinst is where we expect.
+        echo "=== odbcinst lookup debug ==="
+        which odbcinst || echo "which: not found"
+        ls -la /usr/bin/odbcinst /opt/homebrew/bin/odbcinst /usr/local/bin/odbcinst 2>&1 || true
+        sudo which odbcinst || echo "sudo which: not found"
+        echo "============================"
+
         # Linux generates libmockodbc.so directly under build/ (single-
         # config Make/Ninja); macOS generates libmockodbc.dylib in the
         # same spot. The artifact glob above handles both.
