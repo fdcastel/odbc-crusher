@@ -1,8 +1,16 @@
 #include "datatype_edge_tests.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
-#include <cstring>
 #include <climits>
+#include <cstring>
+#include <iomanip>
+#include <sstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <sql.h>
+#include <sqlext.h>
 
 namespace odbc_crusher::tests {
 
@@ -17,7 +25,8 @@ std::vector<TestResult> DataTypeEdgeCaseTests::run() {
         test_null_varchar(),
         test_integer_as_string(),
         test_string_as_integer(),
-        test_decimal_values()
+        test_decimal_values(),
+        test_varchar_raw_byte_integrity()
     };
 }
 
@@ -664,7 +673,106 @@ TestResult DataTypeEdgeCaseTests::test_decimal_values() {
         result.status = TestStatus::ERR;
         result.actual = std::string("Exception: ") + e.what();
     }
-    
+
+    return result;
+}
+
+// ── §1.6: VARCHAR raw-byte integrity probe ─────────────────────────────────
+//
+// IMPROVEMENT_PLAN.md §1.6. Some engines (Firebird, DB2 LOB) store VARCHAR
+// with an inline length-prefix in the same buffer as the characters; a
+// driver that miscomputes the data offset can write characters over the
+// prefix. The string then looks fine via SQLGetData(SQL_C_CHAR) (the
+// driver reads the same wrong offset back) but the raw bytes via
+// SQL_C_BINARY reveal the corruption.
+//
+// This is purely informational because the bug shape is engine-specific
+// and the "first byte must not be 'A'" assertion only holds for engines
+// with inline prefixes. The test runs against any driver that supports
+// `SELECT CAST('ABCDEFGH' AS VARCHAR(32))` and dumps the first 16 raw
+// bytes (hex) into the test result so a driver developer can interpret.
+TestResult DataTypeEdgeCaseTests::test_varchar_raw_byte_integrity() {
+    TestResult result = make_result(
+        "test_varchar_raw_byte_integrity",
+        "SQLGetData(SQL_C_BINARY)",
+        TestStatus::PASS,
+        "Read CAST('ABCDEFGH' AS VARCHAR(32)) as raw binary; report first 16 bytes",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetData (SQL_C_BINARY)"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    const std::vector<std::string> queries = {
+        "SELECT CAST('ABCDEFGH' AS VARCHAR(32))",
+        "SELECT CAST('ABCDEFGH' AS VARCHAR(32)) FROM RDB$DATABASE",
+        "SELECT CAST('ABCDEFGH' AS VARCHAR(32)) FROM DUAL",
+    };
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        bool executed = false;
+        for (const auto& q : queries) {
+            try {
+                stmt.execute(q);
+                executed = true;
+                break;
+            } catch (const core::OdbcError&) {
+                // try next
+            }
+        }
+        if (!executed) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "No CAST(... AS VARCHAR(32)) query succeeded";
+            result.duration = elapsed();
+            return result;
+        }
+
+        if (!stmt.fetch()) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Query executed but no row fetched";
+            result.duration = elapsed();
+            return result;
+        }
+
+        unsigned char raw[64] = {0};
+        SQLLEN ind = 0;
+        SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_BINARY,
+                                  raw, sizeof(raw), &ind);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "Driver rejected SQLGetData(SQL_C_BINARY) on VARCHAR; "
+                            "rc=" + std::to_string(rc);
+            result.duration = elapsed();
+            return result;
+        }
+
+        size_t to_dump = ind > 0 ? std::min<size_t>(static_cast<size_t>(ind), 16) : 0;
+        std::ostringstream actual;
+        actual << "indicator=" << ind << " first_bytes_hex=";
+        for (size_t i = 0; i < to_dump; ++i) {
+            if (i > 0) actual << ' ';
+            actual << std::setfill('0') << std::setw(2) << std::hex
+                   << static_cast<int>(raw[i]);
+        }
+        actual << " (informational; engines with inline length prefixes "
+                  "should NOT show ASCII 'A'=0x41 in the first prefix bytes)";
+        result.actual = actual.str();
+        result.duration = elapsed();
+
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+        result.duration = elapsed();
+    }
+
     return result;
 }
 

@@ -32,6 +32,7 @@ private:
     TestResult test_integer_as_string();
     TestResult test_string_as_integer();
     TestResult test_decimal_values();
+    TestResult test_varchar_raw_byte_integrity();
 };
 
 } // namespace odbc_crusher::tests
