@@ -77,6 +77,7 @@ private:
 
     TestResult test_param_rebind_per_row_row_count();
     TestResult test_param_bind_once_execute_many_row_count();
+    TestResult test_param_bind_once_execute_many_endtran();
     TestResult test_param_reexecute_requires_close();
     TestResult test_param_batch_then_single_row_tail();
 };

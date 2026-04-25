@@ -37,6 +37,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_sqlrowcount_after_delete());
     results.push_back(test_param_rebind_per_row_row_count());
     results.push_back(test_param_bind_once_execute_many_row_count());
+    results.push_back(test_param_bind_once_execute_many_endtran());
     results.push_back(test_param_reexecute_requires_close());
     results.push_back(test_param_batch_then_single_row_tail());
 
@@ -979,6 +980,133 @@ TestResult ParameterBindingTests::test_sqldescribeparam_integer() {
                << " scale=" << scale
                << " nullable=" << nullable;
         result.actual = actual.str();
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+// §1.3 `_endtran` — after binding once and executing N times on a prepared
+// INSERT (no intervening close), does the trailing `SQLEndTran(SQL_COMMIT)`
+// itself succeed? On some drivers the connection is left in a state where
+// the second execute returns OK but COMMIT then fails with HY010. The
+// `_row_count` cell measured row persistence; this cell measures the
+// COMMIT return code in isolation so the failure mode can be reported
+// even when individual executes look fine.
+TestResult ParameterBindingTests::test_param_bind_once_execute_many_endtran() {
+    TestResult result = make_result(
+        "test_param_bind_once_execute_many_endtran",
+        "SQLEndTran(SQL_COMMIT)",
+        TestStatus::PASS,
+        "Bind once, mutate variable, execute N times, COMMIT — does the "
+        "COMMIT itself succeed?",
+        "",
+        Severity::WARNING,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLEndTran after re-execute"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    constexpr int kRowCount = 10;
+    int execute_errors = 0;
+    SQLRETURN commit_rc = SQL_ERROR;
+    std::string first_error;
+
+    try {
+        // Switch to manual-commit so SQLEndTran has work to do — autocommit
+        // would have already committed every row inside the loop.
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)SQL_AUTOCOMMIT_OFF, 0);
+
+        core::OdbcStatement stmt(conn_);
+        SQLRETURN rc = SQLPrepare(
+            stmt.get_handle(),
+            (SQLCHAR*)"INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (?, ?)",
+            SQL_NTS);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "SQLPrepare returned " + std::to_string(rc);
+            SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                              (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        SQLINTEGER id_val = 0, val_val = 0;
+        SQLLEN id_ind = 0, val_ind = 0;
+        SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
+                         SQL_C_SLONG, SQL_INTEGER, 0, 0,
+                         &id_val, 0, &id_ind);
+        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                         SQL_C_SLONG, SQL_VARCHAR, 32, 0,
+                         &val_val, 0, &val_ind);
+
+        for (int i = 1; i <= kRowCount; ++i) {
+            id_val = i;
+            val_val = i;
+            SQLRETURN exec_rc = SQLExecute(stmt.get_handle());
+            if (!SQL_SUCCEEDED(exec_rc)) {
+                ++execute_errors;
+                if (first_error.empty()) {
+                    first_error = "SQLExecute row " + std::to_string(i) +
+                                  " returned " + std::to_string(exec_rc);
+                }
+            }
+        }
+
+        // The probe under test — does COMMIT succeed?
+        commit_rc = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+        // Restore autocommit for the rest of the run.
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    std::ostringstream actual;
+    actual << "executes=" << kRowCount
+           << " execute_errors=" << execute_errors
+           << " commit_rc=" << commit_rc;
+    result.actual = actual.str();
+
+    if (!SQL_SUCCEEDED(commit_rc)) {
+        result.status = TestStatus::FAIL;
+        if (!first_error.empty()) result.diagnostic = first_error;
+        result.suggestion =
+            "SQLEndTran(SQL_COMMIT) failed after a sequence of re-executes "
+            "on a prepared INSERT. Common cause: driver leaves the connection "
+            "in a state where the open cursor invalidates the txn (DuckDB "
+            "HY010 family). Application fix: SQLFreeStmt(SQL_CLOSE) before "
+            "COMMIT, or rebind+commit per row.";
+    } else if (execute_errors > 0) {
+        // COMMIT OK but some executes errored — note but don't fail.
+        result.suggestion =
+            "Driver returned errors during execute but the COMMIT itself "
+            "succeeded. Check SQLGetDiagRec on the failing executes — "
+            "they probably wanted SQLFreeStmt(SQL_CLOSE).";
     }
 
     drop_roundtrip_table();
