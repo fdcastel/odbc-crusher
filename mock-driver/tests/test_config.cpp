@@ -144,6 +144,26 @@ TEST(ConfigTest, ParseProceduresDefaultsFalse) {
     EXPECT_FALSE(config.procedures_broken_inout);
 }
 
+TEST(ConfigTest, ParseArrayBindRowFailsAtDefaultsZero) {
+    DriverConfig config = parse_connection_string("");
+    EXPECT_EQ(config.array_bind_row_fails_at, 0);
+}
+
+TEST(ConfigTest, ParseArrayBindRowFailsAtIntValue) {
+    DriverConfig config = parse_connection_string("ArrayBindRowFailsAt=3;");
+    EXPECT_EQ(config.array_bind_row_fails_at, 3);
+}
+
+TEST(ConfigTest, ParseSupportsArrayBindDefaultsTrue) {
+    DriverConfig config = parse_connection_string("");
+    EXPECT_TRUE(config.supports_array_bind);
+}
+
+TEST(ConfigTest, ParseSupportsArrayBindFalse) {
+    DriverConfig config = parse_connection_string("SupportsArrayBind=false;");
+    EXPECT_FALSE(config.supports_array_bind);
+}
+
 TEST(ConfigTest, ParseSilentCorruptionUnknownFallsBackToNone) {
     DriverConfig config = parse_connection_string("SilentCorruption=Bogus;");
     EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::None);

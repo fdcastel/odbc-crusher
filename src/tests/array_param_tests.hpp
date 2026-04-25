@@ -31,6 +31,14 @@ private:
     TestResult test_param_operation_array();
     TestResult test_paramset_size_one();
     TestResult test_array_partial_error();
+
+    // PORT plan §4.6 — driver-detected per-row failure (mid-batch constraint
+    // violation), and the SQL_ATTR_PARAMSET_SIZE-unsupported fallback path.
+    // The existing partial-error test uses SQL_PARAM_OPERATION_PTR with
+    // SQL_PARAM_IGNORE (application-driven skip); these probes exercise the
+    // driver-driven failure shape that's harder to detect.
+    TestResult test_param_status_per_row_partial_failure();
+    TestResult test_paramset_size_unsupported_returns_error();
 };
 
 } // namespace odbc_crusher::tests

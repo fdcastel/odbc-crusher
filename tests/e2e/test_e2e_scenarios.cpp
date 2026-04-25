@@ -204,6 +204,54 @@ TEST_F(CrusherE2EFixture, SilentCorruptionTruncateNumericTripsFractionalRoundTri
            "(every 0.01 → 0.0; total_mantissa goes from 100 to 0).";
 }
 
+// ── ArrayBindRowFailsAt=3: row 3 SQL_PARAM_ERROR, surrounding rows OK ─────
+// PORT plan port 6. The mock injects a server-side failure for the configured
+// row; per-row status array must show the mixed outcome. The probe stays
+// PASS in this scenario (mixed outcome is reported correctly); the canary
+// merely confirms the probe correctly discriminates the mixed-outcome shape.
+
+TEST_F(CrusherE2EFixture, ArrayBindRowFailsAtProducesMixedStatus) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ArrayBindRowFailsAt=3;ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("summary"));
+
+    auto t = find_test(run.report, "Array Parameter Tests",
+                       "test_param_status_per_row_partial_failure");
+    ASSERT_TRUE(t.has_value());
+    EXPECT_EQ(t->value("status", std::string{}), "PASS")
+        << "Probe must PASS — succ=4 err=1 is the correct mixed outcome.";
+    // The actual string must contain the ERR marker for row 3 specifically.
+    const std::string actual = t->value("actual", std::string{});
+    EXPECT_NE(actual.find("OK, OK, ERR"), std::string::npos)
+        << "Per-row status must show err in position 3. actual: " << actual;
+}
+
+// ── SupportsArrayBind=false: paramset-size probe SKIPs with HYC00 ─────────
+// PORT plan port 6. Driver returns HYC00 for SQL_ATTR_PARAMSET_SIZE > 1;
+// the probe must report SKIP_UNSUPPORTED, NOT FAIL — the documented
+// fallback contract is respected.
+
+TEST_F(CrusherE2EFixture, SupportsArrayBindFalseSkipsUnsupportedProbe) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "SupportsArrayBind=false;ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("summary"));
+
+    auto t = find_test(run.report, "Array Parameter Tests",
+                       "test_paramset_size_unsupported_returns_error");
+    ASSERT_TRUE(t.has_value());
+    const std::string status = t->value("status", std::string{});
+    EXPECT_EQ(status, "SKIP_UNSUPPORTED")
+        << "HYC00 must SKIP_UNSUPPORTED, not FAIL — that's the contract. got "
+        << status;
+    EXPECT_NE(t->value("actual", std::string{}).find("HYC00"), std::string::npos);
+}
+
 // ── Procedures=BrokenInout: {?=CALL …} OUT/INOUT probes FAIL ─────────────
 // PORT plan port 3. Mock's MOCK_INOUT callback returns empty output_values,
 // so the SQLExecute writeback path is a no-op. The IN-only probe still

@@ -517,11 +517,27 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
                 continue;
             }
             
+            // PORT plan port 6 canary — ArrayBindRowFailsAt: synthesize a
+            // SQLSTATE 23000 error for the configured 1-indexed row, leave
+            // surrounding rows to execute normally. Drives the per-row
+            // status array probe.
+            if (config.array_bind_row_fails_at > 0 &&
+                static_cast<int>(i + 1) == config.array_bind_row_fails_at) {
+                if (stmt->param_status_ptr_) {
+                    stmt->param_status_ptr_[i] = SQL_PARAM_ERROR;
+                }
+                error_count++;
+                stmt->add_diagnostic("23000", 0,
+                    "Parameter set " + std::to_string(i + 1) +
+                    ": injected ArrayBindRowFailsAt failure");
+                continue;
+            }
+
             // Execute with current parameter set — substitute bound param values
             ParsedQuery row_parsed = parsed;
             substitute_params(row_parsed, stmt->parameter_bindings_, i, stmt->param_bind_type_);
             auto result = execute_query(row_parsed, config.result_set_size);
-            
+
             if (result.success) {
                 if (stmt->param_status_ptr_) {
                     stmt->param_status_ptr_[i] = SQL_PARAM_SUCCESS;
@@ -1473,6 +1489,16 @@ SQLRETURN SQL_API SQLSetStmtAttr(
             break;
             
         case SQL_ATTR_PARAMSET_SIZE:
+            // PORT plan port 6 canary — SupportsArrayBind=false: report
+            // option-not-supported when the application requests true
+            // array-parameter execution (size > 1). Single-row binds
+            // remain accepted so error-injected setup paths work.
+            if (value > 1 &&
+                !BehaviorController::instance().config().supports_array_bind) {
+                stmt->add_diagnostic("HYC00", 0,
+                    "Optional feature not implemented: array-parameter execution");
+                return SQL_ERROR;
+            }
             stmt->paramset_size_ = value;
             break;
             

@@ -32,6 +32,8 @@ Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;
 | `SilentCorruption` | None, DropInserts, MangleVarchar, TruncateNumeric, NullAsEmpty, MangleUnicode | Silently tamper with stored data while keeping ODBC return codes successful — used to validate that round-trip / verify-rows-persisted tests detect a misbehaving driver. `NullAsEmpty` returns NULL char/wchar cells as empty string with indicator=0 (Oracle-style empty-vs-null conflation). `MangleUnicode` replaces every non-ASCII byte in a fetched char/wchar cell with `?` (codepage-bound driver pattern). |
 | `NativeSqlPassThrough` | true, false | When `true`, `SQLNativeSql` returns its input verbatim without translating any ODBC escape sequence (`{fn ...}`, `{d ...}`, `{oj ...}`, `{CALL ...}`, etc.). Drives the PORT plan port 4 e2e canary; spec-compliant drivers must always translate. |
 | `Procedures` | (default) / BrokenInout | When `BrokenInout`, the canonical `MOCK_INOUT(IN n, OUT m, INOUT s)` procedure runs but its callback returns no output values. Mocks drivers that accept `{?=CALL …}` syntactically but never write back to `SQL_PARAM_OUTPUT` / `SQL_PARAM_INPUT_OUTPUT` bound buffers. Drives the PORT plan port 3 e2e canary. |
+| `ArrayBindRowFailsAt` | Number (default 0) | When `> 0`, the Nth row (1-indexed) of any array-parameter execute is forced to fail with SQLSTATE `23000`; surrounding rows execute normally. Drives the PORT plan port 6 per-row status probe. |
+| `SupportsArrayBind` | true (default) / false | When `false`, `SQLSetStmtAttr(SQL_ATTR_PARAMSET_SIZE, > 1)` returns SQL_ERROR with SQLSTATE `HYC00`. Mocks drivers that don't implement array-parameter execution. Drives the PORT plan port 6 SKIP_UNSUPPORTED canary. |
 
 ## Building
 

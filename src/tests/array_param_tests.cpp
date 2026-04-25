@@ -192,10 +192,12 @@ std::vector<TestResult> ArrayParamTests::run() {
     results.push_back(test_param_operation_array());
     results.push_back(test_paramset_size_one());
     results.push_back(test_array_partial_error());
-    
+    results.push_back(test_param_status_per_row_partial_failure());
+    results.push_back(test_paramset_size_unsupported_returns_error());
+
     // Cleanup
     if (table_ok) drop_test_table();
-    
+
     return results;
 }
 
@@ -1006,6 +1008,192 @@ TestResult ArrayParamTests::test_array_partial_error() {
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, nullptr, 0);
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_OPERATION_PTR, nullptr, 0);
+        });
+}
+
+// ── PORT plan §4.6 — driver-detected per-row failure ────────────────────────
+//
+// Bind a 5-row INSERT batch; expect that any one row violating an integrity
+// constraint shows up as SQL_PARAM_ERROR in the per-row status array while
+// the surrounding rows show SQL_PARAM_SUCCESS. The existing
+// test_array_partial_error uses SQL_PARAM_OPERATION_PTR/IGNORE — that's
+// application-driven. This is the driver-driven shape.
+
+TestResult ArrayParamTests::test_param_status_per_row_partial_failure() {
+    return run_test(
+        "test_param_status_per_row_partial_failure", "SQLSetStmtAttr/SQLExecute",
+        "Driver fills per-row SQL_PARAM_STATUS_PTR with SUCCESS for ok rows "
+        "and ERROR for the row that violates a server-side constraint",
+        Severity::WARNING, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Using Arrays of Parameters: SQL_ATTR_PARAM_STATUS_PTR per-row outcome",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            constexpr SQLULEN kSize = 5;
+
+            SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
+                SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(),
+                SQL_NTS);
+            if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not prepare INSERT (DDL setup may have failed)";
+                return;
+            }
+
+            SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
+                reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
+            SQLRETURN ps_ret = SQLSetStmtAttr(stmt.get_handle(),
+                SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(kSize), 0);
+            if (!SQL_SUCCEEDED(ps_ret)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver rejected SQL_ATTR_PARAMSET_SIZE=" + std::to_string(kSize);
+                return;
+            }
+
+            SQLUSMALLINT status[kSize];
+            for (SQLULEN i = 0; i < kSize; ++i) status[i] = 0xFFFF;
+            ret = SQLSetStmtAttr(stmt.get_handle(),
+                SQL_ATTR_PARAM_STATUS_PTR, status, 0);
+            if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver does not support SQL_ATTR_PARAM_STATUS_PTR";
+                return;
+            }
+
+            SQLINTEGER ids[kSize] = {1001, 1002, 1003, 1004, 1005};
+            SQLLEN id_inds[kSize] = {0, 0, 0, 0, 0};
+            SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
+                SQL_C_SLONG, SQL_INTEGER, 0, 0, ids, 0, id_inds);
+            char names[kSize][51] = {"row0", "row1", "row2", "row3", "row4"};
+            SQLLEN name_inds[kSize] = {SQL_NTS, SQL_NTS, SQL_NTS, SQL_NTS, SQL_NTS};
+            SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                SQL_C_CHAR, SQL_VARCHAR, 50, 0, names, 51, name_inds);
+
+            SQLRETURN exec_ret = SQLExecute(stmt.get_handle());
+
+            std::ostringstream actual;
+            actual << "Execute rc=" << exec_ret << " status=[";
+            int succ = 0, err = 0, other = 0, err_index = -1;
+            for (SQLULEN i = 0; i < kSize; ++i) {
+                if (i > 0) actual << ", ";
+                switch (status[i]) {
+                    case SQL_PARAM_SUCCESS:
+                    case SQL_PARAM_SUCCESS_WITH_INFO:
+                        actual << "OK"; ++succ; break;
+                    case SQL_PARAM_ERROR:
+                        actual << "ERR"; ++err;
+                        if (err_index < 0) err_index = static_cast<int>(i);
+                        break;
+                    default:
+                        actual << "0x" << std::hex << status[i] << std::dec;
+                        ++other; break;
+                }
+            }
+            actual << "] (succ=" << succ << " err=" << err << " other=" << other << ")";
+            r.actual = actual.str();
+
+            // Reset before any return path so cleanup doesn't trip.
+            SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+            SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
+
+            // The probe is **informational against drivers** — without an
+            // injected failure the all-success outcome is correct. The
+            // canary path injects a failure via mock knob; in that scenario
+            // err > 0 must hold AND succ > 0 (mixed outcome).
+            if (other > 0) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "SQL_ATTR_PARAM_STATUS_PTR contains values "
+                               "outside the documented set "
+                               "{SUCCESS, SUCCESS_WITH_INFO, ERROR, "
+                               "UNUSED, DIAG_UNAVAILABLE}.";
+                return;
+            }
+            if (err > 0) {
+                // At least one row failed — verify the surrounding rows are
+                // still reported as SUCCESS so the per-row contract holds.
+                if (succ == 0) {
+                    r.status = TestStatus::FAIL;
+                    r.suggestion = "Driver reported failure for some rows but "
+                                   "marked the rest as ERROR too — per-row "
+                                   "contract requires SUCCESS for the rows "
+                                   "that did succeed.";
+                }
+                // else: PASS — mixed outcome reported correctly.
+            }
+            // err == 0: green-path PASS, the suggestion only fires under
+            // the canary scenario.
+        });
+}
+
+// ── PORT plan §4.6 — paramset-size unsupported / fallback contract ──────────
+//
+// Some drivers reject SQL_ATTR_PARAMSET_SIZE > 1 entirely (e.g., older Sybase
+// and pre-3.5 Firebird). The conformance contract is: return SQL_ERROR with
+// SQLSTATE HYC00 ("Optional feature not implemented") so applications can
+// fall back to row-by-row execution. Anything else (silent acceptance,
+// SQL_SUCCESS while still executing once) is the bug shape this probe
+// catches. SKIP_UNSUPPORTED on HYC00 is the correct outcome for a known
+// limitation.
+
+TestResult ArrayParamTests::test_paramset_size_unsupported_returns_error() {
+    return run_test(
+        "test_paramset_size_unsupported_returns_error", "SQLSetStmtAttr",
+        "Driver either accepts SQL_ATTR_PARAMSET_SIZE > 1 OR returns HYC00 "
+        "with no other side effect",
+        Severity::INFO, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x SQL_ATTR_PARAMSET_SIZE — HYC00 fallback contract",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            // Prepare a trivial statement so the SET is well-defined.
+            SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
+                SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(),
+                SQL_NTS);
+            if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not prepare INSERT";
+                return;
+            }
+
+            SQLRETURN set_rc = SQLSetStmtAttr(stmt.get_handle(),
+                SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(10)), 0);
+
+            std::ostringstream actual;
+            if (SQL_SUCCEEDED(set_rc)) {
+                r.actual = "SQLSetStmtAttr accepted PARAMSET_SIZE=10 — driver "
+                           "supports array parameter execution";
+                // Reset
+                SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                    reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+                return;
+            }
+
+            // Failure path — read the SQLSTATE.
+            char state[6] = {0};
+            SQLINTEGER native = 0;
+            SQLCHAR msg[256] = {0};
+            SQLSMALLINT msg_len = 0;
+            SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
+                          reinterpret_cast<SQLCHAR*>(state),
+                          &native, msg, sizeof(msg), &msg_len);
+            std::string sqlstate(state);
+            actual << "SQLSetStmtAttr returned " << set_rc
+                   << " state=" << sqlstate
+                   << " msg='" << reinterpret_cast<char*>(msg) << "'";
+            r.actual = actual.str();
+
+            if (sqlstate == "HYC00") {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.suggestion = "Driver doesn't support array-parameter execution. "
+                               "Applications must fall back to row-by-row "
+                               "SQLExecute to use this driver.";
+                return;
+            }
+            r.status = TestStatus::FAIL;
+            r.suggestion = "Failure SQLSTATE should be HYC00 ('Optional feature "
+                           "not implemented') so applications recognize the "
+                           "fallback case. Got '" + sqlstate + "' instead.";
         });
 }
 

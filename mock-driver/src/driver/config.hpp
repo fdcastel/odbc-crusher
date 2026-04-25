@@ -103,6 +103,16 @@ struct DriverConfig {
     // SQL_PARAM_INPUT direction.
     bool procedures_broken_inout = false;
 
+    // PORT plan port 6 canary — when > 0, the Nth row (1-indexed) of any
+    // array-parameter execute is forced to fail with SQLSTATE 23000, while
+    // the surrounding rows succeed. Drives the per-row status probe.
+    int array_bind_row_fails_at = 0;
+
+    // PORT plan port 6 — when false, SQLSetStmtAttr(SQL_ATTR_PARAMSET_SIZE)
+    // with size > 1 returns HYC00 (driver doesn't support array parameter
+    // execution). Lets the SKIP_UNSUPPORTED probe land here.
+    bool supports_array_bind = true;
+
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
     
