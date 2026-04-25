@@ -73,7 +73,20 @@ struct DriverConfig {
         Lenient   // Lenient - allow some state violations
     };
     StateCheckingMode state_checking = StateCheckingMode::Strict;
-    
+
+    // Silent-corruption mode — drives the §5.1 E2E scenarios that prove the
+    // §1.4 verify_rows_persisted chain actually catches a misbehaving driver.
+    // Each mode keeps SQLExecute/SQLExecDirect returning SUCCESS while
+    // tampering with stored or returned data, the exact shape that produced
+    // the Firebird ≤3.5.0 / older MSSQL parameter-binding bugs.
+    enum class SilentCorruptionMode {
+        None,             // Default — store/return values verbatim
+        DropInserts,      // Accept INSERT, return SUCCESS, store nothing
+        MangleVarchar,    // Replace each stored string with a transformed copy
+        TruncateNumeric   // Round stored doubles to integer, lose precision
+    };
+    SilentCorruptionMode silent_corruption = SilentCorruptionMode::None;
+
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
     

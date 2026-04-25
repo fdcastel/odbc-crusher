@@ -220,7 +220,18 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     } else {
         config.state_checking = DriverConfig::StateCheckingMode::Strict;
     }
-    
+
+    std::string corruption_str = to_lower(get_string_value(pairs, "silentcorruption", "none"));
+    if (corruption_str == "dropinserts") {
+        config.silent_corruption = DriverConfig::SilentCorruptionMode::DropInserts;
+    } else if (corruption_str == "manglevarchar") {
+        config.silent_corruption = DriverConfig::SilentCorruptionMode::MangleVarchar;
+    } else if (corruption_str == "truncatenumeric") {
+        config.silent_corruption = DriverConfig::SilentCorruptionMode::TruncateNumeric;
+    } else {
+        config.silent_corruption = DriverConfig::SilentCorruptionMode::None;
+    }
+
     return config;
 }
 

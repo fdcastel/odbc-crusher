@@ -1,4 +1,6 @@
 #include "mock_data.hpp"
+#include "behaviors.hpp"
+#include "../driver/config.hpp"
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -10,6 +12,37 @@
 namespace mock_odbc {
 
 namespace {
+
+// Apply the active SilentCorruption mode to a row about to be stored.
+// Returns false when the row should not be stored at all (DropInserts).
+bool apply_silent_corruption(MockRow& row,
+                             DriverConfig::SilentCorruptionMode mode) {
+    using Mode = DriverConfig::SilentCorruptionMode;
+    switch (mode) {
+        case Mode::None:
+            return true;
+        case Mode::DropInserts:
+            return false;
+        case Mode::MangleVarchar:
+            for (auto& cell : row) {
+                if (auto* s = std::get_if<std::string>(&cell)) {
+                    for (char& c : *s) {
+                        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+                        else if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
+                    }
+                }
+            }
+            return true;
+        case Mode::TruncateNumeric:
+            for (auto& cell : row) {
+                if (auto* d = std::get_if<double>(&cell)) {
+                    *d = std::trunc(*d);
+                }
+            }
+            return true;
+    }
+    return true;
+}
 
 std::string to_upper(const std::string& s) {
     std::string result = s;
@@ -1364,7 +1397,10 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                     row = query.insert_values;
                     while (row.size() < table->columns.size()) row.push_back(std::monostate{});
                 }
-                catalog.insert_row(to_upper(query.table_name), std::move(row));
+                auto corruption = BehaviorController::instance().config().silent_corruption;
+                if (apply_silent_corruption(row, corruption)) {
+                    catalog.insert_row(to_upper(query.table_name), std::move(row));
+                }
             }
             break;
         }

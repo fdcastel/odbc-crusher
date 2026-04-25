@@ -89,6 +89,31 @@ TEST(ConfigTest, ParseComplexConnectionString) {
     EXPECT_EQ(config.max_connections, 10);
 }
 
+TEST(ConfigTest, ParseSilentCorruptionDefault) {
+    DriverConfig config = parse_connection_string("Driver={Mock};");
+    EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::None);
+}
+
+TEST(ConfigTest, ParseSilentCorruptionDropInserts) {
+    DriverConfig config = parse_connection_string("SilentCorruption=DropInserts;");
+    EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::DropInserts);
+}
+
+TEST(ConfigTest, ParseSilentCorruptionMangleVarchar) {
+    DriverConfig config = parse_connection_string("SilentCorruption=MangleVarchar;");
+    EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::MangleVarchar);
+}
+
+TEST(ConfigTest, ParseSilentCorruptionTruncateNumeric) {
+    DriverConfig config = parse_connection_string("SilentCorruption=TruncateNumeric;");
+    EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::TruncateNumeric);
+}
+
+TEST(ConfigTest, ParseSilentCorruptionUnknownFallsBackToNone) {
+    DriverConfig config = parse_connection_string("SilentCorruption=Bogus;");
+    EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::None);
+}
+
 TEST(ConfigTest, ShouldFailSuccess) {
     DriverConfig config;
     config.mode = BehaviorMode::Success;

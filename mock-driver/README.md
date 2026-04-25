@@ -29,6 +29,7 @@ Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;
 | `FailOn` | Function names | Inject failures |
 | `ErrorCode` | SQLSTATE | Error code to return |
 | `Latency` | e.g., 10ms | Simulated delay |
+| `SilentCorruption` | None, DropInserts, MangleVarchar, TruncateNumeric | Silently tamper with stored data while keeping ODBC return codes successful — used to validate that round-trip / verify-rows-persisted tests detect a misbehaving driver |
 
 ## Building
 
