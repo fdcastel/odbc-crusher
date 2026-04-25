@@ -99,30 +99,30 @@ TestResult CursorStressTests::test_concurrent_statements() {
                 return;
             }
 
-            constexpr int num_stmts = 5;
+            constexpr size_t num_stmts = 5;
             std::vector<std::unique_ptr<core::OdbcStatement>> stmts;
 
             // Allocate multiple statements
-            for (int i = 0; i < num_stmts; ++i) {
+            for (size_t i = 0; i < num_stmts; ++i) {
                 stmts.push_back(std::make_unique<core::OdbcStatement>(conn_));
             }
 
             // Execute independent queries on each
-            for (int i = 0; i < num_stmts; ++i) {
+            for (size_t i = 0; i < num_stmts; ++i) {
                 std::string sql = "SELECT " + std::to_string(i + 1);
                 stmts[i]->execute(sql);
             }
 
             // Fetch results in interleaved order
-            int correct = 0;
-            for (int i = 0; i < num_stmts; ++i) {
+            size_t correct = 0;
+            for (size_t i = 0; i < num_stmts; ++i) {
                 ret = SQLFetch(stmts[i]->get_handle());
                 if (!SQL_SUCCEEDED(ret)) continue;
 
                 SQLINTEGER val = 0;
                 SQLLEN ind = 0;
                 ret = SQLGetData(stmts[i]->get_handle(), 1, SQL_C_SLONG, &val, sizeof(val), &ind);
-                if (SQL_SUCCEEDED(ret) && val == i + 1) ++correct;
+                if (SQL_SUCCEEDED(ret) && val == static_cast<SQLINTEGER>(i + 1)) ++correct;
             }
 
             std::ostringstream oss;

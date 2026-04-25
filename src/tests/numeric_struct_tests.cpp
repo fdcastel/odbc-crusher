@@ -120,8 +120,9 @@ TestResult NumericStructTests::test_numeric_struct_precision_scale() {
             } else {
                 double val = numeric_struct_to_double(ns);
                 std::ostringstream oss;
-                oss << "Value=" << val << ", precision=" << (int)ns.precision
-                    << ", scale=" << (int)ns.scale << ", sign=" << (int)ns.sign;
+                oss << "Value=" << val << ", precision=" << static_cast<int>(ns.precision)
+                    << ", scale=" << static_cast<int>(ns.scale)
+                    << ", sign=" << static_cast<int>(ns.sign);
                 r.actual = oss.str();
 
                 if (std::abs(val - 123.45) > 0.01) {
