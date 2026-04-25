@@ -136,37 +136,23 @@ jobs:
         
     - name: Register Mock Driver and Run Tests (Windows)
       if: runner.os == 'Windows' && matrix.build_type == 'Release'
-      shell: powershell
+      shell: pwsh
       # No `|| true` and no `continue-on-error: true` — once the mock
       # driver is registered, e2e failures are real regressions (the
       # whole §5.1 harness exists to catch them).
       run: |
-        # actions/upload-artifact@v4 preserves the input directory
-        # structure, so the DLL is under the same nested path it had
-        # in the build job.
-        Copy-Item mock-driver-artifact\mock-driver\build\Release\mockodbc.dll -Destination C:\Windows\System32\
+        # upload-artifact@v4 strips the longest common prefix, so the
+        # downloaded layout is build/Release/mockodbc.dll + install/.
+        $driverDest = "C:\Windows\System32\mockodbc.dll"
+        Copy-Item mock-driver-artifact/build/Release/mockodbc.dll -Destination $driverDest
 
-        # Register driver
-        $regContent = @"
-        Windows Registry Editor Version 5.00
-
-        [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers]
-        "Mock ODBC Driver"="Installed"
-
-        [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\Mock ODBC Driver]
-        "Driver"="C:\\Windows\\System32\\mockodbc.dll"
-        "Setup"="C:\\Windows\\System32\\mockodbc.dll"
-        "APILevel"="2"
-        "ConnectFunctions"="YYY"
-        "DriverODBCVer"="03.80"
-        "FileUsage"="0"
-        "SQLLevel"="1"
-        "@
-        $regContent | Out-File -FilePath mock-driver.reg -Encoding ASCII
-        reg import mock-driver.reg
+        # Use the canonical register.ps1 instead of hand-rolled .reg —
+        # same script the local docs and stress-test workflow use,
+        # avoiding the previous two-source-of-truth drift risk.
+        & mock-driver-artifact/install/register.ps1 -DriverPath $driverDest
 
         # Run e2e tests against the registered mock. Unit tests already
-        # ran in the previous step; -L e2e here is the complement.
+        # ran in the previous step; -L e2e here is the strict complement.
         ctest --test-dir build -C Release --output-on-failure -L e2e
       
     - name: Upload build artifacts
