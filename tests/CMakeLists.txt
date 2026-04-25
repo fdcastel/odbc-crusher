@@ -1,15 +1,22 @@
-# Unit tests for project plumbing — RAII handles, error parsing, crash guard,
-# discovery. The 23 thin tests::*Tests(conn).run() wrappers that used to live
-# here have been retired in favour of the §5.1 E2E harness in tests/e2e/.
+# tests/  — split into two layers (IMPROVEMENT_PLAN.md §5.3):
+#   unit/  — real GTest unit tests of project plumbing (RAII handles, error
+#            parsing, crash guard, discovery).
+#   e2e/   — subprocess harness that spawns the odbc-crusher binary against
+#            the mock driver and asserts on the JSON report (§5.1).
+#
+# The 23 thin tests::*Tests(conn).run() wrappers that used to live alongside
+# these have been retired in favour of the e2e harness.
+
+# ── Unit tests ────────────────────────────────────────────────────────────
 add_executable(odbc_crusher_tests
-    test_main.cpp
-    test_odbc_environment.cpp
-    test_odbc_connection.cpp
-    test_odbc_error.cpp
-    test_driver_info.cpp
-    test_type_info.cpp
-    test_function_info.cpp
-    test_crash_guard.cpp
+    unit/test_main.cpp
+    unit/test_odbc_environment.cpp
+    unit/test_odbc_connection.cpp
+    unit/test_odbc_error.cpp
+    unit/test_driver_info.cpp
+    unit/test_type_info.cpp
+    unit/test_function_info.cpp
+    unit/test_crash_guard.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE

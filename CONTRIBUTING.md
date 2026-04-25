@@ -41,9 +41,13 @@ include/          Public headers (version.hpp)
 
 1. Create `src/tests/my_tests.hpp` and `src/tests/my_tests.cpp`, following the existing pattern (inherit from `TestBase`).
 2. Add the `.cpp` to `src/tests/CMakeLists.txt`.
-3. Add a `#include` and `run_test_category(...)` call in `src/main.cpp`.
-4. Create `tests/test_my_tests.cpp` (GTest wrapper) and add it to `tests/CMakeLists.txt`.
+3. Register the category in `src/main.cpp` (add to the `categories` vector).
+4. Optionally add an E2E scenario in `tests/e2e/test_e2e_scenarios.cpp` if a specific mock-driver configuration should produce a deterministic outcome for one of your tests.
 5. Build and run `ctest` to verify.
+
+Test layout:
+- `tests/unit/` — GTest unit tests of project plumbing (RAII handles, error parsing, crash guard, discovery). One test per file.
+- `tests/e2e/` — Subprocess harness that spawns the `odbc-crusher` binary against the mock driver and asserts on per-test JSON outcomes. New end-to-end scenarios go in `test_e2e_scenarios.cpp`.
 
 Each test method should return a `TestResult` with:
 - A descriptive `test_name`
