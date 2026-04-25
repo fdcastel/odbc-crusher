@@ -22,6 +22,7 @@ std::vector<TestResult> MetadataTests::run() {
     results.push_back(test_special_columns());
     results.push_back(test_table_privileges());
     results.push_back(test_desc_unsigned_on_signed_integer());
+    results.push_back(test_count_star_result_metadata());
 
     return results;
 }
@@ -804,6 +805,122 @@ TestResult MetadataTests::test_desc_unsigned_on_signed_integer() {
                                 "on `(type, signed)`. See DuckDB ODBC HUGEINT bug.";
         }
 
+        result.duration = elapsed();
+
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+        result.duration = elapsed();
+    }
+
+    return result;
+}
+
+// ── §1.9: COUNT(*) result-metadata probe ──────────────────────────────────
+//
+// IMPROVEMENT_PLAN.md §1.9. `SELECT COUNT(*) FROM t` returns different
+// types across engines:
+//   - DuckDB ODBC: SQL_BIGINT
+//   - Firebird:    SQL_NUMERIC, precision 18
+//   - Oracle:      SQL_NUMERIC, precision 22+
+//   - SQL Server:  SQL_INTEGER (or SQL_BIGINT for COUNT_BIG)
+// A consumer that hard-codes one type breaks on every other driver. This
+// probe is informational — it always PASSes and dumps the `(type,
+// precision, scale, unsigned)` tuple into `actual` so a driver developer
+// can read the report and update their consumer code.
+TestResult MetadataTests::test_count_star_result_metadata() {
+    TestResult result = make_result(
+        "test_count_star_result_metadata",
+        "SQLDescribeCol/SQLColAttribute",
+        TestStatus::PASS,
+        "Record COUNT(*) result column's (type, precision, scale, unsigned) tuple",
+        "",
+        Severity::INFO,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLDescribeCol, SQLColAttribute, Appendix D"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    // Find any table to count. SQLTables yields a portable list; avoids
+    // hard-coding mock-driver names (CUSTOMERS) so the probe runs on real
+    // drivers too.
+    std::string target_table;
+    try {
+        core::OdbcStatement enum_stmt(conn_);
+        SQLRETURN rc = SQLTables(enum_stmt.get_handle(),
+                                 nullptr, 0,
+                                 nullptr, 0,
+                                 nullptr, 0,
+                                 (SQLCHAR*)"TABLE", SQL_NTS);
+        if (SQL_SUCCEEDED(rc) && enum_stmt.fetch()) {
+            char buf[256] = {0};
+            SQLLEN ind = 0;
+            // Column 3 is TABLE_NAME per ODBC spec.
+            SQLGetData(enum_stmt.get_handle(), 3, SQL_C_CHAR, buf,
+                       sizeof(buf), &ind);
+            if (ind != SQL_NULL_DATA && buf[0] != '\0') {
+                target_table = buf;
+            }
+        }
+    } catch (const core::OdbcError&) {
+        // Fall through — we'll handle empty target_table below.
+    }
+
+    if (target_table.empty()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "SQLTables returned no tables; cannot probe COUNT(*) metadata";
+        result.duration = elapsed();
+        return result;
+    }
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        std::string query = "SELECT COUNT(*) FROM " + target_table;
+        try {
+            stmt.execute(query);
+        } catch (const core::OdbcError& e) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Failed to execute `" + query + "`: " + e.what();
+            result.duration = elapsed();
+            return result;
+        }
+
+        SQLSMALLINT sql_type = 0;
+        SQLULEN col_size = 0;
+        SQLSMALLINT scale = 0;
+        SQLSMALLINT nullable = 0;
+        SQLCHAR col_name[256] = {0};
+        SQLSMALLINT col_name_len = 0;
+
+        SQLRETURN rc = SQLDescribeCol(stmt.get_handle(), 1,
+                                      col_name, sizeof(col_name), &col_name_len,
+                                      &sql_type, &col_size, &scale, &nullable);
+
+        SQLLEN unsigned_attr = -1;
+        SQLColAttribute(stmt.get_handle(), 1, SQL_DESC_UNSIGNED,
+                        nullptr, 0, nullptr, &unsigned_attr);
+
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "SQLDescribeCol returned " + std::to_string(rc);
+            result.duration = elapsed();
+            return result;
+        }
+
+        std::ostringstream actual;
+        actual << "Table=" << target_table
+               << " sql_type=" << sql_type
+               << " precision=" << col_size
+               << " scale=" << scale
+               << " unsigned=" << (unsigned_attr == SQL_TRUE ? "TRUE" :
+                                   unsigned_attr == SQL_FALSE ? "FALSE" : "UNKNOWN");
+        result.actual = actual.str();
         result.duration = elapsed();
 
     } catch (const core::OdbcError& e) {

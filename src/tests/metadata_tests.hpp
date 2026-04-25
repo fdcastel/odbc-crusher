@@ -22,6 +22,7 @@ private:
     TestResult test_special_columns();
     TestResult test_table_privileges();
     TestResult test_desc_unsigned_on_signed_integer();
+    TestResult test_count_star_result_metadata();
 };
 
 } // namespace odbc_crusher::tests
