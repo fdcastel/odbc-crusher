@@ -1150,50 +1150,54 @@ TestResult ArrayParamTests::test_paramset_size_unsupported_returns_error() {
         Severity::INFO, ConformanceLevel::LEVEL_1,
         "ODBC 3.x SQL_ATTR_PARAMSET_SIZE — HYC00 fallback contract",
         [&](TestResult& r) {
+            // Use a fresh statement with no prepare — SQL_ATTR_PARAMSET_SIZE
+            // is settable on any allocated stmt handle, and skipping prepare
+            // avoids unixODBC W-path fallout polluting the diagnostic queue.
             core::OdbcStatement stmt(conn_);
-            // Prepare a trivial statement so the SET is well-defined. Try W
-            // first, fall back to ANSI — unixODBC's W path is fragile on
-            // some driver/manager combinations.
-            const char* sql_a = "INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)";
-            SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-                SqlWcharBuf(sql_a).ptr(), SQL_NTS);
-            if (!SQL_SUCCEEDED(ret)) {
-                ret = SQLPrepare(stmt.get_handle(),
-                    reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql_a)),
-                    SQL_NTS);
-            }
-            if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not prepare INSERT (W and ANSI both failed)";
-                return;
-            }
 
             SQLRETURN set_rc = SQLSetStmtAttr(stmt.get_handle(),
                 SQL_ATTR_PARAMSET_SIZE,
                 reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(10)), 0);
 
-            std::ostringstream actual;
             if (SQL_SUCCEEDED(set_rc)) {
                 r.actual = "SQLSetStmtAttr accepted PARAMSET_SIZE=10 — driver "
                            "supports array parameter execution";
-                // Reset
                 SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
                     reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
                 return;
             }
 
-            // Failure path — read the SQLSTATE.
-            char state[6] = {0};
-            SQLINTEGER native = 0;
-            SQLCHAR msg[256] = {0};
-            SQLSMALLINT msg_len = 0;
-            SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                          reinterpret_cast<SQLCHAR*>(state),
-                          &native, msg, sizeof(msg), &msg_len);
-            std::string sqlstate(state);
+            // Failure path — walk the diagnostic queue looking for HYC00.
+            // Some driver managers add their own DM-layer diag record (e.g.
+            // unixODBC IM006 "could not load driver helper") in front of the
+            // driver-emitted one; loop instead of reading record 1 only.
+            std::string sqlstate;
+            std::string msg_text;
+            for (SQLSMALLINT i = 1; i <= 16; ++i) {
+                char state[6] = {0};
+                SQLINTEGER native = 0;
+                SQLCHAR msg[256] = {0};
+                SQLSMALLINT msg_len = 0;
+                SQLRETURN dr = SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(),
+                                             i,
+                                             reinterpret_cast<SQLCHAR*>(state),
+                                             &native, msg, sizeof(msg), &msg_len);
+                if (dr == SQL_NO_DATA || !SQL_SUCCEEDED(dr)) break;
+                if (sqlstate.empty()) {
+                    sqlstate = state;
+                    msg_text = reinterpret_cast<char*>(msg);
+                }
+                if (std::string(state) == "HYC00") {
+                    sqlstate = "HYC00";
+                    msg_text = reinterpret_cast<char*>(msg);
+                    break;
+                }
+            }
+
+            std::ostringstream actual;
             actual << "SQLSetStmtAttr returned " << set_rc
                    << " state=" << sqlstate
-                   << " msg='" << reinterpret_cast<char*>(msg) << "'";
+                   << " msg='" << msg_text << "'";
             r.actual = actual.str();
 
             if (sqlstate == "HYC00") {
