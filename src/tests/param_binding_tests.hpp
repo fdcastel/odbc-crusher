@@ -40,6 +40,7 @@ private:
     TestResult test_bindparam_bigint_to_varchar_roundtrip();
     TestResult test_bindparam_float_to_varchar_roundtrip();
     TestResult test_bindparam_double_to_varchar_roundtrip();
+    TestResult test_bindparam_double_to_varchar_fractional_roundtrip();
     TestResult test_bindparam_int_to_char_roundtrip();
     TestResult test_bindparam_int_to_wvarchar_roundtrip();
 
@@ -66,7 +67,9 @@ private:
         const std::string& sql_type_name,
         const std::string& table_name,
         const std::string& column_ddl,
-        SQLULEN col_size);
+        SQLULEN col_size,
+        double value_offset = 0.0);  // value_offset!=0 forces fractional values
+                                     // so trunc-style driver bugs are detectable.
 
     TestResult test_sqldescribeparam_varchar();
     TestResult test_sqldescribeparam_integer();

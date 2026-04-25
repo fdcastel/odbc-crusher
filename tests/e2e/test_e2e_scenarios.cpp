@@ -156,3 +156,29 @@ TEST_F(CrusherE2EFixture, SilentCorruptionMangleVarcharTripsVarcharRoundTrip) {
         << "Under MangleVarchar, the int→varchar round-trip MUST fail "
            "(stored values come back with sentinel appended).";
 }
+
+// ── SilentCorruption=TruncateNumeric: fractional double round-trip FAILs ──
+// TruncateNumeric std::trunc()s every stored double. The dedicated
+// fractional cell test_bindparam_double_to_varchar_fractional_roundtrip
+// inserts 1.5, 2.5, … which become 1.0, 2.0, … under truncation —
+// verify_rows_persisted's epsilon-bounded comparison trips. The
+// non-fractional cells (which insert whole numbers) are NOT a valid
+// canary because trunc(1.0) == 1.0; this test is what makes the
+// TruncateNumeric chain end-to-end-verifiable.
+
+TEST_F(CrusherE2EFixture, SilentCorruptionTruncateNumericTripsFractionalRoundTrip) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "SilentCorruption=TruncateNumeric;ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("summary"));
+
+    auto t = find_test(run.report, "Parameter Binding Tests",
+                       "test_bindparam_double_to_varchar_fractional_roundtrip");
+    ASSERT_TRUE(t.has_value())
+        << "Fractional roundtrip cell missing — was it removed?";
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+        << "Under TruncateNumeric, the fractional double round-trip MUST fail "
+           "(stored 1.5 → 1.0).";
+}

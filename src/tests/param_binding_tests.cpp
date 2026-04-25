@@ -28,6 +28,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_bindparam_bigint_to_varchar_roundtrip());
     results.push_back(test_bindparam_float_to_varchar_roundtrip());
     results.push_back(test_bindparam_double_to_varchar_roundtrip());
+    results.push_back(test_bindparam_double_to_varchar_fractional_roundtrip());
     results.push_back(test_bindparam_int_to_char_roundtrip());
     results.push_back(test_bindparam_int_to_wvarchar_roundtrip());
     results.push_back(test_sqldescribeparam_varchar());
@@ -532,7 +533,8 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
     const std::string& sql_type_name,
     const std::string& table_name,
     const std::string& column_ddl,
-    SQLULEN col_size)
+    SQLULEN col_size,
+    double value_offset)
 {
     TestResult result = make_result(
         test_name,
@@ -613,7 +615,7 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
 
         for (int i = 1; i <= kRowCount; ++i) {
             id_param = i;
-            val_param = static_cast<CType>(i);
+            val_param = static_cast<CType>(static_cast<double>(i) + value_offset);
             SQLRETURN exec_rc = SQLExecute(stmt.get_handle());
             if (!SQL_SUCCEEDED(exec_rc)) {
                 insert_errors++;
@@ -659,11 +661,12 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
             const std::string& s = v.actual_values[i];
             char* end = nullptr;
             double parsed = std::strtod(s.c_str(), &end);
-            double expected = static_cast<double>(i + 1);
+            double expected = static_cast<double>(i + 1) + value_offset;
             bool parsed_ok = (end != s.c_str());
             if (!parsed_ok || std::fabs(parsed - expected) > kEpsilon) {
                 if (!mismatches.empty()) mismatches += ", ";
-                mismatches += "row " + std::to_string(i + 1) + ": got '" + s + "'";
+                mismatches += "row " + std::to_string(i + 1) + ": got '" + s +
+                              "', expected ~" + std::to_string(expected);
             }
         }
         if (mismatches.empty()) {
@@ -730,6 +733,21 @@ TestResult ParameterBindingTests::test_bindparam_double_to_varchar_roundtrip() {
         SQL_C_DOUBLE, "SQL_C_DOUBLE",
         SQL_VARCHAR, "SQL_VARCHAR",
         "ODBC_TEST_ROUNDTRIP", "VARCHAR(40)", 40);
+}
+
+// Fractional variant — inserts 1.5, 2.5, …, 10.5 instead of whole numbers
+// so trunc-style driver bugs (DECIMAL→INTEGER coercion, lossy DOUBLE→string
+// formatting) actually trip verify_rows_persisted. The whole-number variant
+// above can't catch them: 1.0 trunc'd to 1.0 is still 1.0. The §5.2
+// SilentCorruption=TruncateNumeric mode is exercised end-to-end by an e2e
+// scenario keyed on this test's name.
+TestResult ParameterBindingTests::test_bindparam_double_to_varchar_fractional_roundtrip() {
+    return run_float_to_string_roundtrip<SQLDOUBLE>(
+        "test_bindparam_double_to_varchar_fractional_roundtrip",
+        SQL_C_DOUBLE, "SQL_C_DOUBLE",
+        SQL_VARCHAR, "SQL_VARCHAR",
+        "ODBC_TEST_ROUNDTRIP_FRAC", "VARCHAR(40)", 40,
+        /*value_offset=*/0.5);
 }
 
 TestResult ParameterBindingTests::test_bindparam_int_to_char_roundtrip() {
