@@ -97,6 +97,12 @@ struct DriverConfig {
     // `{fn ...}`, `{d ...}`, `{oj ...}`, etc. to native SQL.
     bool native_sql_pass_through = false;
 
+    // PORT plan port 3 canary — when true, MOCK_INOUT's callback skips the
+    // OUT and INOUT writebacks (output_values left empty). Mimics drivers
+    // that accept the {?=CALL …} escape syntactically but only honour
+    // SQL_PARAM_INPUT direction.
+    bool procedures_broken_inout = false;
+
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
     

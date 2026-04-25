@@ -31,7 +31,10 @@ std::vector<TestResult> EscapeSequenceTests::run() {
 
         // Procedure call escape
         test_call_escape_translation(),
-        test_call_escape_format_variants()
+        test_call_escape_format_variants(),
+        test_call_escape_in_parameter(),
+        test_call_escape_out_parameter(),
+        test_call_escape_inout_parameter()
     };
 }
 
@@ -843,6 +846,238 @@ TestResult EscapeSequenceTests::test_call_escape_format_variants() {
                 r.status = TestStatus::FAIL;
                 r.actual += ". Failures: " + oss.str();
                 r.severity = Severity::WARNING;
+            }
+        });
+}
+
+// ── PORT plan §4.3 — {CALL …} IN/OUT/INOUT parameter direction probes ────
+//
+// All three probes target a known stored procedure, MOCK_INOUT, which the
+// mock-driver registers in every catalog preset (params = IN INTEGER,
+// OUT INTEGER, INOUT VARCHAR). Real drivers rarely have a procedure of
+// that exact name; the probes SKIP_INCONCLUSIVE when SQLProcedures
+// reports MOCK_INOUT is absent — the suggestion explains how to register
+// an equivalent. The mock-driver path is what the e2e canary asserts.
+
+namespace {
+
+// Discover whether MOCK_INOUT (or any user-registered equivalent the user
+// may rename it to via env var) is visible via SQLProcedures. Returns the
+// procedure name on success, empty string when the catalog has no
+// matching entry.
+std::string find_mock_inout(core::OdbcConnection& conn) {
+    core::OdbcStatement stmt(conn);
+    const char* name_filter = "MOCK_INOUT";
+    SQLRETURN rc = SQLProcedures(stmt.get_handle(),
+                                 nullptr, 0,
+                                 nullptr, 0,
+                                 reinterpret_cast<SQLCHAR*>(
+                                     const_cast<char*>(name_filter)),
+                                 SQL_NTS);
+    if (!SQL_SUCCEEDED(rc)) return {};
+    while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS) {
+        char buf[128] = {0};
+        SQLLEN ind = 0;
+        if (SQL_SUCCEEDED(SQLGetData(stmt.get_handle(), 3, SQL_C_CHAR,
+                                      buf, sizeof(buf), &ind)) &&
+            ind != SQL_NULL_DATA) {
+            return std::string(buf);
+        }
+    }
+    return {};
+}
+
+struct CallProbeOutcome {
+    bool prepared    = false;
+    bool bind_ok     = false;
+    bool execute_ok  = false;
+    SQLRETURN exec_rc = SQL_ERROR;
+    std::string error;            // diagnostic text on first failure
+    SQLINTEGER out_int   = 0;
+    SQLLEN     out_int_ind = 0;
+    std::string inout_text;       // post-execute buffer contents
+    SQLLEN     inout_ind = 0;
+};
+
+// Executes `{CALL MOCK_INOUT(?, ?, ?)}` with the procedure's three params
+// bound. Returns the post-execute state of OUT and INOUT slots. Probes
+// inspect different parts of the outcome.
+CallProbeOutcome run_mock_inout_call(core::OdbcConnection& conn,
+                                     SQLINTEGER in_value,
+                                     const char* inout_initial)
+{
+    CallProbeOutcome out;
+    core::OdbcStatement stmt(conn);
+
+    const char* sql = "{CALL MOCK_INOUT(?, ?, ?)}";
+    SQLRETURN rc = SQLPrepare(stmt.get_handle(),
+                              reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql)),
+                              SQL_NTS);
+    if (!SQL_SUCCEEDED(rc)) {
+        out.error = "SQLPrepare returned " + std::to_string(rc);
+        return out;
+    }
+    out.prepared = true;
+
+    SQLINTEGER in_n      = in_value;
+    SQLLEN     in_n_ind  = 0;
+    out.out_int     = static_cast<SQLINTEGER>(0xDEADBEEFu);  // sentinel
+    out.out_int_ind = sizeof(SQLINTEGER);
+    char inout_buf[64] = {0};
+    std::strncpy(inout_buf, inout_initial,
+                 std::min<size_t>(sizeof(inout_buf) - 1,
+                                  std::strlen(inout_initial)));
+    out.inout_ind = static_cast<SQLLEN>(std::strlen(inout_buf));
+
+    rc = SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
+                          SQL_C_SLONG, SQL_INTEGER, 10, 0,
+                          &in_n, sizeof(in_n), &in_n_ind);
+    if (!SQL_SUCCEEDED(rc)) {
+        out.error = "SQLBindParameter(1, IN) returned " + std::to_string(rc);
+        return out;
+    }
+    rc = SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_OUTPUT,
+                          SQL_C_SLONG, SQL_INTEGER, 10, 0,
+                          &out.out_int, sizeof(out.out_int), &out.out_int_ind);
+    if (!SQL_SUCCEEDED(rc)) {
+        out.error = "SQLBindParameter(2, OUT) returned " + std::to_string(rc);
+        return out;
+    }
+    rc = SQLBindParameter(stmt.get_handle(), 3, SQL_PARAM_INPUT_OUTPUT,
+                          SQL_C_CHAR, SQL_VARCHAR, sizeof(inout_buf) - 1, 0,
+                          inout_buf, sizeof(inout_buf), &out.inout_ind);
+    if (!SQL_SUCCEEDED(rc)) {
+        out.error = "SQLBindParameter(3, INOUT) returned " + std::to_string(rc);
+        return out;
+    }
+    out.bind_ok = true;
+
+    out.exec_rc = SQLExecute(stmt.get_handle());
+    if (!SQL_SUCCEEDED(out.exec_rc)) {
+        out.error = "SQLExecute returned " + std::to_string(out.exec_rc);
+        return out;
+    }
+    out.execute_ok = true;
+    out.inout_text = std::string(inout_buf);
+    return out;
+}
+
+} // namespace
+
+TestResult EscapeSequenceTests::test_call_escape_in_parameter() {
+    return run_test(
+        "test_call_escape_in_parameter", "SQLPrepare/SQLBindParameter/SQLExecute",
+        "{CALL …(?)} prepares, binds an SQL_PARAM_INPUT parameter, and "
+        "executes successfully against a registered procedure",
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 Procedure Call Escape — SQL_PARAM_INPUT direction",
+        [&](TestResult& r) {
+            std::string proc = find_mock_inout(conn_);
+            if (proc.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Test procedure MOCK_INOUT not visible via "
+                           "SQLProcedures";
+                r.suggestion = "Register a 3-parameter procedure named "
+                               "MOCK_INOUT(IN n INTEGER, OUT m INTEGER, "
+                               "INOUT s VARCHAR(64)) so this probe can run "
+                               "against your DBMS.";
+                return;
+            }
+            auto outcome = run_mock_inout_call(conn_, 42, "hello");
+            if (!outcome.execute_ok) {
+                r.status = TestStatus::FAIL;
+                r.actual = outcome.error;
+                r.severity = Severity::ERR;
+                return;
+            }
+            r.actual = "Prepared + bound (IN, OUT, INOUT) + executed against "
+                     + proc + " (SQL_PARAM_INPUT path verified)";
+        });
+}
+
+TestResult EscapeSequenceTests::test_call_escape_out_parameter() {
+    return run_test(
+        "test_call_escape_out_parameter", "SQLBindParameter(SQL_PARAM_OUTPUT)",
+        "{CALL …(?, ?, ?)} writes back to a SQL_PARAM_OUTPUT bound buffer",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter — SQL_PARAM_OUTPUT direction",
+        [&](TestResult& r) {
+            std::string proc = find_mock_inout(conn_);
+            if (proc.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Test procedure MOCK_INOUT not visible via "
+                           "SQLProcedures";
+                r.suggestion = "Register a 3-parameter procedure named "
+                               "MOCK_INOUT(IN n INTEGER, OUT m INTEGER, "
+                               "INOUT s VARCHAR(64)) where m := n*2.";
+                return;
+            }
+            const SQLINTEGER kIn = 42;
+            const SQLINTEGER kExpectedOut = 84;
+            auto outcome = run_mock_inout_call(conn_, kIn, "hello");
+            if (!outcome.execute_ok) {
+                r.status = TestStatus::FAIL;
+                r.actual = outcome.error;
+                return;
+            }
+            std::ostringstream oss;
+            oss << "OUT buffer post-execute: " << outcome.out_int
+                << " (expected " << kExpectedOut << " for n=" << kIn
+                << ", n*2 contract); indicator=" << outcome.out_int_ind;
+            r.actual = oss.str();
+            if (outcome.out_int == static_cast<SQLINTEGER>(0xDEADBEEF)) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Driver accepted SQL_PARAM_OUTPUT binding but "
+                               "did not write to the bound buffer (sentinel "
+                               "value survived).";
+                return;
+            }
+            if (outcome.out_int != kExpectedOut) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Driver wrote a value, but it doesn't match "
+                               "the procedure contract m := n*2.";
+            }
+        });
+}
+
+TestResult EscapeSequenceTests::test_call_escape_inout_parameter() {
+    return run_test(
+        "test_call_escape_inout_parameter", "SQLBindParameter(SQL_PARAM_INPUT_OUTPUT)",
+        "{CALL …(?, ?, ?)} round-trips a value through a "
+        "SQL_PARAM_INPUT_OUTPUT bound buffer",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter — SQL_PARAM_INPUT_OUTPUT direction",
+        [&](TestResult& r) {
+            std::string proc = find_mock_inout(conn_);
+            if (proc.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Test procedure MOCK_INOUT not visible via "
+                           "SQLProcedures";
+                r.suggestion = "Register a 3-parameter procedure named "
+                               "MOCK_INOUT(IN n INTEGER, OUT m INTEGER, "
+                               "INOUT s VARCHAR(64)) where s := UPPER(s).";
+                return;
+            }
+            auto outcome = run_mock_inout_call(conn_, 1, "hello");
+            if (!outcome.execute_ok) {
+                r.status = TestStatus::FAIL;
+                r.actual = outcome.error;
+                return;
+            }
+            r.actual = "INOUT buffer post-execute: '" + outcome.inout_text
+                     + "' (input was 'hello', expected 'HELLO' per "
+                       "UPPER contract); indicator=" + std::to_string(outcome.inout_ind);
+            if (outcome.inout_text == "hello") {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Driver accepted SQL_PARAM_INPUT_OUTPUT but did "
+                               "not write back — common bug shape: driver "
+                               "treats INOUT as IN-only.";
+                return;
+            }
+            if (outcome.inout_text != "HELLO") {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Driver wrote back, but the value doesn't match "
+                               "the procedure contract s := UPPER(s).";
             }
         });
 }

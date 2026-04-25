@@ -56,6 +56,14 @@ private:
     TestResult test_call_escape_translation();
     TestResult test_call_escape_format_variants();
 
+    // PORT plan §4.3 — {CALL …} / {?=CALL …} IN/OUT/INOUT parameter
+    // direction probes. Verify the bound buffer is mutated post-execute
+    // for OUT and INOUT directions. Many drivers accept the escape
+    // syntactically but only honour IN.
+    TestResult test_call_escape_in_parameter();
+    TestResult test_call_escape_out_parameter();
+    TestResult test_call_escape_inout_parameter();
+
     // Helpers
     std::optional<SQLUINTEGER> get_info_uint(SQLUSMALLINT info_type);
     std::optional<std::string> call_native_sql(const std::string& sql);

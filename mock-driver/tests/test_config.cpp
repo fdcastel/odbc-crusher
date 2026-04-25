@@ -134,6 +134,16 @@ TEST(ConfigTest, ParseNativeSqlPassThroughOnlyTrueLiteralEnables) {
     EXPECT_FALSE(config.native_sql_pass_through);
 }
 
+TEST(ConfigTest, ParseProceduresBrokenInout) {
+    DriverConfig config = parse_connection_string("Procedures=BrokenInout;");
+    EXPECT_TRUE(config.procedures_broken_inout);
+}
+
+TEST(ConfigTest, ParseProceduresDefaultsFalse) {
+    DriverConfig config = parse_connection_string("");
+    EXPECT_FALSE(config.procedures_broken_inout);
+}
+
 TEST(ConfigTest, ParseSilentCorruptionUnknownFallsBackToNone) {
     DriverConfig config = parse_connection_string("SilentCorruption=Bogus;");
     EXPECT_EQ(config.silent_corruption, DriverConfig::SilentCorruptionMode::None);

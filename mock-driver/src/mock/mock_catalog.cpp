@@ -1,4 +1,5 @@
 #include "mock_catalog.hpp"
+#include "behaviors.hpp"
 #include <algorithm>
 #include <cctype>
 
@@ -112,6 +113,16 @@ void MockCatalog::initialize(const std::string& preset) {
             [](MockCatalog&, const std::vector<CellValue>& args)
                 -> MockProcedureResult {
                 MockProcedureResult res;
+                res.affected_rows = -1;
+
+                // PORT plan port 3 canary — Procedures=BrokenInout: mimic
+                // drivers that accept SQL_PARAM_OUTPUT/INPUT_OUTPUT bindings
+                // syntactically but never write back. Empty output_values
+                // means the SQLExecute writeback path becomes a no-op.
+                if (BehaviorController::instance().config().procedures_broken_inout) {
+                    return res;
+                }
+
                 res.output_values.resize(3);
                 long long in_n = 0;
                 if (args.size() > 0 && std::holds_alternative<long long>(args[0])) {
@@ -128,7 +139,6 @@ void MockCatalog::initialize(const std::string& preset) {
                 // Slot 0 is IN — leave untouched (driver should not write back).
                 res.output_values[1] = static_cast<long long>(in_n * 2);
                 res.output_values[2] = upper;
-                res.affected_rows = -1;
                 return res;
             };
         procedures_.push_back(std::move(inout));

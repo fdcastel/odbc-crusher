@@ -204,6 +204,41 @@ TEST_F(CrusherE2EFixture, SilentCorruptionTruncateNumericTripsFractionalRoundTri
            "(every 0.01 → 0.0; total_mantissa goes from 100 to 0).";
 }
 
+// ── Procedures=BrokenInout: {?=CALL …} OUT/INOUT probes FAIL ─────────────
+// PORT plan port 3. Mock's MOCK_INOUT callback returns empty output_values,
+// so the SQLExecute writeback path is a no-op. The IN-only probe still
+// PASSes (its assertion is execute success); the OUT and INOUT probes
+// FAIL with the sentinel-survived / no-mutation diagnostics.
+
+TEST_F(CrusherE2EFixture, ProceduresBrokenInoutTripsOutAndInoutProbes) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "Procedures=BrokenInout;ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("summary"));
+
+    // IN probe stays PASS — execute-success only, no writeback expectation.
+    auto in_t = find_test(run.report, "Escape Sequence Tests",
+                          "test_call_escape_in_parameter");
+    ASSERT_TRUE(in_t.has_value());
+    EXPECT_EQ(in_t->value("status", std::string{}), "PASS")
+        << "IN probe must stay PASS — BrokenInout doesn't break the IN path.";
+
+    // OUT and INOUT probes MUST FAIL.
+    auto out_t = find_test(run.report, "Escape Sequence Tests",
+                           "test_call_escape_out_parameter");
+    ASSERT_TRUE(out_t.has_value());
+    EXPECT_EQ(out_t->value("status", std::string{}), "FAIL")
+        << "OUT probe MUST fail under BrokenInout (sentinel survives).";
+
+    auto inout_t = find_test(run.report, "Escape Sequence Tests",
+                             "test_call_escape_inout_parameter");
+    ASSERT_TRUE(inout_t.has_value());
+    EXPECT_EQ(inout_t->value("status", std::string{}), "FAIL")
+        << "INOUT probe MUST fail under BrokenInout (no UPPER mutation).";
+}
+
 // ── NativeSqlPassThrough=true: SQLNativeSql translation probes FAIL ───────
 // PORT plan port 4. Mock returns SQLNativeSql input verbatim — escape
 // sequences survive untouched. All four SQLNativeSql cells in

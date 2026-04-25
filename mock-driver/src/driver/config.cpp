@@ -241,6 +241,11 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         to_lower(get_string_value(pairs, "nativesqlpassthrough", "false"));
     config.native_sql_pass_through = (pass_through_str == "true");
 
+    // Procedures=BrokenInout — drives the PORT plan port 3 e2e canary.
+    std::string procs_str =
+        to_lower(get_string_value(pairs, "procedures", ""));
+    config.procedures_broken_inout = (procs_str == "brokeninout");
+
     return config;
 }
 
