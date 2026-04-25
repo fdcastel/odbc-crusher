@@ -19,6 +19,12 @@ private:
     TestResult test_getdata_sql_c_wchar();
     TestResult test_columns_unicode_patterns();
     TestResult test_string_truncation_wchar();
+
+    // PORT plan §4.7 — bind a WCHAR string with non-BMP / non-ASCII
+    // codepoints, INSERT, fetch back as SQL_C_WCHAR, codepoint-compare.
+    // Detects drivers that re-encode through the system codepage.
+    TestResult test_wchar_roundtrip_non_ascii();
+    TestResult test_wchar_surrogate_pair_preserved();
 };
 
 } // namespace odbc_crusher::tests

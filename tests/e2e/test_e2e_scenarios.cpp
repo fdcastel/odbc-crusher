@@ -204,6 +204,35 @@ TEST_F(CrusherE2EFixture, SilentCorruptionTruncateNumericTripsFractionalRoundTri
            "(every 0.01 → 0.0; total_mantissa goes from 100 to 0).";
 }
 
+// ── SilentCorruption=MangleUnicode: WCHAR round-trip probes FAIL ───────────
+// PORT plan port 7. Every non-ASCII byte in a fetched char/wchar cell becomes
+// '?'; the codepoint-comparison round-trip catches it. Both the BMP probe
+// and the supplementary (surrogate-pair) probe must trip.
+
+TEST_F(CrusherE2EFixture, SilentCorruptionMangleUnicodeTripsWcharRoundTrip) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "SilentCorruption=MangleUnicode;ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("summary"));
+
+    auto t = find_test(run.report, "Unicode Tests",
+                       "test_wchar_roundtrip_non_ascii");
+    ASSERT_TRUE(t.has_value())
+        << "WCHAR round-trip probe missing — was it removed?";
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+        << "Under MangleUnicode the BMP round-trip probe MUST fail "
+           "(non-ASCII codepoints replaced with '?').";
+
+    auto sp = find_test(run.report, "Unicode Tests",
+                        "test_wchar_surrogate_pair_preserved");
+    ASSERT_TRUE(sp.has_value())
+        << "Surrogate-pair probe missing — was it removed?";
+    EXPECT_EQ(sp->value("status", std::string{}), "FAIL")
+        << "Under MangleUnicode the supplementary-codepoint probe MUST fail.";
+}
+
 // ── SilentCorruption=NullAsEmpty: the NULL-vs-empty contrast probe FAILs ──
 // PORT plan port 2.E. Under NullAsEmpty the mock returns NULL char cells as
 // empty string with indicator=0 — Oracle-style empty-vs-null conflation.

@@ -172,6 +172,29 @@ TEST_F(SilentCorruptionTest, NullAsEmptyCollapsesNullAndEmptyString) {
     SQLCloseCursor(hstmt);
 }
 
+// MangleUnicode — every non-ASCII byte in a fetched char/wchar cell is
+// replaced with '?'. The §1.4 round-trip helpers compare exact bytes, so
+// PORT plan port 7 (Unicode round-trip) catches it. Verified on the SELECT
+// path with both SQL_C_CHAR (UTF-8 bytes preserved) and SQL_C_WCHAR
+// (UTF-8 → UTF-16 conversion done after mangling).
+TEST_F(SilentCorruptionTest, MangleUnicodeReplacesNonAsciiBytesOnFetch) {
+    Connect("SilentCorruption=MangleUnicode;");
+    Exec("CREATE TABLE T_UNICODE (ID INTEGER, V VARCHAR(64))");
+    // 'café' in UTF-8: 'c','a','f',0xC3,0xA9.
+    SQLPrepare(hstmt, (SQLCHAR*)"INSERT INTO T_UNICODE (ID, V) VALUES (1, ?)", SQL_NTS);
+    char param_value[] = {'c','a','f',(char)0xC3,(char)0xA9,0};
+    SQLLEN param_len = 5;
+    ASSERT_EQ(SQLBindParameter(hstmt, 1, SQL_PARAM_INPUT,
+                               SQL_C_CHAR, SQL_VARCHAR, 64, 0,
+                               param_value, sizeof(param_value), &param_len),
+              SQL_SUCCESS);
+    ASSERT_EQ(SQLExecute(hstmt), SQL_SUCCESS);
+
+    // SQL_C_CHAR fetch — expect 'caf??' (the two UTF-8 bytes both > 0x7F).
+    EXPECT_EQ(FetchFirstString("SELECT V FROM T_UNICODE"), "caf??")
+        << "MangleUnicode must replace each non-ASCII byte with '?'.";
+}
+
 // NullAsEmpty must NOT touch non-character fetches — integer/numeric NULLs
 // still report SQL_NULL_DATA (the e2e canary leans on this isolation).
 TEST_F(SilentCorruptionTest, NullAsEmptyLeavesIntegerNullsAlone) {

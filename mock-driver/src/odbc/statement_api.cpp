@@ -5,6 +5,7 @@
 #include "mock/mock_data.hpp"
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
+#include <cstdint>
 #include <cstring>
 #include <cmath>
 
@@ -96,6 +97,30 @@ static CellValue read_param_value(
             double result = static_cast<double>(int_val) / std::pow(10.0, ns->scale);
             if (ns->sign == 0) result = -result;
             return result;
+        }
+        case SQL_C_WCHAR: {
+            // UTF-16 input — convert to UTF-8 for storage. Indicator length,
+            // when not SQL_NTS, is in BYTES per ODBC spec. SQL_NTS means
+            // walk until 0x0000. Drives the PORT plan port 7 round-trip
+            // probe; correct conversion preserves non-ASCII codepoints.
+            const SQLWCHAR* wsrc = reinterpret_cast<const SQLWCHAR*>(data_ptr);
+            SQLLEN bytes = pb.buffer_length;
+            if (ind_ptr && *ind_ptr != SQL_NTS) {
+                bytes = *ind_ptr;
+            }
+            constexpr size_t kSafetyCapChars = 1 << 19;  // 512 K SQLWCHARs
+            SQLINTEGER char_count;
+            if (bytes == SQL_NTS || bytes < 0) {
+                size_t max_scan_chars = pb.buffer_length > 0
+                    ? static_cast<size_t>(pb.buffer_length / sizeof(SQLWCHAR))
+                    : kSafetyCapChars;
+                size_t actual = 0;
+                while (actual < max_scan_chars && wsrc[actual] != 0) ++actual;
+                char_count = static_cast<SQLINTEGER>(actual);
+            } else {
+                char_count = static_cast<SQLINTEGER>(bytes / sizeof(SQLWCHAR));
+            }
+            return sqlw_to_string(wsrc, char_count);
         }
         case SQL_C_CHAR:
         default: {
@@ -838,8 +863,29 @@ SQLRETURN SQL_API SQLGetData(
             }
         }
     } else if (std::holds_alternative<std::string>(cell)) {
-        const std::string& value = std::get<std::string>(cell);
-        
+        const std::string& cell_value = std::get<std::string>(cell);
+        // SilentCorruption=MangleUnicode — replace every non-ASCII byte (which
+        // covers the leading bytes of any multibyte UTF-8 codepoint) with '?'.
+        // Drives the PORT plan port 7 e2e canary; correct drivers preserve
+        // every codepoint regardless of the system codepage. Only touches
+        // char/wchar fetches — leaves date/time parsing alone.
+        const auto& cfg = BehaviorController::instance().config();
+        const bool mangle_unicode =
+            cfg.silent_corruption ==
+                DriverConfig::SilentCorruptionMode::MangleUnicode &&
+            (effective_type == SQL_C_WCHAR ||
+             effective_type == SQL_C_CHAR  ||
+             effective_type == SQL_C_DEFAULT ||
+             effective_type == SQL_ARD_TYPE);
+        std::string mangled_buf;
+        if (mangle_unicode) {
+            mangled_buf = cell_value;
+            for (auto& b : mangled_buf) {
+                if (static_cast<unsigned char>(b) > 0x7F) b = '?';
+            }
+        }
+        const std::string& value = mangle_unicode ? mangled_buf : cell_value;
+
         if (effective_type == SQL_C_WCHAR) {
             // Convert UTF-8 string to UTF-16 (SQLWCHAR)
             SQLSMALLINT wbytes = 0;

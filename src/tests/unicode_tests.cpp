@@ -2,6 +2,8 @@
 #include "core/odbc_statement.hpp"
 #include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
+#include <cstdint>
+#include <iomanip>
 #include <sstream>
 #include <cstring>
 #include <vector>
@@ -20,7 +22,9 @@ std::vector<TestResult> UnicodeTests::run() {
         test_describecol_wchar_names(),
         test_getdata_sql_c_wchar(),
         test_columns_unicode_patterns(),
-        test_string_truncation_wchar()
+        test_string_truncation_wchar(),
+        test_wchar_roundtrip_non_ascii(),
+        test_wchar_surrogate_pair_preserved()
     };
 }
 
@@ -424,6 +428,300 @@ TestResult UnicodeTests::test_string_truncation_wchar() {
                 r.actual = "SQLGetInfoW failed unexpectedly (ret=" + std::to_string(ret) + ")";
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
             }
+        });
+}
+
+// ── PORT plan §4.7 — WCHAR round-trip with non-ASCII / non-BMP codepoints ─
+
+namespace {
+
+// Build a UTF-16 buffer (vector<SQLWCHAR>) from a list of explicit
+// codepoints. Codepoints in the BMP (≤ 0xFFFF) become one SQLWCHAR;
+// supplementary codepoints (> 0xFFFF) become a surrogate pair. NUL-terminated.
+std::vector<SQLWCHAR> make_wchar_buf(std::initializer_list<uint32_t> codepoints) {
+    std::vector<SQLWCHAR> out;
+    out.reserve(codepoints.size() + 2);
+    for (uint32_t cp : codepoints) {
+        if (cp <= 0xFFFFu) {
+            out.push_back(static_cast<SQLWCHAR>(cp));
+        } else {
+            // UTF-16 surrogate pair encoding
+            const uint32_t v = cp - 0x10000u;
+            out.push_back(static_cast<SQLWCHAR>(0xD800u | (v >> 10)));
+            out.push_back(static_cast<SQLWCHAR>(0xDC00u | (v & 0x3FFu)));
+        }
+    }
+    out.push_back(0);
+    return out;
+}
+
+// INSERT a WCHAR parameter into ODBC_TEST_NVARCHAR via SQLBindParameter +
+// SQL_C_WCHAR / SQL_WVARCHAR. Returns false on bind/execute failure with
+// `err` filled.
+bool insert_wchar_value(core::OdbcConnection& conn,
+                        const std::string& table_name,
+                        std::vector<SQLWCHAR>& wbuf,
+                        std::string& err) {
+    core::OdbcStatement stmt(conn);
+    const std::string sql = "INSERT INTO " + table_name +
+                            " (ID, VAL) VALUES (1, ?)";
+    SQLRETURN rc = SQLPrepare(stmt.get_handle(),
+                              reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())),
+                              SQL_NTS);
+    if (!SQL_SUCCEEDED(rc)) {
+        err = "SQLPrepare returned " + std::to_string(rc);
+        return false;
+    }
+    const SQLLEN char_count = static_cast<SQLLEN>(wbuf.size() - 1); // excl NUL
+    SQLLEN ind_bytes = char_count * static_cast<SQLLEN>(sizeof(SQLWCHAR));
+    rc = SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
+                          SQL_C_WCHAR, SQL_WVARCHAR,
+                          /*column_size*/ static_cast<SQLULEN>(char_count),
+                          /*decimal_digits*/ 0,
+                          wbuf.data(),
+                          static_cast<SQLLEN>(wbuf.size() * sizeof(SQLWCHAR)),
+                          &ind_bytes);
+    if (!SQL_SUCCEEDED(rc)) {
+        err = "SQLBindParameter returned " + std::to_string(rc);
+        return false;
+    }
+    rc = SQLExecute(stmt.get_handle());
+    if (!SQL_SUCCEEDED(rc)) {
+        err = "SQLExecute returned " + std::to_string(rc);
+        return false;
+    }
+    return true;
+}
+
+std::string wchars_to_hex(const SQLWCHAR* p, size_t n) {
+    std::ostringstream os;
+    os << std::hex << std::setfill('0');
+    for (size_t i = 0; i < n; ++i) {
+        if (i > 0) os << ' ';
+        os << "U+" << std::setw(4) << static_cast<unsigned>(p[i]);
+    }
+    return os.str();
+}
+
+} // namespace
+
+TestResult UnicodeTests::test_wchar_roundtrip_non_ascii() {
+    return run_test(
+        "test_wchar_roundtrip_non_ascii", "SQLBindParameter+SQLGetData(SQL_C_WCHAR)",
+        "Non-ASCII WCHAR codepoints (Latin accents, Euro symbol, CJK) "
+        "round-trip byte-for-byte through INSERT/SELECT",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQL_C_WCHAR — UTF-16; system codepage must not be involved",
+        [&](TestResult& r) {
+            const std::string table = "ODBC_TEST_NVARCHAR";
+            // Try NVARCHAR first; fall back to VARCHAR for engines where
+            // the regular VARCHAR is already Unicode-capable.
+            RoundTripTableGuard tbl(conn_, table, "NVARCHAR(64)");
+            if (!tbl.ok()) {
+                RoundTripTableGuard tbl2(conn_, table, "VARCHAR(64)");
+                if (!tbl2.ok()) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = "Could not create round-trip table "
+                               "(neither NVARCHAR nor VARCHAR DDL accepted): "
+                             + tbl2.last_error();
+                    return;
+                }
+                // Move ownership: drop guard 1 (no-op since !ok) keep guard 2
+                // by reusing this scope. RoundTripTableGuard is non-movable,
+                // so we restructure: do the work inline instead.
+                std::vector<SQLWCHAR> input = make_wchar_buf({
+                    'c','a','f',0x00E9,           // café
+                    ' ',
+                    0x20AC,                       // €
+                    ' ',
+                    0x6F22,0x5B57,                // 漢字
+                });
+                std::string err;
+                if (!insert_wchar_value(conn_, table, input, err)) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = "INSERT WCHAR via VARCHAR fallback: " + err;
+                    return;
+                }
+                core::OdbcStatement sel(conn_);
+                sel.execute("SELECT VAL FROM " + table);
+                SQLRETURN rc = SQLFetch(sel.get_handle());
+                if (!SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLFetch failed";
+                    return;
+                }
+                SQLWCHAR out[128] = {0};
+                SQLLEN ind = 0;
+                rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
+                                out, sizeof(out), &ind);
+                if (!SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLGetData(SQL_C_WCHAR) returned " + std::to_string(rc);
+                    return;
+                }
+                const size_t expected_chars = input.size() - 1;
+                size_t out_chars = 0;
+                while (out_chars < 127 && out[out_chars] != 0) ++out_chars;
+                if (out_chars != expected_chars ||
+                    std::memcmp(out, input.data(),
+                                expected_chars * sizeof(SQLWCHAR)) != 0) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "expected [" + wchars_to_hex(input.data(), expected_chars)
+                             + "] got [" + wchars_to_hex(out, out_chars) + "]";
+                    r.suggestion = "Driver appears to re-encode through a "
+                                   "narrow codepage. SQL_C_WCHAR data must "
+                                   "preserve every codepoint regardless of "
+                                   "system locale.";
+                    return;
+                }
+                r.actual = "VARCHAR fallback: round-trip preserved "
+                         + std::to_string(expected_chars) + " WCHARs ["
+                         + wchars_to_hex(input.data(), expected_chars) + "]";
+                return;
+            }
+
+            std::vector<SQLWCHAR> input = make_wchar_buf({
+                'c','a','f',0x00E9,
+                ' ',
+                0x20AC,
+                ' ',
+                0x6F22,0x5B57,
+            });
+            std::string err;
+            if (!insert_wchar_value(conn_, table, input, err)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "INSERT WCHAR: " + err;
+                return;
+            }
+
+            core::OdbcStatement sel(conn_);
+            sel.execute("SELECT VAL FROM " + table);
+            SQLRETURN rc = SQLFetch(sel.get_handle());
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLFetch failed";
+                return;
+            }
+            SQLWCHAR out[128] = {0};
+            SQLLEN ind = 0;
+            rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
+                            out, sizeof(out), &ind);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLGetData(SQL_C_WCHAR) returned " + std::to_string(rc);
+                return;
+            }
+            const size_t expected_chars = input.size() - 1;
+            size_t out_chars = 0;
+            while (out_chars < 127 && out[out_chars] != 0) ++out_chars;
+            if (out_chars != expected_chars ||
+                std::memcmp(out, input.data(),
+                            expected_chars * sizeof(SQLWCHAR)) != 0) {
+                r.status = TestStatus::FAIL;
+                r.actual = "expected [" + wchars_to_hex(input.data(), expected_chars)
+                         + "] got [" + wchars_to_hex(out, out_chars) + "]";
+                r.suggestion = "Driver appears to re-encode through a narrow "
+                               "codepage. SQL_C_WCHAR data must preserve every "
+                               "codepoint regardless of system locale.";
+                return;
+            }
+            r.actual = "round-trip preserved " + std::to_string(expected_chars)
+                     + " WCHARs [" + wchars_to_hex(input.data(), expected_chars) + "]";
+        });
+}
+
+TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
+    return run_test(
+        "test_wchar_surrogate_pair_preserved", "SQLBindParameter+SQLGetData(SQL_C_WCHAR)",
+        "Supplementary-plane codepoint U+1F600 round-trips as a UTF-16 "
+        "surrogate pair (0xD83D, 0xDE00)",
+        Severity::WARNING, ConformanceLevel::CORE,
+        "ODBC 3.8 SQL_C_WCHAR — UTF-16 includes surrogate pairs for non-BMP",
+        [&](TestResult& r) {
+            const std::string table = "ODBC_TEST_NVARCHAR_SP";
+            RoundTripTableGuard tbl(conn_, table, "NVARCHAR(16)");
+            if (!tbl.ok()) {
+                RoundTripTableGuard tbl2(conn_, table, "VARCHAR(16)");
+                if (!tbl2.ok()) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = "Could not create table: " + tbl2.last_error();
+                    return;
+                }
+                std::vector<SQLWCHAR> input = make_wchar_buf({0x1F600u});
+                std::string err;
+                if (!insert_wchar_value(conn_, table, input, err)) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = err;
+                    return;
+                }
+                core::OdbcStatement sel(conn_);
+                sel.execute("SELECT VAL FROM " + table);
+                SQLRETURN rc = SQLFetch(sel.get_handle());
+                if (!SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLFetch failed";
+                    return;
+                }
+                SQLWCHAR out[8] = {0};
+                SQLLEN ind = 0;
+                rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
+                                out, sizeof(out), &ind);
+                if (!SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLGetData returned " + std::to_string(rc);
+                    return;
+                }
+                size_t out_chars = 0;
+                while (out_chars < 7 && out[out_chars] != 0) ++out_chars;
+                if (out_chars != 2 || out[0] != 0xD83Du || out[1] != 0xDE00u) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "expected surrogate pair [U+D83D U+DE00] got ["
+                             + wchars_to_hex(out, out_chars) + "]";
+                    r.suggestion = "Driver dropped or normalized the supplementary "
+                                   "codepoint. SQL_C_WCHAR is UTF-16 — surrogate "
+                                   "pairs are part of the contract.";
+                    return;
+                }
+                r.actual = "VARCHAR fallback: surrogate pair preserved";
+                return;
+            }
+
+            std::vector<SQLWCHAR> input = make_wchar_buf({0x1F600u});
+            std::string err;
+            if (!insert_wchar_value(conn_, table, input, err)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = err;
+                return;
+            }
+            core::OdbcStatement sel(conn_);
+            sel.execute("SELECT VAL FROM " + table);
+            SQLRETURN rc = SQLFetch(sel.get_handle());
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLFetch failed";
+                return;
+            }
+            SQLWCHAR out[8] = {0};
+            SQLLEN ind = 0;
+            rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
+                            out, sizeof(out), &ind);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLGetData returned " + std::to_string(rc);
+                return;
+            }
+            size_t out_chars = 0;
+            while (out_chars < 7 && out[out_chars] != 0) ++out_chars;
+            if (out_chars != 2 || out[0] != 0xD83Du || out[1] != 0xDE00u) {
+                r.status = TestStatus::FAIL;
+                r.actual = "expected surrogate pair [U+D83D U+DE00] got ["
+                         + wchars_to_hex(out, out_chars) + "]";
+                r.suggestion = "Driver dropped or normalized the supplementary "
+                               "codepoint. SQL_C_WCHAR is UTF-16 — surrogate "
+                               "pairs are part of the contract.";
+                return;
+            }
+            r.actual = "surrogate pair preserved (U+D83D U+DE00 = U+1F600)";
         });
 }
 
