@@ -3,6 +3,8 @@
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 
+#include <cstring>  // std::memcpy — Linux GCC is stricter than MSVC about transitives
+
 using namespace mock_odbc;
 
 extern "C" {

@@ -43,10 +43,13 @@ protected:
         SQLCloseCursor(hstmt);
     }
 
-    long CountRows(const std::string& table) {
+    // SQL_C_LONG is always 32-bit per the ODBC spec — always pair with
+    // SQLINTEGER, never C `long` (which is 64-bit on Linux/macOS and
+    // would leave the upper 4 bytes uninitialised).
+    SQLINTEGER CountRows(const std::string& table) {
         std::string sql = "SELECT COUNT(*) FROM " + table;
         EXPECT_EQ(SQLExecDirect(hstmt, (SQLCHAR*)sql.c_str(), SQL_NTS), SQL_SUCCESS);
-        long count = -1;
+        SQLINTEGER count = -1;
         if (SQLFetch(hstmt) == SQL_SUCCESS) {
             SQLLEN ind = 0;
             SQLGetData(hstmt, 1, SQL_C_LONG, &count, sizeof(count), &ind);
