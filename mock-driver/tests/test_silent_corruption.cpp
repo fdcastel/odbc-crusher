@@ -4,7 +4,9 @@
 // data. These tests prove the mock actually corrupts (the §5.1 E2E harness
 // then verifies that crusher's verify_rows_persisted catches it).
 #include <gtest/gtest.h>
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <string>

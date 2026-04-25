@@ -1,6 +1,8 @@
 // Error Injection Tests - Test FailOn parameter and error scenarios
 #include <gtest/gtest.h>
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <string>

@@ -13,26 +13,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest]  # Mock driver currently Windows-only
+        os: [ubuntu-latest, windows-latest, macos-latest]
         build_type: [Debug, Release]
-        
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        
-    - name: Setup MSVC
+
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
       uses: microsoft/setup-msbuild@v2
-      
+
+    - name: Install ODBC dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y unixodbc unixodbc-dev
+
+    - name: Install ODBC dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install unixodbc
+
     - name: Configure Mock Driver
       run: cmake -B mock-driver/build -S mock-driver -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-        
+
     - name: Build Mock Driver
       run: cmake --build mock-driver/build --config ${{ matrix.build_type }} -j 4
 
     - name: Check mockodbc.def export drift
-      if: matrix.build_type == 'Release'
+      # .def is a Windows-only linker artifact, so the check only makes
+      # sense on Windows. Runs on Release only to avoid duplicating the
+      # work on Debug.
+      if: runner.os == 'Windows' && matrix.build_type == 'Release'
       shell: pwsh
       run: |
         # Every name in EXPORTS must appear as `SQLRETURN SQL_API <name>(`
@@ -62,19 +76,23 @@ jobs:
 
     - name: Run Mock Driver Tests
       run: ctest --test-dir mock-driver/build -C ${{ matrix.build_type }} --output-on-failure
-        
+
     - name: Upload Mock Driver Artifacts
       uses: actions/upload-artifact@v4
       if: matrix.build_type == 'Release'
       with:
         name: mock-odbc-driver-${{ runner.os }}-${{ matrix.build_type }}
+        # Glob every possible binary name across the three platforms so
+        # this list doesn't need a per-OS branch. upload-artifact ignores
+        # missing matches when at least one path resolves.
         path: |
-          mock-driver/build/Release/mockodbc.dll
-          mock-driver/build/Release/mockodbc.lib
-          mock-driver/install/*.ps1
-          mock-driver/install/*.reg
-        if-no-files-found: ignore
-  
+          mock-driver/build/**/mockodbc.dll
+          mock-driver/build/**/mockodbc.lib
+          mock-driver/build/**/libmockodbc.so
+          mock-driver/build/**/libmockodbc.dylib
+          mock-driver/install/register.ps1
+          mock-driver/install/register.sh
+
   build-and-test:
     name: Build and Test ODBC Crusher on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -84,36 +102,33 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         build_type: [Debug, Release]
-        
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        
+
     - name: Setup MSVC (Windows)
       if: runner.os == 'Windows'
       uses: microsoft/setup-msbuild@v2
-      
+
     - name: Install ODBC dependencies (Ubuntu)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y unixodbc unixodbc-dev
-        
+
     - name: Install ODBC dependencies (macOS)
       if: runner.os == 'macOS'
-      run: |
-        brew install unixodbc
-        
+      run: brew install unixodbc
+
     - name: Configure CMake
-      run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-        
+      run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
     - name: Build
-      run: |
-        cmake --build build --config ${{ matrix.build_type }} -j 4
-        
+      run: cmake --build build --config ${{ matrix.build_type }} -j 4
+
     - name: Run unit tests (without ODBC drivers)
       # `-L unit` selects every test tagged with the "unit" label in
       # tests/CMakeLists.txt — currently the 27 plumbing tests under
@@ -124,17 +139,16 @@ jobs:
       # regression and must fail CI. Tests that need an unregistered
       # real driver should SKIP themselves at runtime, not be ignored
       # at the runner level.
-      run: |
-        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -L unit
-      
-    - name: Download Mock Driver (Windows)
-      if: runner.os == 'Windows' && matrix.build_type == 'Release'
+      run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -L unit
+
+    - name: Download Mock Driver
+      if: matrix.build_type == 'Release'
       uses: actions/download-artifact@v4
       with:
-        name: mock-odbc-driver-Windows-Release
+        name: mock-odbc-driver-${{ runner.os }}-Release
         path: mock-driver-artifact
-        
-    - name: Register Mock Driver and Run Tests (Windows)
+
+    - name: Register Mock Driver and Run E2E Tests (Windows)
       if: runner.os == 'Windows' && matrix.build_type == 'Release'
       shell: pwsh
       # No `|| true` and no `continue-on-error: true` — once the mock
@@ -142,19 +156,34 @@ jobs:
       # whole §5.1 harness exists to catch them).
       run: |
         # upload-artifact@v4 strips the longest common prefix, so the
-        # downloaded layout is build/Release/mockodbc.dll + install/.
+        # downloaded layout is build/<config>/mockodbc.dll + install/.
         $driverDest = "C:\Windows\System32\mockodbc.dll"
         Copy-Item mock-driver-artifact/build/Release/mockodbc.dll -Destination $driverDest
-
-        # Use the canonical register.ps1 instead of hand-rolled .reg —
-        # same script the local docs and stress-test workflow use,
-        # avoiding the previous two-source-of-truth drift risk.
         & mock-driver-artifact/install/register.ps1 -DriverPath $driverDest
-
-        # Run e2e tests against the registered mock. Unit tests already
-        # ran in the previous step; -L e2e here is the strict complement.
         ctest --test-dir build -C Release --output-on-failure -L e2e
-      
+
+    - name: Register Mock Driver and Run E2E Tests (Linux/macOS)
+      if: runner.os != 'Windows' && matrix.build_type == 'Release'
+      shell: bash
+      run: |
+        # Linux generates libmockodbc.so directly under build/ (single-
+        # config Make/Ninja); macOS generates libmockodbc.dylib in the
+        # same spot. The artifact glob above handles both.
+        chmod +x mock-driver-artifact/install/register.sh
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          DRIVER=$(find mock-driver-artifact/build -name 'libmockodbc.so' | head -n1)
+        else
+          DRIVER=$(find mock-driver-artifact/build -name 'libmockodbc.dylib' | head -n1)
+        fi
+        # Resolve to absolute path — odbcinst stores it verbatim.
+        DRIVER_ABS=$(readlink -f "$DRIVER" 2>/dev/null || python3 -c "import os,sys;print(os.path.abspath(sys.argv[1]))" "$DRIVER")
+        # Use sudo for system-wide registration (/etc/odbcinst.ini) —
+        # the per-user ~/.odbcinst.ini fallback isn't in unixODBC's
+        # default driver lookup path, so the SQLDriverConnect from the
+        # e2e binary wouldn't find the registration.
+        sudo ./mock-driver-artifact/install/register.sh "$DRIVER_ABS"
+        ctest --test-dir build -C Release --output-on-failure -L e2e
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       if: matrix.build_type == 'Release'

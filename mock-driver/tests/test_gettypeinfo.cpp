@@ -1,6 +1,8 @@
 // Test for SQLGetTypeInfo - Regression test for catalog function crash
 #include <gtest/gtest.h>
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 
