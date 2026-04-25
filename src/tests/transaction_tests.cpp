@@ -11,7 +11,8 @@ std::vector<TestResult> TransactionTests::run() {
         test_autocommit_off(),
         test_manual_commit(),
         test_manual_rollback(),
-        test_transaction_isolation_levels()
+        test_transaction_isolation_levels(),
+        test_rollback_with_open_cursor()
     };
 }
 
@@ -456,6 +457,159 @@ TestResult TransactionTests::test_transaction_isolation_levels() {
                 r.actual = oss.str();
                 r.status = TestStatus::PASS;
             }
+        });
+}
+
+// ── PORT plan §4.9 — rollback with an open cursor ──────────────────────────
+//
+// Three correctness invariants checked together:
+//   (i)   ROLLBACK succeeds (or returns a documented error) while a cursor
+//         is mid-fetch on the same transaction.
+//   (ii)  The cursor is closed by the rollback — subsequent SQLFetch returns
+//         SQL_NO_DATA or a state-machine error, NOT the would-be-rolled-back
+//         row.
+//   (iii) The inserted row is gone from the table (SELECT COUNT(*) = 0).
+//   (iv)  The connection is in a usable state for the next statement.
+// Drivers that handle each path correctly in isolation often leak cursor
+// state across the rollback boundary.
+
+TestResult TransactionTests::test_rollback_with_open_cursor() {
+    return run_test(
+        "test_rollback_with_open_cursor", "SQLEndTran(SQL_ROLLBACK)",
+        "ROLLBACK while a cursor is mid-fetch closes the cursor, undoes the "
+        "row, and leaves the connection usable for the next statement",
+        Severity::WARNING, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLEndTran — interaction with open cursors",
+        [&](TestResult& r) {
+            // Disable autocommit so the INSERT participates in the txn.
+            SQLRETURN ret = SQLSetConnectAttr(conn_.get_handle(),
+                SQL_ATTR_AUTOCOMMIT,
+                reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
+            if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Cannot disable autocommit";
+                return;
+            }
+            auto restore_autocommit = [&]() {
+                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                    reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON), 0);
+            };
+
+            if (!create_test_table()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create test table: " + last_ddl_error_;
+                restore_autocommit();
+                return;
+            }
+            // CREATE TABLE itself opens a txn on some engines; commit it.
+            SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+            std::ostringstream actual;
+            try {
+                // INSERT a row in the open transaction (uncommitted).
+                {
+                    core::OdbcStatement ins(conn_);
+                    ins.execute("INSERT INTO ODBC_TEST_TXN (ID, VAL) "
+                                "VALUES (1, 'pending')");
+                }
+
+                // Open a cursor on the same table (within the same txn —
+                // the INSERT is visible to the same connection).
+                core::OdbcStatement sel(conn_);
+                sel.execute("SELECT ID, VAL FROM ODBC_TEST_TXN");
+                SQLRETURN fetch_rc = SQLFetch(sel.get_handle());
+                actual << "fetch_rc=" << fetch_rc << " ";
+
+                // Rollback WITHOUT closing the cursor first.
+                SQLRETURN rb_rc = SQLEndTran(SQL_HANDLE_DBC,
+                    conn_.get_handle(), SQL_ROLLBACK);
+                actual << "rollback_rc=" << rb_rc << " ";
+                if (!SQL_SUCCEEDED(rb_rc)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = actual.str() + "(rollback failed)";
+                    r.suggestion = "ROLLBACK with an open cursor must succeed; "
+                                   "drivers may close the cursor implicitly but "
+                                   "must not return SQL_ERROR.";
+                    drop_test_table();
+                    restore_autocommit();
+                    return;
+                }
+
+                // (ii) Cursor must be closed — subsequent SQLFetch returns
+                // SQL_NO_DATA or a state-machine error (HY010, 24000), NOT
+                // the rolled-back row.
+                SQLRETURN post_rb_rc = SQLFetch(sel.get_handle());
+                actual << "post_rollback_fetch_rc=" << post_rb_rc << " ";
+                if (post_rb_rc == SQL_SUCCESS || post_rb_rc == SQL_SUCCESS_WITH_INFO) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = actual.str() +
+                        "(cursor still alive after rollback — should be closed)";
+                    r.suggestion = "ROLLBACK leaves a fetched-row visible to "
+                                   "the cursor — that's a snapshot leak. The "
+                                   "rolled-back transaction's data must not "
+                                   "survive into the post-rollback state.";
+                    drop_test_table();
+                    restore_autocommit();
+                    return;
+                }
+                // SQLCloseCursor is a defensive no-op now.
+                SQLCloseCursor(sel.get_handle());
+
+                // (iii) Row must be gone.
+                core::OdbcStatement chk(conn_);
+                chk.execute("SELECT COUNT(*) FROM ODBC_TEST_TXN");
+                SQLRETURN chk_rc = SQLFetch(chk.get_handle());
+                if (!SQL_SUCCEEDED(chk_rc)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = actual.str() +
+                        "(post-rollback SELECT COUNT(*) failed)";
+                    drop_test_table();
+                    restore_autocommit();
+                    return;
+                }
+                SQLINTEGER cnt = -1;
+                SQLLEN ind = 0;
+                SQLGetData(chk.get_handle(), 1, SQL_C_SLONG,
+                           &cnt, sizeof(cnt), &ind);
+                actual << "post_rollback_count=" << cnt << " ";
+                if (cnt != 0) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = actual.str() + "(row not rolled back)";
+                    r.suggestion = "ROLLBACK didn't undo the INSERT — basic "
+                                   "transaction semantics broken.";
+                    drop_test_table();
+                    restore_autocommit();
+                    return;
+                }
+
+                // (iv) Connection still usable — execute another statement.
+                {
+                    core::OdbcStatement post(conn_);
+                    post.execute("SELECT 1");
+                    SQLRETURN ok_rc = SQLFetch(post.get_handle());
+                    actual << "post_select_rc=" << ok_rc;
+                    if (!SQL_SUCCEEDED(ok_rc)) {
+                        r.status = TestStatus::FAIL;
+                        r.actual = actual.str() +
+                            " (connection wedged after rollback)";
+                        r.suggestion = "Rollback left the connection in an "
+                                       "unusable state — subsequent SQLExecDirect "
+                                       "fails. State machine must reset cleanly.";
+                        drop_test_table();
+                        restore_autocommit();
+                        return;
+                    }
+                }
+
+                r.actual = actual.str();
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::FAIL;
+                r.actual = std::string("Exception: ") + e.what();
+                r.diagnostic = e.format_diagnostics();
+            }
+
+            drop_test_table();
+            restore_autocommit();
         });
 }
 

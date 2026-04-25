@@ -19,7 +19,12 @@ private:
     TestResult test_manual_commit();
     TestResult test_manual_rollback();
     TestResult test_transaction_isolation_levels();
-    
+
+    // PORT plan §4.9 — cross-state interactions between transaction
+    // and cursor lifecycle. Drivers that handle each path correctly in
+    // isolation often leak state when both fire at once.
+    TestResult test_rollback_with_open_cursor();
+
     // Helper to create test table
     bool create_test_table();
     void drop_test_table();
