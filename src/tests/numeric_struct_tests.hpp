@@ -31,6 +31,11 @@ private:
     // misorder val[]. Three precision/scale shapes; reports the first
     // failing one in `actual`.
     TestResult test_numeric_struct_roundtrip_byte_equality();
+
+    // PORT plan §4.11 — accumulate N decimal rows via SQL_C_NUMERIC (mantissa
+    // arithmetic, not double) and verify the sum is exact. Catches drivers
+    // that lose 1 ULP per row when the read path goes through `double`.
+    TestResult test_decimal_sum_loop_precision();
 };
 
 } // namespace odbc_crusher::tests

@@ -15,7 +15,8 @@ std::vector<TestResult> NumericStructTests::run() {
         test_numeric_struct_precision_scale(),
         test_numeric_positive_negative(),
         test_numeric_zero_and_extremes(),
-        test_numeric_struct_roundtrip_byte_equality()
+        test_numeric_struct_roundtrip_byte_equality(),
+        test_decimal_sum_loop_precision()
     };
 }
 
@@ -455,6 +456,126 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
 
             r.actual = "All three (precision, scale) variants byte-match: "
                      + summary.str();
+        });
+}
+
+// ── DECIMAL sum-loop precision (PORT plan §4.11) ───────────────────────────
+//
+// SQLComponents/TestSQL/TestSelections.cpp accumulates many DECIMAL rows
+// and asserts master.total == sum(detail.amount). The unique add for
+// odbc-crusher: do the accumulation via SQL_C_NUMERIC mantissa arithmetic
+// (decimal-exact) — drivers that lose 1 ULP per row when the read path
+// goes through `double` show up as a non-zero absolute error. Tested at
+// DECIMAL(10, 2) which is well within both 32-bit mantissa range and
+// IEEE-754 exact-double range, so the only source of error is the driver.
+
+TestResult NumericStructTests::test_decimal_sum_loop_precision() {
+    return run_test(
+        "test_decimal_sum_loop_precision", "SQLGetData(SQL_C_NUMERIC)",
+        "Sum of N DECIMAL(10, 2) rows accumulated via SQL_C_NUMERIC equals "
+        "the expected exact sum",
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetData with SQL_C_NUMERIC — mantissa arithmetic exact",
+        [&](TestResult& r) {
+            constexpr int kRows = 100;
+            constexpr SQLCHAR kPrec = 10;
+            constexpr SQLCHAR kScale = 2;
+            constexpr uint64_t kPerRowMantissa = 1ull;  // 0.01 at scale=2
+            constexpr uint64_t kExpectedTotal =
+                kPerRowMantissa * static_cast<uint64_t>(kRows);
+
+            const std::string table = "ODBC_TEST_DECIMAL_SUM";
+            RoundTripTableGuard tbl(conn_, table, "DECIMAL(10, 2)");
+            if (!tbl.ok()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create round-trip table: " + tbl.last_error();
+                return;
+            }
+
+            try {
+                for (int i = 1; i <= kRows; ++i) {
+                    core::OdbcStatement ins(conn_);
+                    ins.execute("INSERT INTO " + table +
+                                " (ID, VAL) VALUES (" + std::to_string(i) + ", 0.01)");
+                }
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = std::string("INSERT loop failed: ") + e.what();
+                return;
+            }
+
+            core::OdbcStatement sel(conn_);
+            sel.execute("SELECT VAL FROM " + table);
+
+            if (!set_numeric_descriptor(sel.get_handle(), 1, kPrec, kScale)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver rejects ARD descriptor configuration";
+                return;
+            }
+
+            uint64_t total_mantissa = 0;
+            int rows_read = 0;
+            while (true) {
+                SQLRETURN rc = SQLFetch(sel.get_handle());
+                if (rc == SQL_NO_DATA) break;
+                if (!SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = "SQLFetch failed at row " + std::to_string(rows_read);
+                    return;
+                }
+                SQL_NUMERIC_STRUCT ns;
+                std::memset(&ns, 0, sizeof(ns));
+                SQLLEN ind = 0;
+                rc = SQLGetData(sel.get_handle(), 1, SQL_C_NUMERIC,
+                                &ns, sizeof(ns), &ind);
+                if (!SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQLGetData(SQL_C_NUMERIC) returned " + std::to_string(rc);
+                    return;
+                }
+                // Reconstruct mantissa, normalising for the driver's reported scale.
+                uint64_t mantissa = 0;
+                for (int i = SQL_MAX_NUMERIC_LEN - 1; i >= 0; --i) {
+                    mantissa = (mantissa << 8) | ns.val[i];
+                }
+                int scale_diff = static_cast<int>(ns.scale) - static_cast<int>(kScale);
+                if (scale_diff > 0) {
+                    for (int s = 0; s < scale_diff; ++s) mantissa /= 10ull;
+                } else if (scale_diff < 0) {
+                    for (int s = 0; s < -scale_diff; ++s) mantissa *= 10ull;
+                }
+                total_mantissa += mantissa;
+                ++rows_read;
+            }
+
+            std::ostringstream summary;
+            summary << "rows_read=" << rows_read << "/" << kRows
+                    << " total_mantissa=" << total_mantissa
+                    << " expected=" << kExpectedTotal
+                    << " (= " << kRows << " × 0.01 at scale=" << static_cast<int>(kScale)
+                    << ")";
+
+            if (rows_read != kRows) {
+                r.status = TestStatus::FAIL;
+                r.actual = summary.str();
+                r.suggestion = "Driver returned a different number of rows than "
+                               "were inserted — independent of precision, this "
+                               "indicates row drop/duplication.";
+                return;
+            }
+            if (total_mantissa != kExpectedTotal) {
+                const long abs_err = static_cast<long>(total_mantissa) -
+                                     static_cast<long>(kExpectedTotal);
+                r.status = TestStatus::FAIL;
+                r.actual = summary.str() + " absolute_error_in_units=" +
+                           std::to_string(abs_err);
+                r.suggestion = "Driver loses precision when reading DECIMAL via "
+                               "SQL_C_NUMERIC — likely round-tripping through "
+                               "double internally. SQL_NUMERIC_STRUCT is meant "
+                               "to preserve exact mantissa.";
+                return;
+            }
+            r.actual = summary.str();
         });
 }
 

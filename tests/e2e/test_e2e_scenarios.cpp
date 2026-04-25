@@ -192,6 +192,16 @@ TEST_F(CrusherE2EFixture, SilentCorruptionTruncateNumericTripsFractionalRoundTri
     EXPECT_EQ(bytes->value("status", std::string{}), "FAIL")
         << "Under TruncateNumeric, the SQL_NUMERIC_STRUCT byte-equality probe "
            "MUST fail (stored 12345.67 → 12345.0 changes the mantissa).";
+
+    // PORT plan port 11 — sum-loop also trips: 100 × 0.01 → 100 × 0.0 = 0
+    // instead of expected mantissa total 100 at scale=2.
+    auto sum = find_test(run.report, "Numeric Struct Tests",
+                         "test_decimal_sum_loop_precision");
+    ASSERT_TRUE(sum.has_value())
+        << "Decimal sum-loop probe missing — was it removed?";
+    EXPECT_EQ(sum->value("status", std::string{}), "FAIL")
+        << "Under TruncateNumeric, the decimal sum-loop MUST fail "
+           "(every 0.01 → 0.0; total_mantissa goes from 100 to 0).";
 }
 
 // ── SilentCorruption=NullAsEmpty: the NULL-vs-empty contrast probe FAILs ──
