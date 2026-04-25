@@ -102,16 +102,30 @@ TEST_F(SilentCorruptionTest, DropInsertsAcceptsButStoresNothing) {
         << "DropInserts must keep the row count at zero";
 }
 
-// MangleVarchar — the stored string is case-swapped silently.
-TEST_F(SilentCorruptionTest, MangleVarcharSwapsCaseOnStore) {
+// MangleVarchar — the stored string gets a sentinel char appended.
+// Universal corruption (works on numeric-as-string values too — the §1.1
+// roundtrip canaries insert "1","2","3"... which case-swap can't touch).
+TEST_F(SilentCorruptionTest, MangleVarcharAppendsSentinelOnStore) {
     Connect("SilentCorruption=MangleVarchar;");
     Exec("CREATE TABLE T_MANGLE (ID INTEGER, V VARCHAR(50))");
     Exec("INSERT INTO T_MANGLE (ID, V) VALUES (1, 'Hello')");
 
     EXPECT_EQ(CountRows("T_MANGLE"), 1)
         << "MangleVarchar must still store the row";
-    EXPECT_EQ(FetchFirstString("SELECT V FROM T_MANGLE"), "hELLO")
-        << "MangleVarchar must case-swap the stored string";
+    EXPECT_EQ(FetchFirstString("SELECT V FROM T_MANGLE"), "HelloX")
+        << "MangleVarchar must append a sentinel to the stored string";
+}
+
+// MangleVarchar must trip on numeric-string values too — the canary case
+// for §1.1 round-trip tests that insert integers as VARCHAR.
+TEST_F(SilentCorruptionTest, MangleVarcharTripsOnNumericString) {
+    Connect("SilentCorruption=MangleVarchar;");
+    Exec("CREATE TABLE T_MANGLE_NUM (ID INTEGER, V VARCHAR(50))");
+    Exec("INSERT INTO T_MANGLE_NUM (ID, V) VALUES (1, '5')");
+
+    EXPECT_EQ(FetchFirstString("SELECT V FROM T_MANGLE_NUM"), "5X")
+        << "MangleVarchar must alter numeric strings — otherwise the §1.1 "
+           "round-trip canaries can't catch the corruption.";
 }
 
 // TruncateNumeric — stored doubles lose their fractional part silently.

@@ -9,6 +9,12 @@
 #include <sstream>
 #include <thread>
 
+#ifdef _WIN32
+#include <process.h>   // _getpid
+#else
+#include <unistd.h>    // getpid
+#endif
+
 #ifndef CRUSHER_BIN_PATH
 #error "CRUSHER_BIN_PATH must be defined by the build (path to odbc-crusher binary)"
 #endif

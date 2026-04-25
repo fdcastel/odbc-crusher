@@ -13,9 +13,39 @@ namespace mock_odbc {
 
 namespace {
 
+// True when the column's SQL data type is one of the character varieties
+// (CHAR / VARCHAR / LONGVARCHAR + W- and N- variants). MangleVarchar only
+// touches these — keying off `std::get_if<std::string>` alone is wrong
+// because the §1.1 canaries bind SQL_C_SLONG into VARCHAR columns and
+// the mock stores those as `long long` in the cell variant. Without the
+// schema-driven check, MangleVarchar would silently miss them.
+bool is_character_sql_type(SQLSMALLINT t) {
+    switch (t) {
+        case SQL_CHAR:
+        case SQL_VARCHAR:
+        case SQL_LONGVARCHAR:
+        case SQL_WCHAR:
+        case SQL_WVARCHAR:
+        case SQL_WLONGVARCHAR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Stringify any numeric cell so MangleVarchar's append step has a string
+// to mangle. Leaves std::string and monostate untouched.
+void stringify_for_varchar(CellValue& cell) {
+    if (auto* n = std::get_if<long long>(&cell)) {
+        cell = std::to_string(*n);
+    } else if (auto* d = std::get_if<double>(&cell)) {
+        cell = std::to_string(*d);
+    }
+}
+
 // Apply the active SilentCorruption mode to a row about to be stored.
 // Returns false when the row should not be stored at all (DropInserts).
-bool apply_silent_corruption(MockRow& row,
+bool apply_silent_corruption(MockRow& row, const MockTable& table,
                              DriverConfig::SilentCorruptionMode mode) {
     using Mode = DriverConfig::SilentCorruptionMode;
     switch (mode) {
@@ -23,16 +53,22 @@ bool apply_silent_corruption(MockRow& row,
             return true;
         case Mode::DropInserts:
             return false;
-        case Mode::MangleVarchar:
-            for (auto& cell : row) {
-                if (auto* s = std::get_if<std::string>(&cell)) {
-                    for (char& c : *s) {
-                        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
-                        else if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
-                    }
+        case Mode::MangleVarchar: {
+            // Append a sentinel character to every stored character-column
+            // value. Universal — works on numeric-as-string round-trips
+            // ("5" → "5X") that the §1.1 canaries depend on, after we
+            // stringify any numeric variant cell that landed in a VARCHAR
+            // column (the mock doesn't auto-convert at bind time).
+            size_t n = std::min(row.size(), table.columns.size());
+            for (size_t i = 0; i < n; ++i) {
+                if (!is_character_sql_type(table.columns[i].data_type)) continue;
+                stringify_for_varchar(row[i]);
+                if (auto* s = std::get_if<std::string>(&row[i])) {
+                    s->push_back('X');
                 }
             }
             return true;
+        }
         case Mode::TruncateNumeric:
             for (auto& cell : row) {
                 if (auto* d = std::get_if<double>(&cell)) {
@@ -1398,7 +1434,7 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                     while (row.size() < table->columns.size()) row.push_back(std::monostate{});
                 }
                 auto corruption = BehaviorController::instance().config().silent_corruption;
-                if (apply_silent_corruption(row, corruption)) {
+                if (apply_silent_corruption(row, *table, corruption)) {
                     catalog.insert_row(to_upper(query.table_name), std::move(row));
                 }
             }

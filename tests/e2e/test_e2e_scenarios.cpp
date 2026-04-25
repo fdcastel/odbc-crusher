@@ -97,7 +97,7 @@ TEST_F(CrusherE2EFixture, CatalogEmptyKeepsCatalogTestsRunning) {
     // The metadata category should still execute — empty catalog isn't a
     // hard error, just zero rows. Confirms we didn't take the connect-fail
     // path by accident.
-    auto meta = find_category(run.report, "Metadata Tests");
+    auto meta = find_category(run.report, "Metadata/Catalog Tests");
     ASSERT_TRUE(meta.has_value());
     EXPECT_FALSE((*meta)["tests"].empty());
 }
@@ -137,6 +137,9 @@ TEST_F(CrusherE2EFixture, SilentCorruptionDropInsertsTripsRoundTripChecks) {
 }
 
 // ── SilentCorruption=MangleVarchar: int→varchar round-trip must FAIL ─────
+// MangleVarchar appends a sentinel char to every stored string, so even
+// numeric-as-string round-trips ("5" → "5X") fail the value comparison
+// inside verify_rows_persisted.
 
 TEST_F(CrusherE2EFixture, SilentCorruptionMangleVarcharTripsVarcharRoundTrip) {
     auto run = run_crusher(
@@ -150,5 +153,6 @@ TEST_F(CrusherE2EFixture, SilentCorruptionMangleVarcharTripsVarcharRoundTrip) {
                        "test_bindparam_int_to_varchar_roundtrip");
     ASSERT_TRUE(t.has_value());
     EXPECT_EQ(t->value("status", std::string{}), "FAIL")
-        << "Under MangleVarchar, the int→varchar round-trip MUST fail.";
+        << "Under MangleVarchar, the int→varchar round-trip MUST fail "
+           "(stored values come back with sentinel appended).";
 }
