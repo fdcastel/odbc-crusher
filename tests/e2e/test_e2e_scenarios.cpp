@@ -181,4 +181,15 @@ TEST_F(CrusherE2EFixture, SilentCorruptionTruncateNumericTripsFractionalRoundTri
     EXPECT_EQ(t->value("status", std::string{}), "FAIL")
         << "Under TruncateNumeric, the fractional double round-trip MUST fail "
            "(stored 1.5 → 1.0).";
+
+    // PORT plan port 1.C — the SQL_NUMERIC_STRUCT byte-equality probe also
+    // detects TruncateNumeric: literal 12345.67 stored as 12345.0 produces
+    // a different mantissa than round(12345.67 * 10^scale).
+    auto bytes = find_test(run.report, "Numeric Struct Tests",
+                           "test_numeric_struct_roundtrip_byte_equality");
+    ASSERT_TRUE(bytes.has_value())
+        << "Byte-equality probe missing — was it removed?";
+    EXPECT_EQ(bytes->value("status", std::string{}), "FAIL")
+        << "Under TruncateNumeric, the SQL_NUMERIC_STRUCT byte-equality probe "
+           "MUST fail (stored 12345.67 → 12345.0 changes the mantissa).";
 }
