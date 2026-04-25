@@ -3,11 +3,17 @@
 #include "core/odbc_error.hpp"
 #include <sstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <sql.h>
+#include <sqlext.h>
+
 namespace odbc_crusher::tests {
 
 std::vector<TestResult> MetadataTests::run() {
     std::vector<TestResult> results;
-    
+
     results.push_back(test_tables_catalog());
     results.push_back(test_columns_catalog());
     results.push_back(test_primary_keys());
@@ -15,7 +21,8 @@ std::vector<TestResult> MetadataTests::run() {
     results.push_back(test_statistics());
     results.push_back(test_special_columns());
     results.push_back(test_table_privileges());
-    
+    results.push_back(test_desc_unsigned_on_signed_integer());
+
     return results;
 }
 
@@ -700,7 +707,112 @@ TestResult MetadataTests::test_table_privileges() {
         result.actual = "Table privileges not supported by driver";
         result.suggestion = "SQLTablePrivileges is a Level 2 function; this is normal for basic ODBC drivers";
     }
-    
+
+    return result;
+}
+
+// ── §1.10: SQL_DESC_UNSIGNED sanity on signed numeric columns ──────────────
+//
+// IMPROVEMENT_PLAN.md §1.10. DuckDB ODBC reports `SQL_DESC_UNSIGNED = 1`
+// for INT128 / HUGEINT columns while serving negative values, which fooled
+// `odbc-scanner` tests that match on `(SQL_BIGINT, signed)`. This probe
+// runs `SELECT CAST(1 AS INTEGER)` and asserts SQL_DESC_UNSIGNED is
+// SQL_FALSE, with fallbacks for engines that can't cast literals.
+TestResult MetadataTests::test_desc_unsigned_on_signed_integer() {
+    TestResult result = make_result(
+        "test_desc_unsigned_on_signed_integer",
+        "SQLColAttribute",
+        TestStatus::PASS,
+        "SQL_DESC_UNSIGNED == SQL_FALSE for a signed INTEGER column",
+        "",
+        Severity::WARNING,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLColAttribute, Appendix D: SQL_DESC_UNSIGNED"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    // Try a sequence of known-portable INTEGER queries. The first one that
+    // executes is enough — we just need a cursor open on a signed integer
+    // column so we can call SQLColAttribute on it.
+    const std::vector<std::string> queries = {
+        "SELECT CAST(1 AS INTEGER)",
+        "SELECT CAST(1 AS INTEGER) FROM RDB$DATABASE",   // Firebird
+        "SELECT CAST(1 AS INTEGER) FROM DUAL",           // Oracle
+    };
+
+    try {
+        core::OdbcStatement stmt(conn_);
+
+        SQLRETURN exec_rc = SQL_ERROR;
+        std::string used_query;
+        for (const auto& q : queries) {
+            try {
+                stmt.execute(q);
+                exec_rc = SQL_SUCCESS;
+                used_query = q;
+                break;
+            } catch (const core::OdbcError&) {
+                // try next
+            }
+        }
+        if (!SQL_SUCCEEDED(exec_rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "No portable `CAST(1 AS INTEGER)` query succeeded";
+            result.suggestion = "Driver may not accept inline CAST literals; rerun "
+                                "against a connection that has a known signed "
+                                "INTEGER column.";
+            result.duration = elapsed();
+            return result;
+        }
+
+        SQLLEN unsigned_attr = -1;
+        SQLRETURN col_rc = SQLColAttribute(
+            stmt.get_handle(), 1, SQL_DESC_UNSIGNED,
+            nullptr, 0, nullptr, &unsigned_attr);
+
+        if (!SQL_SUCCEEDED(col_rc)) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "SQLColAttribute(SQL_DESC_UNSIGNED) returned " +
+                            std::to_string(col_rc);
+            result.suggestion = "Driver does not implement SQL_DESC_UNSIGNED — "
+                                "callers can't rely on it; treat all numeric "
+                                "columns as signed unless the driver says otherwise.";
+            result.duration = elapsed();
+            return result;
+        }
+
+        if (unsigned_attr == SQL_FALSE) {
+            std::ostringstream actual;
+            actual << "Query `" << used_query
+                   << "` returned SQL_DESC_UNSIGNED = SQL_FALSE";
+            result.actual = actual.str();
+        } else {
+            result.status = TestStatus::FAIL;
+            result.severity = Severity::WARNING;
+            std::ostringstream actual;
+            actual << "Query `" << used_query
+                   << "` returned SQL_DESC_UNSIGNED = " << unsigned_attr
+                   << " (expected SQL_FALSE/0 for a signed INTEGER literal)";
+            result.actual = actual.str();
+            result.suggestion = "Driver reports a signed INTEGER as unsigned — "
+                                "this confuses scanner-style consumers that key "
+                                "on `(type, signed)`. See DuckDB ODBC HUGEINT bug.";
+        }
+
+        result.duration = elapsed();
+
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+        result.duration = elapsed();
+    }
+
     return result;
 }
 
