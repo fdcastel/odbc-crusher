@@ -43,6 +43,15 @@ jobs:
       if: runner.os == 'macOS'
       run: brew install unixodbc
 
+    - name: Cache CMake FetchContent (_deps)
+      # Skip the GoogleTest re-clone on every CI run. Key is per-OS +
+      # the version pin in mock-driver/CMakeLists.txt — bumping the tag
+      # busts the cache automatically.
+      uses: actions/cache@v4
+      with:
+        path: mock-driver/build/_deps
+        key: cmake-deps-mock-${{ runner.os }}-${{ hashFiles('mock-driver/CMakeLists.txt') }}
+
     - name: Configure Mock Driver
       run: cmake -B mock-driver/build -S mock-driver -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
@@ -129,6 +138,15 @@ jobs:
     - name: Install ODBC dependencies (macOS)
       if: runner.os == 'macOS'
       run: brew install unixodbc
+
+    - name: Cache CMake FetchContent (_deps)
+      # Skip the GoogleTest + CLI11 + nlohmann/json re-clones on every CI
+      # run. Key on the root CMakeLists.txt — that's where the version
+      # tags are pinned, so a bump busts the cache automatically.
+      uses: actions/cache@v4
+      with:
+        path: build/_deps
+        key: cmake-deps-app-${{ runner.os }}-${{ matrix.build_type }}-${{ hashFiles('CMakeLists.txt') }}
 
     - name: Configure CMake
       run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -228,6 +246,12 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y unixodbc unixodbc-dev odbcinst
+
+    - name: Cache CMake FetchContent (_deps)
+      uses: actions/cache@v4
+      with:
+        path: build-san/_deps
+        key: cmake-deps-san-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
     - name: Configure with ASan + UBSan
       # `-fno-sanitize-recover=all` upgrades UBSan warnings into errors so a
