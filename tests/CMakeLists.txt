@@ -1,4 +1,6 @@
-# Test executable
+# Unit tests for project plumbing — RAII handles, error parsing, crash guard,
+# discovery. The 23 thin tests::*Tests(conn).run() wrappers that used to live
+# here have been retired in favour of the §5.1 E2E harness in tests/e2e/.
 add_executable(odbc_crusher_tests
     test_main.cpp
     test_odbc_environment.cpp
@@ -7,29 +9,6 @@ add_executable(odbc_crusher_tests
     test_driver_info.cpp
     test_type_info.cpp
     test_function_info.cpp
-    test_connection_tests.cpp
-    test_statement_tests.cpp
-    test_metadata_tests.cpp
-    test_datatype_tests.cpp
-    test_transaction_tests.cpp
-    test_advanced_tests.cpp
-    test_buffer_validation.cpp
-    test_error_queue.cpp
-    test_state_machine.cpp
-    test_descriptor_tests.cpp
-    test_cancellation_tests.cpp
-    test_sqlstate_tests.cpp
-    test_boundary_tests.cpp
-    test_datatype_edge_tests.cpp
-    test_unicode_tests.cpp
-    test_catalog_depth_tests.cpp
-    test_diagnostic_depth_tests.cpp
-    test_cursor_behavior_tests.cpp
-    test_param_binding_tests.cpp
-    test_array_param_tests.cpp
-    test_escape_sequence_tests.cpp
-    test_numeric_struct_tests.cpp
-    test_cursor_stress_tests.cpp
     test_crash_guard.cpp
 )
 
