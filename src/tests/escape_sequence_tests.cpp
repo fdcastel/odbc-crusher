@@ -36,7 +36,10 @@ std::vector<TestResult> EscapeSequenceTests::run() {
         test_call_escape_format_variants(),
         test_call_escape_in_parameter(),
         test_call_escape_out_parameter(),
-        test_call_escape_inout_parameter()
+        test_call_escape_inout_parameter(),
+
+        // PORT plan §4.12 — claim-vs-execute matrix
+        test_scalar_function_claim_vs_execute()
     };
 }
 
@@ -1040,6 +1043,142 @@ TestResult EscapeSequenceTests::test_call_escape_out_parameter() {
                 r.suggestion = "Driver wrote a value, but it doesn't match "
                                "the procedure contract m := n*2.";
             }
+        });
+}
+
+// ── PORT plan §4.12 — claim-vs-execute matrix ─────────────────────────────
+//
+// SQLGetInfo(SQL_STRING_FUNCTIONS / SQL_NUMERIC_FUNCTIONS /
+// SQL_TIMEDATE_FUNCTIONS / SQL_SYSTEM_FUNCTIONS) is the "what does this
+// driver claim to support" surface. The existing per-category probes
+// each test ~5 functions; this consolidated probe builds a single matrix
+// across all four categories, runs a representative query per claimed
+// function, and FAILs on any claimed-but-broken bit. Diagnostic shape:
+//   "STRING:6/6 NUMERIC:5/5 TIMEDATE:3/3 SYSTEM:0/0 (broken: SUBSTRING)"
+
+TestResult EscapeSequenceTests::test_scalar_function_claim_vs_execute() {
+    return run_test(
+        "test_scalar_function_claim_vs_execute",
+        "SQLGetInfo(SQL_*_FUNCTIONS) + SQLExecDirect",
+        "Every scalar function the driver claims in SQL_*_FUNCTIONS "
+        "actually runs without error",
+        Severity::WARNING, ConformanceLevel::CORE,
+        "ODBC 3.8 Appendix E — scalar function bitmasks",
+        [&](TestResult& r) {
+            struct FnEntry {
+                SQLUINTEGER flag;
+                const char* sql;
+                const char* name;
+            };
+            // String functions (subset that all engines should reject in
+            // unison or accept in unison — keep representative coverage).
+            static const FnEntry kString[] = {
+                {SQL_FN_STR_UCASE,     "SELECT {fn UCASE('a')}",        "UCASE"},
+                {SQL_FN_STR_LCASE,     "SELECT {fn LCASE('A')}",        "LCASE"},
+                {SQL_FN_STR_LENGTH,    "SELECT {fn LENGTH('xy')}",      "LENGTH"},
+                {SQL_FN_STR_LTRIM,     "SELECT {fn LTRIM(' x')}",       "LTRIM"},
+                {SQL_FN_STR_RTRIM,     "SELECT {fn RTRIM('x ')}",       "RTRIM"},
+                {SQL_FN_STR_CONCAT,    "SELECT {fn CONCAT('a','b')}",   "CONCAT"},
+                {SQL_FN_STR_SUBSTRING, "SELECT {fn SUBSTRING('abc',2,1)}", "SUBSTRING"},
+            };
+            static const FnEntry kNumeric[] = {
+                {SQL_FN_NUM_ABS,     "SELECT {fn ABS(-5)}",      "ABS"},
+                {SQL_FN_NUM_FLOOR,   "SELECT {fn FLOOR(3.7)}",   "FLOOR"},
+                {SQL_FN_NUM_CEILING, "SELECT {fn CEILING(3.2)}", "CEILING"},
+                {SQL_FN_NUM_SQRT,    "SELECT {fn SQRT(9)}",      "SQRT"},
+                {SQL_FN_NUM_ROUND,   "SELECT {fn ROUND(3.14,1)}","ROUND"},
+            };
+            static const FnEntry kTimedate[] = {
+                {SQL_FN_TD_NOW,         "SELECT {fn NOW()}",          "NOW"},
+                {SQL_FN_TD_CURDATE,     "SELECT {fn CURDATE()}",      "CURDATE"},
+                {SQL_FN_TD_CURTIME,     "SELECT {fn CURTIME()}",      "CURTIME"},
+                {SQL_FN_TD_YEAR,        "SELECT {fn YEAR({d '2026-01-01'})}",  "YEAR"},
+                {SQL_FN_TD_MONTH,       "SELECT {fn MONTH({d '2026-01-01'})}", "MONTH"},
+            };
+            static const FnEntry kSystem[] = {
+                {SQL_FN_SYS_USERNAME, "SELECT {fn USER()}",     "USER"},
+                {SQL_FN_SYS_DBNAME,   "SELECT {fn DATABASE()}", "DATABASE"},
+                {SQL_FN_SYS_IFNULL,   "SELECT {fn IFNULL(NULL, 1)}", "IFNULL"},
+            };
+
+            struct Section {
+                const char* label;
+                SQLUSMALLINT info_type;
+                const FnEntry* entries;
+                size_t count;
+            };
+            const Section sections[] = {
+                {"STRING",   SQL_STRING_FUNCTIONS,   kString,
+                    sizeof(kString) / sizeof(kString[0])},
+                {"NUMERIC",  SQL_NUMERIC_FUNCTIONS,  kNumeric,
+                    sizeof(kNumeric) / sizeof(kNumeric[0])},
+                {"TIMEDATE", SQL_TIMEDATE_FUNCTIONS, kTimedate,
+                    sizeof(kTimedate) / sizeof(kTimedate[0])},
+                {"SYSTEM",   SQL_SYSTEM_FUNCTIONS,   kSystem,
+                    sizeof(kSystem) / sizeof(kSystem[0])},
+            };
+
+            std::ostringstream summary;
+            std::ostringstream broken_list;
+            int total_claimed = 0;
+            int total_passed  = 0;
+            int total_broken  = 0;
+
+            for (size_t s = 0; s < sizeof(sections) / sizeof(sections[0]); ++s) {
+                const auto& sec = sections[s];
+                auto bits = get_info_uint(sec.info_type);
+                if (s > 0) summary << " ";
+                if (!bits) {
+                    summary << sec.label << ":?/?";
+                    continue;
+                }
+                int claimed = 0;
+                int passed_count = 0;
+                for (size_t i = 0; i < sec.count; ++i) {
+                    const auto& fn = sec.entries[i];
+                    if (!(*bits & fn.flag)) continue;
+                    ++claimed;
+                    auto val = exec_scalar(fn.sql);
+                    if (val.has_value()) {
+                        ++passed_count;
+                    } else {
+                        if (total_broken > 0 || claimed > passed_count) {
+                            // Track the first failures globally.
+                        }
+                        if (total_broken > 0) broken_list << ", ";
+                        broken_list << fn.name;
+                        ++total_broken;
+                    }
+                }
+                summary << sec.label << ":" << passed_count << "/" << claimed;
+                total_claimed += claimed;
+                total_passed  += passed_count;
+            }
+
+            std::ostringstream actual;
+            actual << summary.str();
+            if (total_broken > 0) {
+                actual << " (broken: " << broken_list.str() << ")";
+            }
+            r.actual = actual.str();
+
+            if (total_claimed == 0) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "SQLGetInfo returned no scalar function bits — "
+                           "either the driver doesn't support the bitmasks "
+                           "or it claims zero scalar functions. " + r.actual;
+                return;
+            }
+            if (total_broken > 0) {
+                r.status = TestStatus::FAIL;
+                r.suggestion = "Each function listed in SQL_*_FUNCTIONS must "
+                               "execute without error. The 'broken' list "
+                               "shows functions claimed but rejected at "
+                               "execute time — fix the bitmask, or fix the "
+                               "function support.";
+                return;
+            }
+            // total_claimed > 0 and 0 broken → PASS, leave default INFO.
         });
 }
 

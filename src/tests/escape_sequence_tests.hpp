@@ -64,6 +64,12 @@ private:
     TestResult test_call_escape_out_parameter();
     TestResult test_call_escape_inout_parameter();
 
+    // PORT plan §4.12 — close the loop on `SQLGetInfo(SQL_*_FUNCTIONS)`
+    // by *executing* one representative query per claimed function and
+    // reporting the matrix. Catches drivers that announce a function in
+    // the bitmask but return 42000 when the query runs.
+    TestResult test_scalar_function_claim_vs_execute();
+
     // Helpers
     std::optional<SQLUINTEGER> get_info_uint(SQLUSMALLINT info_type);
     std::optional<std::string> call_native_sql(const std::string& sql);
