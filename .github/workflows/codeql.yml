@@ -58,6 +58,10 @@ jobs:
         # it adds maintainability + reliability queries on top of the security
         # ones. Worth it for a small codebase where the noise floor is low.
         queries: security-and-quality
+        # Excludes build/ and **/_deps/ so CodeQL doesn't surface alerts
+        # on the FetchContent-imported googletest / CLI11 / nlohmann_json
+        # sources (§6.3).
+        config-file: ./.github/codeql/codeql-config.yml
 
     - name: Build
       run: |

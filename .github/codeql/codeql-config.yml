@@ -1,0 +1,15 @@
+# CodeQL config — IMPROVEMENT_PLAN.md §6.3
+#
+# Without this config, CodeQL analyses the fetched FetchContent sources
+# (googletest, nlohmann/json, CLI11) under build/_deps/. That produced
+# ~14 of the 16 high-severity alerts on the first run — all in
+# third-party code we don't own and don't want to maintain warnings for.
+# The same goes for the cmake build dirs themselves.
+name: ODBC Crusher CodeQL config
+
+paths-ignore:
+  - 'build/**'
+  - 'build-san/**'
+  - 'build-tidy/**'
+  - 'mock-driver/build/**'
+  - '**/_deps/**'

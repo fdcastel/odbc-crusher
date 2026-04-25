@@ -378,7 +378,9 @@ TestResult DataTypeTests::test_unicode_types() {
                             SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
                                                         str_buffer, sizeof(str_buffer), &indicator);
 
-                            if (SQL_SUCCEEDED(ret) && indicator > 0 && indicator != SQL_NULL_DATA) {
+                            // `indicator > 0` already excludes both SQL_NULL_DATA (-1)
+                            // and SQL_NO_TOTAL (-4), so the explicit comparisons are redundant.
+                            if (SQL_SUCCEEDED(ret) && indicator > 0) {
                                 r.actual = std::string("SQL_C_WCHAR not supported; retrieved as SQL_C_CHAR: '")
                                               + str_buffer + "'";
                                 r.suggestion = "Driver does not support SQL_C_WCHAR retrieval; "
