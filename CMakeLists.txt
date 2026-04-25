@@ -29,7 +29,7 @@ include(FetchContent)
 FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.14.0
+    GIT_TAG v1.17.0
 )
 # For Windows: Prevent overriding the parent project's compiler/linker settings
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -39,7 +39,7 @@ FetchContent_MakeAvailable(googletest)
 FetchContent_Declare(
     cli11
     GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-    GIT_TAG v2.4.2
+    GIT_TAG v2.6.2
 )
 FetchContent_MakeAvailable(cli11)
 
@@ -47,7 +47,7 @@ FetchContent_MakeAvailable(cli11)
 FetchContent_Declare(
     json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3
+    GIT_TAG v3.12.0
 )
 FetchContent_MakeAvailable(json)
 
