@@ -119,9 +119,13 @@ jobs:
       # tests/CMakeLists.txt — currently the 27 plumbing tests under
       # tests/unit/. Replaces a brittle name-regex that silently dropped
       # any new unit test that didn't happen to match.
+      #
+      # No `continue-on-error: true` — a failing unit test is a real
+      # regression and must fail CI. Tests that need an unregistered
+      # real driver should SKIP themselves at runtime, not be ignored
+      # at the runner level.
       run: |
         ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -L unit
-      continue-on-error: true
       
     - name: Download Mock Driver (Windows)
       if: runner.os == 'Windows' && matrix.build_type == 'Release'
@@ -133,10 +137,13 @@ jobs:
     - name: Register Mock Driver and Run Tests (Windows)
       if: runner.os == 'Windows' && matrix.build_type == 'Release'
       shell: powershell
+      # No `|| true` and no `continue-on-error: true` — once the mock
+      # driver is registered, e2e failures are real regressions (the
+      # whole §5.1 harness exists to catch them).
       run: |
         # Copy mock driver DLL
         Copy-Item mock-driver-artifact\mockodbc.dll -Destination C:\Windows\System32\
-        
+
         # Register driver
         $regContent = @"
         Windows Registry Editor Version 5.00
@@ -155,12 +162,10 @@ jobs:
         "@
         $regContent | Out-File -FilePath mock-driver.reg -Encoding ASCII
         reg import mock-driver.reg
-        
-        # Set environment and run tests
-        $env:FIREBIRD_ODBC_CONNECTION = "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;"
-        $env:MYSQL_ODBC_CONNECTION = $env:FIREBIRD_ODBC_CONNECTION
-        ctest --test-dir build -C Release --output-on-failure || true
-      continue-on-error: true
+
+        # Run e2e tests against the registered mock. Unit tests already
+        # ran in the previous step; -L e2e here is the complement.
+        ctest --test-dir build -C Release --output-on-failure -L e2e
       
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
