@@ -75,6 +75,19 @@ cmake --build mock-driver/build --config Debug
 ctest --test-dir mock-driver/build -C Debug --output-on-failure
 ```
 
+## Static Analysis
+
+CI runs **CodeQL** (`security-and-quality` ruleset, C++) on every push and PR — findings appear in the GitHub Security tab and as inline review comments. Sanitizers (ASan + UBSan) cover the runtime side (`.github/workflows/ci.yml` → `sanitizers` job).
+
+The repo also ships a curated `.clang-tidy` config for IDE/local use. To run it from the command line:
+
+```bash
+cmake -B build-tidy -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+clang-tidy -p build-tidy src/main.cpp src/core/*.cpp
+```
+
+The config is intentionally not wired into a CI job yet — see `.clang-tidy` for the rationale.
+
 ## Pull Requests
 
 - Keep PRs focused on a single change.

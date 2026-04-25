@@ -1,0 +1,65 @@
+# CodeQL static analysis — IMPROVEMENT_PLAN.md §4.1
+#
+# CodeQL was chosen over a clang-tidy CI job because the plan flags
+# non-blocking CI checks as anti-features ("a non-blocking CI job that
+# nobody reads"). CodeQL surfaces findings in the Security tab and as
+# PR review comments, so they're seen in the normal review flow without
+# needing a separate dashboard. The .clang-tidy config in the repo root
+# documents a curated rule subset for IDE / local use; it is intentionally
+# not yet run in CI (see the comment in that file).
+#
+# This job complements the §4.2 ASan + UBSan job — sanitizers catch
+# runtime bugs, CodeQL catches the static-analysable ones.
+name: CodeQL
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # Weekly re-scan against the latest CodeQL ruleset, in case new queries
+    # land that flag existing code. Sunday 06:00 UTC keeps it off business
+    # hours for the maintainers.
+    - cron: '0 6 * * 0'
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF results
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze C++
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install ODBC dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y unixodbc unixodbc-dev
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: cpp
+        # security-and-quality is broader than the default security-extended;
+        # it adds maintainability + reliability queries on top of the security
+        # ones. Worth it for a small codebase where the noise floor is low.
+        queries: security-and-quality
+
+    - name: Build
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Debug
+        cmake --build build -j 4
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: '/language:cpp'

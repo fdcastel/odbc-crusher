@@ -1,0 +1,65 @@
+# Curated check subset for ODBC Crusher (IMPROVEMENT_PLAN.md §4.1).
+#
+# Status: IDE / local use only. The CI pipeline runs CodeQL
+# (.github/workflows/codeql.yml) for static analysis — clang-tidy is here
+# so clangd-based editors and `clang-tidy -p build src/...` from the
+# command line both pick up a sensible rule set. The plan called out:
+# "adding clang-tidy without first auditing the existing code against the
+# planned check set produces a non-blocking CI job that nobody reads," so
+# this config is deliberately not wired into a CI job until someone runs
+# it clean across the codebase first.
+#
+# Rules are deliberately narrow — focused on classes of bug that are
+# high-signal in an ODBC C-API codebase, with everything noisy or
+# stylistically opinionated explicitly disabled.
+#
+# Specifically EXCLUDED from -bugprone-* / -performance-*:
+#   bugprone-easily-swappable-parameters — every SQL function takes 6+ args
+#                                          of the same type by spec.
+#   bugprone-narrowing-conversions       — SQLSMALLINT ↔ SQLINTEGER ↔ SQLLEN
+#                                          conversions are pervasive and
+#                                          required by the API contract.
+#   bugprone-implicit-widening-of-multiplication-result — same.
+#   bugprone-exception-escape            — false-positive-heavy, the catch
+#                                          guards in TestBase::run_test cover
+#                                          our actual escape risk.
+#   bugprone-reserved-identifier         — fires on third-party SQL_*/SQLAPI
+#                                          identifiers we don't own.
+#   bugprone-unchecked-optional-access   — many false positives on guarded
+#                                          access patterns (`if (x) *x`).
+Checks: >
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-exception-escape,
+  -bugprone-reserved-identifier,
+  -bugprone-unchecked-optional-access,
+  -bugprone-suspicious-include,
+  performance-*,
+  -performance-no-int-to-ptr,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-default-member-init,
+  modernize-deprecated-headers,
+  modernize-use-equals-default,
+  modernize-use-equals-delete,
+  modernize-loop-convert,
+  readability-redundant-string-init,
+  readability-redundant-control-flow,
+  readability-redundant-smartptr-get,
+  readability-misleading-indentation,
+  readability-string-compare
+
+WarningsAsErrors: '*'
+
+# The mock driver is intentionally permissive — its job is to misbehave on
+# request, so several "bugprone" patterns are deliberate. The fetched deps
+# are not ours.
+HeaderFilterRegex: '^(?!.*(_deps|build|build-tidy|build-san)).*\.(h|hpp)$'
+
+CheckOptions:
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
