@@ -6,74 +6,145 @@
 # the .github/actions/run-crusher composite action (§6.9). Adding a new
 # driver means writing one job with the install steps, no
 # copy-pasting the upload boilerplate.
+#
+# Driver versions, binary URLs, source repos/tags, and connection
+# strings are all defined in `.github/drivers.json` — the workflow
+# reads from there at runtime. apt-installed drivers are pinned via
+# `apt-get install pkg=version`; the install step fails loudly if
+# Ubuntu drops the pinned version. After install, every job writes
+# `actual_version.txt` next to the report so the /triage-driver skill
+# can verify provenance.
 name: Stress Test
 
 on:
   workflow_dispatch:
+    inputs:
+      driver:
+        description: 'Driver to test (empty = all)'
+        required: false
+        default: ''
+        type: choice
+        options:
+          - ''
+          - postgresql
+          - mariadb
+          - mysql
+          - duckdb
+          - clickhouse
+          - mock-driver
 
 jobs:
 
   # ── PostgreSQL on Linux ─────────────────────────────────────
-  # Driver: psqlodbc 16.00.0000 (Ubuntu 24.04 apt package)
-  # Source: https://github.com/postgresql-interfaces/psqlodbc
-  # Tag:    REL-16_00_0000
+  # Driver / version / source: see `.github/drivers.json` → drivers.postgresql
+  # (manifest is authoritative; the inline values below are pulled from it).
   postgresql:
+    if: ${{ inputs.driver == '' || inputs.driver == 'postgresql' }}
     name: PostgreSQL (Linux)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install unixODBC + start PostgreSQL + install driver
+    - name: Load driver metadata from .github/drivers.json
+      run: |
+        APT_VERSION=$(jq -er '.drivers.postgresql.install.apt_version' .github/drivers.json)
+        DRIVER_VERSION=$(jq -er '.drivers.postgresql.version' .github/drivers.json)
+        CONN=$(jq -er '.drivers.postgresql.conn_string' .github/drivers.json)
+        echo "APT_VERSION=$APT_VERSION" >> "$GITHUB_ENV"
+        echo "DRIVER_VERSION=$DRIVER_VERSION" >> "$GITHUB_ENV"
+        echo "CONN_STRING=$CONN" >> "$GITHUB_ENV"
+
+    - name: Install unixODBC + start PostgreSQL + install driver (pinned)
       run: |
         sudo apt-get update -y -q
         sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst
         sudo systemctl start postgresql
         sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres'"
-        sudo apt-get install -y -q odbc-postgresql
+        # Pinned via .github/drivers.json — install fails loudly if Ubuntu's
+        # repo drops this exact version, signalling the manifest needs updating.
+        sudo apt-get install -y -q "odbc-postgresql=${APT_VERSION}"
         dpkg -s odbc-postgresql | grep Version
         cat /etc/odbcinst.ini
+
+    - name: Record actual installed version (provenance for triage)
+      run: |
+        INSTALLED=$(dpkg -s odbc-postgresql | awk '/^Version:/ {print $2}')
+        echo "$INSTALLED" > actual_version.txt
+        if [ "$INSTALLED" != "$APT_VERSION" ]; then
+          echo "::error::Installed odbc-postgresql=$INSTALLED but manifest pinned $APT_VERSION"
+          exit 1
+        fi
 
     - uses: ./.github/actions/run-crusher
       with:
         artifact-name: postgresql
-        conn-string: "Driver={PostgreSQL Unicode};Server=127.0.0.1;Port=5432;Database=postgres;Uid=postgres;Pwd=postgres;"
+        conn-string: ${{ env.CONN_STRING }}
 
   # ── MariaDB on Linux ────────────────────────────────────────
-  # Driver: MariaDB Connector/ODBC 3.1.15 (Ubuntu 24.04 apt package)
-  # Source: https://github.com/mariadb-corporation/mariadb-connector-odbc
-  # Tag:    3.1.15
+  # Driver / version / source: see `.github/drivers.json` → drivers.mariadb
   mariadb:
+    if: ${{ inputs.driver == '' || inputs.driver == 'mariadb' }}
     name: MariaDB (Linux)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install unixODBC + MariaDB server + driver
+    - name: Load driver metadata from .github/drivers.json
+      run: |
+        APT_VERSION=$(jq -er '.drivers.mariadb.install.apt_version' .github/drivers.json)
+        DRIVER_VERSION=$(jq -er '.drivers.mariadb.version' .github/drivers.json)
+        CONN=$(jq -er '.drivers.mariadb.conn_string' .github/drivers.json)
+        echo "APT_VERSION=$APT_VERSION" >> "$GITHUB_ENV"
+        echo "DRIVER_VERSION=$DRIVER_VERSION" >> "$GITHUB_ENV"
+        echo "CONN_STRING=$CONN" >> "$GITHUB_ENV"
+
+    - name: Install unixODBC + MariaDB server + driver (pinned)
       run: |
         sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst mariadb-server odbc-mariadb
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst mariadb-server
+        sudo apt-get install -y -q "odbc-mariadb=${APT_VERSION}"
         sudo systemctl start mariadb
         sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root';"
         dpkg -s odbc-mariadb | grep Version
         cat /etc/odbcinst.ini
 
+    - name: Record actual installed version (provenance for triage)
+      run: |
+        INSTALLED=$(dpkg -s odbc-mariadb | awk '/^Version:/ {print $2}')
+        echo "$INSTALLED" > actual_version.txt
+        if [ "$INSTALLED" != "$APT_VERSION" ]; then
+          echo "::error::Installed odbc-mariadb=$INSTALLED but manifest pinned $APT_VERSION"
+          exit 1
+        fi
+
     - uses: ./.github/actions/run-crusher
       with:
         artifact-name: mariadb
-        conn-string: "Driver={MariaDB Unicode};Server=127.0.0.1;Port=3306;User=root;Password=root;"
+        conn-string: ${{ env.CONN_STRING }}
 
   # ── MySQL on Linux ──────────────────────────────────────────
-  # Driver: MySQL Connector/ODBC 9.2.0 (binary download)
-  # Source: https://github.com/mysql/mysql-connector-odbc
-  # Tag:    9.2.0
+  # Driver / version / source: see `.github/drivers.json` → drivers.mysql
   mysql:
+    if: ${{ inputs.driver == '' || inputs.driver == 'mysql' }}
     name: MySQL (Linux)
     runs-on: ubuntu-latest
-    env:
-      MYSQL_ODBC_VERSION: "9.2.0"
-      MYSQL_ODBC_LIB_URL: https://dev.mysql.com/get/Downloads/Connector-ODBC/9.2/mysql-connector-odbc-9.2.0-linux-glibc2.28-x86-64bit.tar.gz
     steps:
     - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      run: |
+        DRIVER_VERSION=$(jq -er '.drivers.mysql.version' .github/drivers.json)
+        DRIVER_URL=$(jq -er '.drivers.mysql.install.url' .github/drivers.json)
+        DRIVER_LIB=$(jq -er '.drivers.mysql.install.library_name' .github/drivers.json)
+        DRIVER_SECTION=$(jq -er '.drivers.mysql.install.driver_section' .github/drivers.json)
+        CONN=$(jq -er '.drivers.mysql.conn_string' .github/drivers.json)
+        {
+          echo "DRIVER_VERSION=$DRIVER_VERSION"
+          echo "DRIVER_URL=$DRIVER_URL"
+          echo "DRIVER_LIB_NAME=$DRIVER_LIB"
+          echo "DRIVER_SECTION=$DRIVER_SECTION"
+          echo "CONN_STRING=$CONN"
+        } >> "$GITHUB_ENV"
 
     - name: Install unixODBC + start MySQL + install MySQL ODBC driver
       run: |
@@ -84,36 +155,60 @@ jobs:
         sudo mysql --defaults-file=/etc/mysql/debian.cnf -e "CREATE USER 'crusher'@'%' IDENTIFIED BY 'crusher'; GRANT ALL ON *.* TO 'crusher'@'%'; FLUSH PRIVILEGES;"
         mysql -u crusher -pcrusher -e "SELECT VERSION();"
 
-        curl --no-progress-meter -LO "${MYSQL_ODBC_LIB_URL}"
+        curl --no-progress-meter -LO "${DRIVER_URL}"
         tar xzf mysql-connector-odbc-*.tar.gz
         DRIVER_DIR=$(ls -d mysql-connector-odbc-*/lib/)
-        DRIVER_PATH=$(readlink -f "${DRIVER_DIR}/libmyodbc9w.so")
-        echo "MySQL ODBC driver ${MYSQL_ODBC_VERSION}: ${DRIVER_PATH}"
-        echo "[MySQL]" | sudo tee -a /etc/odbcinst.ini
-        echo "Description = MySQL ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
-        echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
+        DRIVER_PATH=$(readlink -f "${DRIVER_DIR}/${DRIVER_LIB_NAME}")
+        echo "MySQL ODBC driver ${DRIVER_VERSION}: ${DRIVER_PATH}"
+        {
+          echo "[${DRIVER_SECTION}]"
+          echo "Description = MySQL ODBC Unicode Driver"
+          echo "Driver = ${DRIVER_PATH}"
+        } | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
         # Persist the driver dir for the run step to extend LD_LIBRARY_PATH.
         echo "MYSQL_DRIVER_LIB=$(readlink -f "$DRIVER_DIR")" >> "$GITHUB_ENV"
 
+    - name: Record actual installed version (provenance for triage)
+      run: |
+        # The MySQL tarball name embeds the version — extract from the dir.
+        INSTALLED_DIR=$(ls -d mysql-connector-odbc-*/ | head -1)
+        INSTALLED=$(echo "$INSTALLED_DIR" | sed -E 's|^mysql-connector-odbc-||; s|-linux-.*||')
+        echo "$INSTALLED" > actual_version.txt
+        if [ "$INSTALLED" != "$DRIVER_VERSION" ]; then
+          echo "::error::Downloaded mysql-connector-odbc=$INSTALLED but manifest pinned $DRIVER_VERSION"
+          exit 1
+        fi
+
     - uses: ./.github/actions/run-crusher
       with:
         artifact-name: mysql
-        conn-string: "Driver={MySQL};Server=127.0.0.1;Port=3306;User=crusher;Password=crusher;"
+        conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.MYSQL_DRIVER_LIB }}
 
   # ── DuckDB on Linux ─────────────────────────────────────────
-  # Driver: DuckDB ODBC 1.4.4.0 (binary download)
-  # Source: https://github.com/duckdb/duckdb-odbc
-  # Tag:    v1.4.4.0
+  # Driver / version / source: see `.github/drivers.json` → drivers.duckdb
   duckdb:
+    if: ${{ inputs.driver == '' || inputs.driver == 'duckdb' }}
     name: DuckDB (Linux)
     runs-on: ubuntu-latest
-    env:
-      DUCKDB_ODBC_VERSION: "1.4.4.0"
-      DUCKDB_ODBC_URL: https://github.com/duckdb/duckdb-odbc/releases/download/v1.4.4.0/duckdb_odbc-linux-amd64.zip
     steps:
     - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      run: |
+        DRIVER_VERSION=$(jq -er '.drivers.duckdb.version' .github/drivers.json)
+        DRIVER_URL=$(jq -er '.drivers.duckdb.install.url' .github/drivers.json)
+        DRIVER_LIB=$(jq -er '.drivers.duckdb.install.library_name' .github/drivers.json)
+        DRIVER_SECTION=$(jq -er '.drivers.duckdb.install.driver_section' .github/drivers.json)
+        CONN=$(jq -er '.drivers.duckdb.conn_string' .github/drivers.json)
+        {
+          echo "DRIVER_VERSION=$DRIVER_VERSION"
+          echo "DRIVER_URL=$DRIVER_URL"
+          echo "DRIVER_LIB_NAME=$DRIVER_LIB"
+          echo "DRIVER_SECTION=$DRIVER_SECTION"
+          echo "CONN_STRING=$CONN"
+        } >> "$GITHUB_ENV"
 
     - name: Install unixODBC + DuckDB ODBC driver
       run: |
@@ -122,36 +217,62 @@ jobs:
 
         mkdir duckdb_odbc
         cd duckdb_odbc
-        curl --no-progress-meter -LO "${DUCKDB_ODBC_URL}"
+        curl --no-progress-meter -LO "${DRIVER_URL}"
         unzip -q duckdb_odbc-linux-amd64.zip
-        DRIVER_PATH=$(readlink -f libduckdb_odbc.so)
+        DRIVER_PATH=$(readlink -f "${DRIVER_LIB_NAME}")
         cd ..
-        echo "DuckDB ODBC driver ${DUCKDB_ODBC_VERSION}: ${DRIVER_PATH}"
-        echo "[DuckDB Driver]" | sudo tee -a /etc/odbcinst.ini
-        echo "Description = DuckDB ODBC Driver" | sudo tee -a /etc/odbcinst.ini
-        echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
+        echo "DuckDB ODBC driver ${DRIVER_VERSION}: ${DRIVER_PATH}"
+        {
+          echo "[${DRIVER_SECTION}]"
+          echo "Description = DuckDB ODBC Driver"
+          echo "Driver = ${DRIVER_PATH}"
+        } | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
         echo "DUCKDB_DRIVER_LIB=$(readlink -f duckdb_odbc)" >> "$GITHUB_ENV"
+
+    - name: Record actual installed version (provenance for triage)
+      run: |
+        # DuckDB ships only the .so without an embedded version string we
+        # can extract reliably; trust the manifest pin (the URL is exact).
+        # Record the manifest version verbatim so the triage skill has
+        # something to compare against driver_info.driver_version.
+        echo "$DRIVER_VERSION" > actual_version.txt
 
     - uses: ./.github/actions/run-crusher
       with:
         artifact-name: duckdb
-        conn-string: "Driver={DuckDB Driver};"
+        conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.DUCKDB_DRIVER_LIB }}
 
   # ── ClickHouse on Linux ─────────────────────────────────────
-  # Driver: ClickHouse ODBC 1.5.0.20251127 (binary download)
-  # Source: https://github.com/ClickHouse/clickhouse-odbc
-  # Tag:    v1.5.0.20251127
+  # Driver / version / source: see `.github/drivers.json` → drivers.clickhouse
+  # (Server brought up via ClickHouse's deb repo; only the driver version is
+  # part of the triage provenance contract.)
   clickhouse:
+    if: ${{ inputs.driver == '' || inputs.driver == 'clickhouse' }}
     name: ClickHouse (Linux)
     runs-on: ubuntu-latest
-    env:
-      CLICKHOUSE_ODBC_VERSION: "1.5.0"
-      CLICKHOUSE_ODBC_TAG: "v1.5.0.20251127"
-      CLICKHOUSE_ODBC_LIB_URL: https://github.com/ClickHouse/clickhouse-odbc/releases/download/v1.5.0.20251127/clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
     steps:
     - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      run: |
+        DRIVER_VERSION=$(jq -er '.drivers.clickhouse.version' .github/drivers.json)
+        DRIVER_URL=$(jq -er '.drivers.clickhouse.install.url' .github/drivers.json)
+        DRIVER_LIB=$(jq -er '.drivers.clickhouse.install.library_name' .github/drivers.json)
+        DRIVER_SECTION=$(jq -er '.drivers.clickhouse.install.driver_section' .github/drivers.json)
+        CONN=$(jq -er '.drivers.clickhouse.conn_string' .github/drivers.json)
+        # The inner tarball is named clickhouse-odbc-X.Y.Z-Linux (3 segments,
+        # not 4 — even though `version` carries the full 4-segment date suffix).
+        DRIVER_VERSION_SHORT=$(echo "$DRIVER_VERSION" | awk -F. '{print $1"."$2"."$3}')
+        {
+          echo "DRIVER_VERSION=$DRIVER_VERSION"
+          echo "DRIVER_VERSION_SHORT=$DRIVER_VERSION_SHORT"
+          echo "DRIVER_URL=$DRIVER_URL"
+          echo "DRIVER_LIB_NAME=$DRIVER_LIB"
+          echo "DRIVER_SECTION=$DRIVER_SECTION"
+          echo "CONN_STRING=$CONN"
+        } >> "$GITHUB_ENV"
 
     - name: Install unixODBC + start ClickHouse + install driver
       run: |
@@ -165,29 +286,47 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q clickhouse-server
         sudo systemctl start clickhouse-server
 
-        curl --no-progress-meter -LO "${CLICKHOUSE_ODBC_LIB_URL}"
+        curl --no-progress-meter -LO "${DRIVER_URL}"
         unzip clickhouse-odbc-linux-Clang-UnixODBC-Release.zip
-        tar xJf "clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux.tar.xz"
-        DRIVER_PATH=$(readlink -f "clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib/libclickhouseodbcw.so")
-        echo "ClickHouse ODBC driver ${CLICKHOUSE_ODBC_VERSION}: ${DRIVER_PATH}"
-        echo "[ClickHouse]" | sudo tee -a /etc/odbcinst.ini
-        echo "Description = ClickHouse ODBC Unicode Driver" | sudo tee -a /etc/odbcinst.ini
-        echo "Driver = ${DRIVER_PATH}" | sudo tee -a /etc/odbcinst.ini
+        tar xJf "clickhouse-odbc-${DRIVER_VERSION_SHORT}-Linux.tar.xz"
+        DRIVER_PATH=$(readlink -f "clickhouse-odbc-${DRIVER_VERSION_SHORT}-Linux/lib/${DRIVER_LIB_NAME}")
+        echo "ClickHouse ODBC driver ${DRIVER_VERSION}: ${DRIVER_PATH}"
+        {
+          echo "[${DRIVER_SECTION}]"
+          echo "Description = ClickHouse ODBC Unicode Driver"
+          echo "Driver = ${DRIVER_PATH}"
+        } | sudo tee -a /etc/odbcinst.ini
         cat /etc/odbcinst.ini
-        echo "CLICKHOUSE_DRIVER_LIB=$(readlink -f "clickhouse-odbc-${CLICKHOUSE_ODBC_VERSION}-Linux/lib")" >> "$GITHUB_ENV"
+        echo "CLICKHOUSE_DRIVER_LIB=$(readlink -f "clickhouse-odbc-${DRIVER_VERSION_SHORT}-Linux/lib")" >> "$GITHUB_ENV"
+
+    - name: Record actual installed version (provenance for triage)
+      run: |
+        # The release URL pins the exact tag; record the manifest version
+        # verbatim so the triage skill has a stable comparison anchor.
+        echo "$DRIVER_VERSION" > actual_version.txt
 
     - uses: ./.github/actions/run-crusher
       with:
         artifact-name: clickhouse
-        conn-string: "Driver={ClickHouse};Server=127.0.0.1;Port=8123;"
+        conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.CLICKHOUSE_DRIVER_LIB }}
 
   # ── Mock Driver on Windows ──────────────────────────────────
+  # Driver / conn-string: see `.github/drivers.json` → drivers["mock-driver"]
+  # The mock's "source" is this repo's mock-driver/ directory — the triage
+  # skill special-cases it (no clone step).
   mock-driver:
+    if: ${{ inputs.driver == '' || inputs.driver == 'mock-driver' }}
     name: Mock Driver (Windows)
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      shell: bash
+      run: |
+        CONN=$(jq -er '.drivers["mock-driver"].conn_string' .github/drivers.json)
+        echo "CONN_STRING=$CONN" >> "$GITHUB_ENV"
 
     - name: Download + register mock driver
       shell: bash
@@ -205,9 +344,20 @@ jobs:
         Copy-Item mock-driver\mockodbc.dll -Destination $driverDest
         & mock-driver\register.ps1 -DriverPath $driverDest
 
+    - name: Record actual installed version (provenance for triage)
+      shell: bash
+      run: |
+        # Mock driver version is whatever the latest release tagged. Capture
+        # the release tag so the triage skill knows which workspace SHA to
+        # diff against.
+        TAG=$(gh release view --repo fdcastel/odbc-crusher --json tagName -q '.tagName' 2>/dev/null || echo "unknown")
+        echo "$TAG" > actual_version.txt
+      env:
+        GH_TOKEN: ${{ github.token }}
+
     - uses: ./.github/actions/run-crusher
       with:
         artifact-name: mock-driver
-        conn-string: "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;"
+        conn-string: ${{ env.CONN_STRING }}
         release-asset: odbc-crusher-windows-x64.zip
         binary: ./odbc-crusher.exe

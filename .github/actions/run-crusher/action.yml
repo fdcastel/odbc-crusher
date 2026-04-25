@@ -74,6 +74,13 @@ runs:
       if: always()
       with:
         name: report-${{ inputs.artifact-name }}
+        # actual_version.txt is written by each driver job before this
+        # composite runs — it carries the runtime-observed driver version
+        # for the /triage-driver skill's provenance check. Optional: jobs
+        # that don't write it just won't ship it (artifact upload tolerates
+        # missing paths via if-no-files-found below).
+        if-no-files-found: warn
         path: |
           crusher-report.txt
           crusher-report.json
+          actual_version.txt
