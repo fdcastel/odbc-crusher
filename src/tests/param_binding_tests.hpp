@@ -16,8 +16,12 @@ public:
 private:
     // Table lifecycle for round-trip tests. Uses autocommit-on during DDL
     // so a failed DROP doesn't poison the transaction on Firebird-style drivers.
-    bool create_roundtrip_table();
-    void drop_roundtrip_table();
+    // Defaults match the original (ODBC_TEST_ROUNDTRIP, VARCHAR(32)).
+    bool create_roundtrip_table(
+        const std::string& table_name = "ODBC_TEST_ROUNDTRIP",
+        const std::string& val_ddl = "VARCHAR(32)");
+    void drop_roundtrip_table(
+        const std::string& table_name = "ODBC_TEST_ROUNDTRIP");
 
     // Stores the last DDL error for SKIP suggestions.
     std::string last_ddl_error_;
@@ -27,28 +31,42 @@ private:
     TestResult test_param_rebind_execute();
 
     // §1.1 — numeric-C → character-SQL round-trip matrix. Integer shapes
-    // share `run_int_to_varchar_roundtrip<CType>`; float shapes use
-    // `run_float_to_varchar_roundtrip<CType>` (numeric tolerance because
+    // share `run_int_to_string_roundtrip<CType>`; float shapes use
+    // `run_float_to_string_roundtrip<CType>` (numeric tolerance because
     // drivers format `1.0f` differently — "1", "1.0", "1.000000", "1e0"…).
+    TestResult test_bindparam_tinyint_to_varchar_roundtrip();
     TestResult test_bindparam_short_to_varchar_roundtrip();
     TestResult test_bindparam_int_to_varchar_roundtrip();
     TestResult test_bindparam_bigint_to_varchar_roundtrip();
     TestResult test_bindparam_float_to_varchar_roundtrip();
     TestResult test_bindparam_double_to_varchar_roundtrip();
+    TestResult test_bindparam_int_to_char_roundtrip();
+    TestResult test_bindparam_int_to_wvarchar_roundtrip();
 
     // Shared roundtrip helpers — defined in the .cpp; only invoked from this
     // class's own test methods, so implicit instantiation is sufficient.
     template <typename CType>
-    TestResult run_int_to_varchar_roundtrip(
+    TestResult run_int_to_string_roundtrip(
         const std::string& test_name,
         SQLSMALLINT c_type_id,
-        const std::string& c_type_name);
+        const std::string& c_type_name,
+        SQLSMALLINT sql_type_id,
+        const std::string& sql_type_name,
+        const std::string& table_name,
+        const std::string& column_ddl,
+        SQLULEN col_size,
+        bool right_trim_for_compare);
 
     template <typename CType>
-    TestResult run_float_to_varchar_roundtrip(
+    TestResult run_float_to_string_roundtrip(
         const std::string& test_name,
         SQLSMALLINT c_type_id,
-        const std::string& c_type_name);
+        const std::string& c_type_name,
+        SQLSMALLINT sql_type_id,
+        const std::string& sql_type_name,
+        const std::string& table_name,
+        const std::string& column_ddl,
+        SQLULEN col_size);
 
     TestResult test_sqldescribeparam_varchar();
     TestResult test_sqldescribeparam_integer();
