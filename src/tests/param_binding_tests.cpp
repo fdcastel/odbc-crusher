@@ -27,6 +27,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_sqlrowcount_after_delete());
     results.push_back(test_param_rebind_per_row_row_count());
     results.push_back(test_param_bind_once_execute_many_row_count());
+    results.push_back(test_param_batch_then_single_row_tail());
 
     return results;
 }
@@ -1091,6 +1092,186 @@ TestResult ParameterBindingTests::test_param_bind_once_execute_many_row_count() 
             "Driver returned errors during execute but the rows still "
             "persisted. Worth checking SQLGetDiagRec on each non-success "
             "return to see if the driver expected SQLFreeStmt(SQL_CLOSE).";
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+// ── §1.5: Batch-insert then per-row tail (`odbc_copy` pattern) ────────────
+//
+// IMPROVEMENT_PLAN.md §1.5. The `odbc-scanner` bulk-copy path PREPAREs an
+// `INSERT VALUES (?, ?), (?, ?), …` with N value-tuple slots, executes it
+// for each full batch, then PREPAREs a single-row `INSERT VALUES (?, ?)`
+// for the remaining tail rows. This test exercises both shapes back-to-back
+// against the same statement handle (the actual scanner uses a fresh
+// handle for the tail; we use the same one here to make sure the driver
+// can re-prepare cleanly), then verifies the final row count.
+TestResult ParameterBindingTests::test_param_batch_then_single_row_tail() {
+    TestResult result = make_result(
+        "test_param_batch_then_single_row_tail",
+        "SQLPrepare+SQLBindParameter+SQLExecute",
+        TestStatus::PASS,
+        "PREPARE multi-row INSERT batch + PREPARE single-row tail; "
+        "all rows persist",
+        "",
+        Severity::WARNING,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLPrepare, SQLBindParameter (re-prepare on same handle)"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    // 16 rows in the batch + 3 tail = 19 total rows.
+    constexpr int kBatchSize = 16;
+    constexpr int kTailSize = 3;
+    constexpr int kTotalRows = kBatchSize + kTailSize;
+    bool batch_executed = false;
+    bool tail_executed = false;
+    std::string failure_diag;
+
+    try {
+        core::OdbcStatement stmt(conn_);
+
+        // Build the multi-row INSERT statement: (?,?),(?,?),... × kBatchSize
+        std::string batch_sql = "INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES ";
+        for (int i = 0; i < kBatchSize; ++i) {
+            if (i > 0) batch_sql += ", ";
+            batch_sql += "(?, ?)";
+        }
+
+        SQLRETURN rc = SQLPrepare(stmt.get_handle(),
+                                  (SQLCHAR*)batch_sql.c_str(), SQL_NTS);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_UNSUPPORTED;
+            result.actual = "Batch SQLPrepare returned " + std::to_string(rc) +
+                            " — driver does not accept multi-row VALUES with " +
+                            std::to_string(kBatchSize) + " tuples.";
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        std::vector<SQLINTEGER> ids(kBatchSize);
+        std::vector<SQLINTEGER> vals(kBatchSize);
+        std::vector<SQLLEN> id_inds(kBatchSize, 0);
+        std::vector<SQLLEN> val_inds(kBatchSize, 0);
+        for (int i = 0; i < kBatchSize; ++i) {
+            ids[i] = i + 1;
+            vals[i] = i + 1;
+            SQLRETURN bid = SQLBindParameter(stmt.get_handle(),
+                                             static_cast<SQLUSMALLINT>(2 * i + 1),
+                                             SQL_PARAM_INPUT,
+                                             SQL_C_SLONG, SQL_INTEGER, 0, 0,
+                                             &ids[i], 0, &id_inds[i]);
+            SQLRETURN bvl = SQLBindParameter(stmt.get_handle(),
+                                             static_cast<SQLUSMALLINT>(2 * i + 2),
+                                             SQL_PARAM_INPUT,
+                                             SQL_C_SLONG, SQL_VARCHAR, 32, 0,
+                                             &vals[i], 0, &val_inds[i]);
+            if (!SQL_SUCCEEDED(bid) || !SQL_SUCCEEDED(bvl)) {
+                result.status = TestStatus::SKIP_UNSUPPORTED;
+                result.actual = "Batch bind row " + std::to_string(i + 1) +
+                                " failed (id_rc=" + std::to_string(bid) +
+                                ", val_rc=" + std::to_string(bvl) + ")";
+                drop_roundtrip_table();
+                result.duration = elapsed();
+                return result;
+            }
+        }
+
+        SQLRETURN exec_rc = SQLExecute(stmt.get_handle());
+        if (!SQL_SUCCEEDED(exec_rc)) {
+            result.status = TestStatus::FAIL;
+            result.actual = "Batch SQLExecute returned " + std::to_string(exec_rc);
+            result.suggestion =
+                "Driver claimed to accept the multi-row INSERT prepare but "
+                "rejected execution. Treat multi-row VALUES as unsupported.";
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+        batch_executed = true;
+
+        // Re-PREPARE on the same statement with the single-row shape.
+        SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+        SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+
+        rc = SQLPrepare(stmt.get_handle(),
+                        (SQLCHAR*)"INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (?, ?)",
+                        SQL_NTS);
+        if (!SQL_SUCCEEDED(rc)) {
+            failure_diag = "Tail SQLPrepare returned " + std::to_string(rc);
+        } else {
+            SQLINTEGER tail_id = 0;
+            SQLINTEGER tail_val = 0;
+            SQLLEN tail_id_ind = 0;
+            SQLLEN tail_val_ind = 0;
+            SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
+                             SQL_C_SLONG, SQL_INTEGER, 0, 0,
+                             &tail_id, 0, &tail_id_ind);
+            SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                             SQL_C_SLONG, SQL_VARCHAR, 32, 0,
+                             &tail_val, 0, &tail_val_ind);
+
+            for (int i = 0; i < kTailSize; ++i) {
+                tail_id = kBatchSize + i + 1;
+                tail_val = kBatchSize + i + 1;
+                SQLRETURN trc = SQLExecute(stmt.get_handle());
+                if (!SQL_SUCCEEDED(trc)) {
+                    failure_diag = "Tail SQLExecute row " +
+                                   std::to_string(i + 1) + " returned " +
+                                   std::to_string(trc);
+                    break;
+                }
+            }
+            if (failure_diag.empty()) tail_executed = true;
+        }
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = e.what();
+        result.diagnostic = e.format_diagnostics();
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+    RowVerification v = verify_rows_persisted(
+        "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kTotalRows);
+
+    if (!v.ok) {
+        result.status = TestStatus::FAIL;
+        std::ostringstream actual;
+        actual << "batch_executed=" << batch_executed
+               << " tail_executed=" << tail_executed
+               << " count=" << v.actual_count
+               << " expected=" << kTotalRows
+               << " verify_diag=" << v.diagnostic;
+        result.actual = actual.str();
+        if (!failure_diag.empty()) result.diagnostic = failure_diag;
+        result.suggestion =
+            "Batch-then-tail INSERT lost rows. The most common cause is the "
+            "driver carrying batch-prepare state into the tail prepare; some "
+            "drivers need a fresh statement handle for the tail.";
+    } else {
+        result.actual = "All " + std::to_string(kTotalRows) +
+                        " rows persisted (" + std::to_string(kBatchSize) +
+                        " batch + " + std::to_string(kTailSize) + " tail)";
     }
 
     drop_roundtrip_table();
