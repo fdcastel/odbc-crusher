@@ -349,6 +349,19 @@ std::vector<MockIndex> MockCatalog::get_statistics(const std::string& table_name
     return result;
 }
 
+std::vector<MockTable> MockCatalog::snapshot_tables() const {
+    std::lock_guard<std::mutex> g(mu_);
+    return tables_;
+}
+
+std::vector<MockRow> MockCatalog::snapshot_inserted_rows(
+    const std::string& table_name) const {
+    std::lock_guard<std::mutex> g(mu_);
+    auto it = inserted_data_.find(to_upper(table_name));
+    if (it == inserted_data_.end()) return {};
+    return it->second;
+}
+
 void MockCatalog::register_procedure(MockProcedure procedure) {
     std::lock_guard<std::mutex> g(mu_);
     procedures_.push_back(std::move(procedure));

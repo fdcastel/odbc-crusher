@@ -62,16 +62,17 @@ SQLRETURN SQL_API SQLTables(
         {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS"},
         {SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR});
     
-    // Get matching tables
-    MockCatalog& catalog = MockCatalog::instance();
-    
-    for (const auto& table : catalog.tables()) {
+    // Get matching tables — snapshot under the catalog mutex so a concurrent
+    // mutator doesn't invalidate references mid-iteration.
+    auto tables_snapshot = MockCatalog::instance().snapshot_tables();
+
+    for (const auto& table : tables_snapshot) {
         // Filter by pattern
-        if (!table_pattern.empty() && table_pattern != "%" && 
+        if (!table_pattern.empty() && table_pattern != "%" &&
             !MockCatalog::matches_pattern(table.name, table_pattern)) {
             continue;
         }
-        
+
         // Filter by type
         if (!type_pattern.empty() && type_pattern != "%" &&
             type_pattern.find(table.type) == std::string::npos) {
@@ -136,14 +137,14 @@ SQLRETURN SQL_API SQLColumns(
          SQL_SMALLINT, SQL_WVARCHAR, SQL_WVARCHAR, SQL_SMALLINT, SQL_SMALLINT,
          SQL_INTEGER, SQL_INTEGER, SQL_WVARCHAR});
     
-    MockCatalog& catalog = MockCatalog::instance();
-    
-    for (const auto& table : catalog.tables()) {
+    auto tables_snapshot = MockCatalog::instance().snapshot_tables();
+
+    for (const auto& table : tables_snapshot) {
         if (!table_pattern.empty() && table_pattern != "%" &&
             !MockCatalog::matches_pattern(table.name, table_pattern)) {
             continue;
         }
-        
+
         int ordinal = 1;
         for (const auto& col : table.columns) {
             if (!MockCatalog::matches_pattern(col.name, column_pattern)) {
@@ -297,14 +298,14 @@ SQLRETURN SQL_API SQLForeignKeys(
          SQL_SMALLINT, SQL_SMALLINT, SQL_SMALLINT, SQL_WVARCHAR, SQL_WVARCHAR, SQL_SMALLINT});
     
     MockCatalog& catalog = MockCatalog::instance();
-    
+
     // Collect FK table names to iterate
     std::vector<std::string> fk_tables_to_check;
     if (!fk_table.empty()) {
         fk_tables_to_check.push_back(fk_table);
     } else if (fk_table.empty() && pk_table.empty()) {
         // Return all foreign keys from all tables
-        for (const auto& tbl : catalog.tables()) {
+        for (const auto& tbl : catalog.snapshot_tables()) {
             fk_tables_to_check.push_back(tbl.name);
         }
     }

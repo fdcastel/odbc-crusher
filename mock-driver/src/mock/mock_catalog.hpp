@@ -85,7 +85,15 @@ public:
     void initialize(const std::string& preset);
 
     // Table operations
+    //
+    // `tables()` and `inserted_data()` return references for backward-compat
+    // and are SAFE only when the caller holds the driver's per-handle lock
+    // and there is exactly one connection mutating the catalog. New code
+    // should prefer `snapshot_tables()` / `snapshot_inserted_rows()` which
+    // copy under the catalog mutex and are safe across concurrent
+    // connections.
     const std::vector<MockTable>& tables() const { return tables_; }
+    std::vector<MockTable> snapshot_tables() const;
     const MockTable* find_table(const std::string& name) const;
 
     // Mutable catalog operations (for CREATE TABLE / DROP TABLE)
@@ -98,6 +106,9 @@ public:
     void clear_inserted_data(const std::string& table_name);
     std::unordered_map<std::string, std::vector<MockRow>>& inserted_data() { return inserted_data_; }
     const std::unordered_map<std::string, std::vector<MockRow>>& inserted_data() const { return inserted_data_; }
+    // Returns a copy of one table's rows under the catalog mutex. Empty
+    // vector when the table has no inserted data.
+    std::vector<MockRow> snapshot_inserted_rows(const std::string& table_name) const;
 
     // Column operations
     std::vector<MockColumn> get_columns(const std::string& table_name,

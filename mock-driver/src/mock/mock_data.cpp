@@ -1154,11 +1154,9 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 result.column_types.push_back(SQL_INTEGER);
                 result.column_sizes.push_back(10);
                 long long count = 0;
-                auto& inserted = catalog.inserted_data();
-                std::string upper_name = to_upper(query.table_name);
-                auto it = inserted.find(upper_name);
-                if (it != inserted.end()) {
-                    count = static_cast<long long>(it->second.size());
+                auto rows = catalog.snapshot_inserted_rows(query.table_name);
+                if (!rows.empty()) {
+                    count = static_cast<long long>(rows.size());
                 } else if (table->remarks != "User-created table") {
                     count = static_cast<long long>(result_set_size);
                 }
@@ -1199,11 +1197,9 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             }
             
             // Return inserted data if available, otherwise generate mock data
-            auto& inserted = catalog.inserted_data();
-            std::string upper_name = to_upper(query.table_name);
-            auto it = inserted.find(upper_name);
-            if (it != inserted.end() && !it->second.empty()) {
-                result.data = it->second;
+            auto rows = catalog.snapshot_inserted_rows(query.table_name);
+            if (!rows.empty()) {
+                result.data = std::move(rows);
             } else if (table->remarks == "User-created table") {
                 // User-created table with no data — empty result
             } else {
