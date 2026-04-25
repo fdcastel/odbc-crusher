@@ -25,6 +25,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_sqlrowcount_after_insert());
     results.push_back(test_sqlrowcount_after_update());
     results.push_back(test_sqlrowcount_after_delete());
+    results.push_back(test_param_rebind_per_row_row_count());
 
     return results;
 }
@@ -818,6 +819,141 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_delete() {
         result.status = TestStatus::ERR;
         result.actual = e.what();
         result.diagnostic = e.format_diagnostics();
+    }
+
+    drop_roundtrip_table();
+    result.duration = elapsed();
+    return result;
+}
+
+// ── §1.2: Per-row rebind + post-commit row count ──────────────────────────
+//
+// IMPROVEMENT_PLAN.md §1.2. The Firebird ≤3.5.0 silent-corruption shape:
+// the application reset its parameter binding before every execute,
+// committed at the end, then read back fewer rows than it inserted —
+// every API call returned SQL_SUCCESS while the driver dropped most
+// rows. This test inserts 100 rows with `SQLFreeStmt(SQL_RESET_PARAMS)
+// + SQLBindParameter` between each `SQLExecute`, commits, and uses
+// `verify_rows_persisted` to assert all 100 actually landed.
+TestResult ParameterBindingTests::test_param_rebind_per_row_row_count() {
+    TestResult result = make_result(
+        "test_param_rebind_per_row_row_count",
+        "SQLBindParameter",
+        TestStatus::PASS,
+        "Per-row rebind/execute loop persists every row (Firebird #161 shape)",
+        "",
+        Severity::CRITICAL,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter, SQLFreeStmt(SQL_RESET_PARAMS)"
+    );
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+    auto elapsed = [&]() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start_time);
+    };
+
+    if (!create_roundtrip_table()) {
+        result.status = TestStatus::SKIP_INCONCLUSIVE;
+        result.actual = "Could not CREATE TABLE";
+        result.diagnostic = last_ddl_error_;
+        result.duration = elapsed();
+        return result;
+    }
+
+    constexpr int kRowCount = 100;
+    int execute_errors = 0;
+    std::string first_error;
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        SQLRETURN rc = SQLPrepare(
+            stmt.get_handle(),
+            (SQLCHAR*)"INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (?, ?)",
+            SQL_NTS);
+        if (!SQL_SUCCEEDED(rc)) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "SQLPrepare returned " + std::to_string(rc);
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
+
+        for (int i = 1; i <= kRowCount; ++i) {
+            // Reset previous bindings; this is the path that triggered #161.
+            SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+
+            SQLINTEGER id_val = i;
+            SQLINTEGER val_val = i;
+            SQLLEN id_ind = 0;
+            SQLLEN val_ind = 0;
+
+            SQLRETURN bid = SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
+                                             SQL_C_SLONG, SQL_INTEGER, 0, 0,
+                                             &id_val, 0, &id_ind);
+            SQLRETURN bvl = SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                             SQL_C_SLONG, SQL_VARCHAR, 32, 0,
+                                             &val_val, 0, &val_ind);
+            if (!SQL_SUCCEEDED(bid) || !SQL_SUCCEEDED(bvl)) {
+                ++execute_errors;
+                if (first_error.empty()) {
+                    first_error = "Bind failed at row " + std::to_string(i) +
+                                  " (id_rc=" + std::to_string(bid) +
+                                  ", val_rc=" + std::to_string(bvl) + ")";
+                }
+                continue;
+            }
+
+            SQLRETURN exec_rc = SQLExecute(stmt.get_handle());
+            if (!SQL_SUCCEEDED(exec_rc)) {
+                ++execute_errors;
+                if (first_error.empty()) {
+                    first_error = "SQLExecute row " + std::to_string(i) +
+                                  " returned " + std::to_string(exec_rc);
+                }
+            }
+        }
+    } catch (const core::OdbcError& e) {
+        result.status = TestStatus::ERR;
+        result.actual = std::string("Loop threw: ") + e.what();
+        result.diagnostic = e.format_diagnostics();
+        drop_roundtrip_table();
+        result.duration = elapsed();
+        return result;
+    }
+
+    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+
+    RowVerification v = verify_rows_persisted(
+        "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kRowCount);
+
+    if (!v.ok) {
+        result.status = TestStatus::FAIL;
+        std::ostringstream actual;
+        actual << v.diagnostic
+               << " (count=" << v.actual_count
+               << ", fetched_rows=" << v.actual_values.size()
+               << ", execute_errors=" << execute_errors << ")";
+        result.actual = actual.str();
+        if (!first_error.empty()) result.diagnostic = first_error;
+        result.suggestion =
+            "Per-row rebind+execute lost rows — this is the Firebird #161 / "
+            "MySQL/MSSQL silent-corruption shape. Driver's parameter-binding "
+            "path is broken. Application-side workaround: bind once and reuse "
+            "the buffer instead of re-binding per row.";
+    } else {
+        if (execute_errors == 0) {
+            result.actual = "All " + std::to_string(kRowCount) +
+                            " per-row rebind+execute calls succeeded; "
+                            "verify_rows_persisted confirmed 100 rows.";
+        } else {
+            result.status = TestStatus::FAIL;
+            result.severity = Severity::WARNING;
+            result.actual = "Rows persisted but " +
+                            std::to_string(execute_errors) +
+                            " bind/execute calls reported errors (first: " +
+                            first_error + ")";
+        }
     }
 
     drop_roundtrip_table();
