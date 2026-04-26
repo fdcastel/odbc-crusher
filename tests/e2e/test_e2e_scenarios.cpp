@@ -24,6 +24,13 @@ protected:
 } // namespace
 
 // ── Mode=Success: baseline run produces a coherent report ──────────────────
+//
+// The mock at Mode=Success is the project's reference fixture — every probe
+// in the conformance suite must PASS against it. A FAIL/ERROR/SKIP here is
+// either (a) a real mock regression, or (b) a probe that started exercising
+// a mock code path the fixture doesn't yet cover. Either way it's a build
+// signal, not a "soft" report finding (§7.10: this canary is what should
+// have caught the §7.7-§7.9 regressions on day one).
 
 TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
     auto run = run_crusher(
@@ -37,8 +44,15 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
     const auto& summary = run.report["summary"];
     EXPECT_GT(summary.value("total_tests", 0), 100)
         << "Expected the full conformance suite to run";
-    EXPECT_GT(summary.value("passed", 0), 0)
-        << "At least some tests must pass against a healthy mock";
+    EXPECT_EQ(summary.value("failed", -1), 0)
+        << "Mode=Success is the reference fixture — every probe must PASS. "
+           "A FAIL means the mock can't satisfy a probe's contract; fix the "
+           "mock or update the probe.";
+    EXPECT_EQ(summary.value("errors", -1), 0)
+        << "Mode=Success must not produce probe ERRORs.";
+    EXPECT_EQ(summary.value("skipped", -1), 0)
+        << "Mode=Success must not SKIP probes — the mock is supposed to "
+           "satisfy every conformance check.";
 
     EXPECT_TRUE(run.report.contains("driver_info"));
     EXPECT_TRUE(run.report.contains("categories"));
