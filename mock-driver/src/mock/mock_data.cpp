@@ -3,6 +3,8 @@
 #include "../driver/config.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <functional>
 #include <sstream>
 #include <regex>
 #include <cmath>
@@ -402,6 +404,132 @@ InsertValuesResult parse_insert_values(const std::string& values_str) {
         }
     }
     return result;
+}
+
+// Build a row-predicate from an UPDATE/DELETE WHERE clause. Supports:
+//   <empty>                         → always-true
+//   <col> {= | != | <> | < | > | <= | >=} <literal>
+//   <col> IN (lit, lit, ...)
+// Anything else falls back to always-true so the executor can still
+// produce a sensible row count rather than silently miscounting. Mock
+// parser is deliberately simple — quoted strings containing comparison
+// operators (e.g. WHERE name = 'a<=b') will mis-parse; not a concern
+// for the probes that exist today.
+static std::function<bool(const MockRow&)> make_where_predicate(
+    const MockTable& table, const std::string& where_clause)
+{
+    auto trimmed = trim(where_clause);
+    if (trimmed.empty()) {
+        return [](const MockRow&) { return true; };
+    }
+
+    auto resolve_col = [&](const std::string& name) -> int {
+        std::string up = to_upper(name);
+        for (size_t ci = 0; ci < table.columns.size(); ++ci) {
+            if (to_upper(table.columns[ci].name) == up) return static_cast<int>(ci);
+        }
+        return -1;
+    };
+    auto parse_literal = [](const std::string& v) -> CellValue {
+        std::string s = trim(v);
+        if (s.size() >= 2 && s.front() == '\'' && s.back() == '\'') {
+            return s.substr(1, s.size() - 2);
+        }
+        try { return static_cast<long long>(std::stoll(s)); } catch (...) {}
+        try { return std::stod(s); } catch (...) {}
+        return s;
+    };
+
+    // ── IN (...) ──
+    {
+        auto upper = to_upper(trimmed);
+        auto in_pos = upper.find(" IN ");
+        if (in_pos != std::string::npos) {
+            int col_idx = resolve_col(trim(trimmed.substr(0, in_pos)));
+            auto paren_open = trimmed.find('(', in_pos);
+            auto paren_close = trimmed.rfind(')');
+            if (col_idx < 0 || paren_open == std::string::npos
+                || paren_close == std::string::npos || paren_close <= paren_open) {
+                return [](const MockRow&) { return true; };
+            }
+            auto val_list = split_expressions(
+                trimmed.substr(paren_open + 1, paren_close - paren_open - 1));
+            std::vector<CellValue> values;
+            for (auto& v : val_list) {
+                std::string tv = trim(v);
+                if (!tv.empty()) values.push_back(parse_literal(tv));
+            }
+            return [col_idx, values](const MockRow& row) -> bool {
+                if (col_idx >= static_cast<int>(row.size())) return false;
+                for (const auto& v : values) {
+                    if (row[col_idx] == v) return true;
+                }
+                return false;
+            };
+        }
+    }
+
+    // ── <col> OP <literal> ──
+    // Scan multi-char ops first so "<=" doesn't get split into "<".
+    enum Op { EQ = 0, NE, LT, GT, LE, GE };
+    struct Tok { const char* s; Op op; };
+    static constexpr Tok ops[] = {
+        {"<=", LE}, {">=", GE}, {"<>", NE}, {"!=", NE},
+        {"=",  EQ}, {"<",  LT}, {">",  GT},
+    };
+    for (const auto& tok : ops) {
+        auto pos = trimmed.find(tok.s);
+        if (pos == std::string::npos) continue;
+        std::string col_name = trim(trimmed.substr(0, pos));
+        std::string val_str  = trim(trimmed.substr(pos + std::strlen(tok.s)));
+        if (col_name.empty() || val_str.empty()) continue;
+        int col_idx = resolve_col(col_name);
+        if (col_idx < 0) return [](const MockRow&) { return true; };
+        CellValue lit = parse_literal(val_str);
+        Op op = tok.op;
+        return [col_idx, lit, op](const MockRow& row) -> bool {
+            if (col_idx >= static_cast<int>(row.size())) return false;
+            const CellValue& cell = row[col_idx];
+            if (op == EQ) return cell == lit;
+            if (op == NE) return !(cell == lit);
+            // Numeric compare when both sides project to a number.
+            auto to_num = [](const CellValue& c, double& out) {
+                if (std::holds_alternative<long long>(c)) {
+                    out = static_cast<double>(std::get<long long>(c)); return true;
+                }
+                if (std::holds_alternative<double>(c)) {
+                    out = std::get<double>(c); return true;
+                }
+                return false;
+            };
+            double l = 0, r = 0;
+            if (to_num(cell, l) && to_num(lit, r)) {
+                switch (op) {
+                    case LT: return l <  r;
+                    case GT: return l >  r;
+                    case LE: return l <= r;
+                    case GE: return l >= r;
+                    default: return false;
+                }
+            }
+            // String compare when both sides are strings.
+            if (std::holds_alternative<std::string>(cell)
+                && std::holds_alternative<std::string>(lit)) {
+                const auto& a = std::get<std::string>(cell);
+                const auto& b = std::get<std::string>(lit);
+                switch (op) {
+                    case LT: return a <  b;
+                    case GT: return a >  b;
+                    case LE: return a <= b;
+                    case GE: return a >= b;
+                    default: return false;
+                }
+            }
+            return false;
+        };
+    }
+
+    return [](const MockRow&) { return true; };
 }
 
 // Parse column definitions for CREATE TABLE
@@ -1052,7 +1180,8 @@ ParsedQuery parse_sql(const std::string& sql) {
         while (table_end < (int)upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != ';') ++table_end;
         result.table_name = trimmed.substr(table_start, table_end - table_start);
         result.is_valid = true;
-        result.affected_rows = 1;
+        // affected_rows is computed by the executor walking MockCatalog
+        // — no hard-coded stub here.
         auto where_pos = upper.find("WHERE");
         if (where_pos != std::string::npos) result.where_clause = trimmed.substr(where_pos + 5);
     } else if (upper.find("DELETE") == 0) {
@@ -1063,9 +1192,18 @@ ParsedQuery parse_sql(const std::string& sql) {
             while (table_start < upper.length() && std::isspace(upper[table_start])) ++table_start;
             auto table_end = table_start;
             while (table_end < upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != ';') ++table_end;
+            // Stop the table-name slice at the start of WHERE, not just whitespace,
+            // so `result.table_name` doesn't accidentally absorb the predicate.
+            auto where_pos = upper.find("WHERE", table_start);
+            if (where_pos != std::string::npos && where_pos < table_end) table_end = where_pos;
+            // Trim trailing whitespace introduced by the WHERE adjustment.
+            while (table_end > table_start && std::isspace(upper[table_end - 1])) --table_end;
             result.table_name = trimmed.substr(table_start, table_end - table_start);
             result.is_valid = true;
-            result.affected_rows = 1;
+            // affected_rows is computed by the executor (count + erase).
+            if (where_pos != std::string::npos) {
+                result.where_clause = trimmed.substr(where_pos + 5);
+            }
         } else {
             result.error_message = "DELETE without FROM clause";
         }
@@ -1445,11 +1583,25 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             break;
         }
         
-        case ParsedQuery::QueryType::Update:
-        case ParsedQuery::QueryType::Delete:
+        case ParsedQuery::QueryType::Update: {
+            // SQLRowCount must reflect the real number of matched rows
+            // (the parser used to hard-code 1; that was wrong even for
+            // the simple no-WHERE case the §1.8 probes exercise). The
+            // SET clause itself isn't applied — the mock has no SET
+            // evaluator, and no probe today reads back UPDATEd values.
             result.success = true;
-            result.affected_rows = query.affected_rows;
+            auto pred = make_where_predicate(*table, query.where_clause);
+            result.affected_rows = static_cast<long long>(
+                catalog.count_matching_rows(query.table_name, pred));
             break;
+        }
+        case ParsedQuery::QueryType::Delete: {
+            result.success = true;
+            auto pred = make_where_predicate(*table, query.where_clause);
+            result.affected_rows = static_cast<long long>(
+                catalog.erase_matching_rows(query.table_name, pred));
+            break;
+        }
             
         default:
             result.success = false;

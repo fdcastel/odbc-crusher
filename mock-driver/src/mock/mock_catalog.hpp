@@ -140,6 +140,20 @@ public:
     // vector when the table has no inserted data.
     std::vector<MockRow> snapshot_inserted_rows(const std::string& table_name) const;
 
+    // Counts rows in `table_name` for which `predicate(row)` returns true.
+    // Used by UPDATE/DELETE executors to compute SQLRowCount honestly
+    // (instead of the previous hard-coded `1`). Predicate runs under the
+    // catalog mutex — keep it side-effect-free.
+    size_t count_matching_rows(
+        const std::string& table_name,
+        const std::function<bool(const MockRow&)>& predicate) const;
+
+    // Erases rows in `table_name` for which `predicate(row)` returns true,
+    // returning the number erased. Used by the DELETE executor.
+    size_t erase_matching_rows(
+        const std::string& table_name,
+        const std::function<bool(const MockRow&)>& predicate);
+
     // Column operations
     std::vector<MockColumn> get_columns(const std::string& table_name,
                                          const std::string& column_pattern = "%") const;

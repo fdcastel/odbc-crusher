@@ -341,6 +341,35 @@ void MockCatalog::clear_inserted_data(const std::string& table_name) {
     inserted_data_.erase(to_upper(table_name));
 }
 
+size_t MockCatalog::count_matching_rows(
+    const std::string& table_name,
+    const std::function<bool(const MockRow&)>& predicate) const
+{
+    std::lock_guard<std::mutex> g(mu_);
+    auto it = inserted_data_.find(to_upper(table_name));
+    if (it == inserted_data_.end()) return 0;
+    size_t n = 0;
+    for (const auto& row : it->second) {
+        if (predicate(row)) ++n;
+    }
+    return n;
+}
+
+size_t MockCatalog::erase_matching_rows(
+    const std::string& table_name,
+    const std::function<bool(const MockRow&)>& predicate)
+{
+    std::lock_guard<std::mutex> g(mu_);
+    auto it = inserted_data_.find(to_upper(table_name));
+    if (it == inserted_data_.end()) return 0;
+    auto& rows = it->second;
+    auto first_keep = std::remove_if(rows.begin(), rows.end(),
+        [&](const MockRow& r) { return predicate(r); });
+    size_t erased = static_cast<size_t>(rows.end() - first_keep);
+    rows.erase(first_keep, rows.end());
+    return erased;
+}
+
 std::vector<MockColumn> MockCatalog::get_columns(const std::string& table_name,
                                                    const std::string& column_pattern) const {
     std::vector<MockColumn> result;
