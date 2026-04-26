@@ -357,17 +357,21 @@ jobs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+      # Extract into a sibling staging dir, not mock-driver/, because
+      # actions/checkout already populated mock-driver/install/register.ps1
+      # — gh run download refuses to overwrite and exits 1. Mirrors the
+      # mock-driver-artifact/ layout used by ci.yml's build-and-test job.
       run: |
         gh run download "$MASTER_CI_RUN_ID" --repo "${{ github.repository }}" \
-          -n mock-odbc-driver-Windows-Release -D mock-driver
-        ls -la mock-driver/build/Release/
+          -n mock-odbc-driver-Windows-Release -D mock-driver-artifact
+        ls -la mock-driver-artifact/build/Release/
 
     - name: Register Mock Driver
       shell: pwsh
       run: |
         $driverDest = "C:\Windows\System32\mockodbc.dll"
-        Copy-Item mock-driver/build/Release/mockodbc.dll -Destination $driverDest
-        & mock-driver/install/register.ps1 -DriverPath $driverDest
+        Copy-Item mock-driver-artifact/build/Release/mockodbc.dll -Destination $driverDest
+        & mock-driver-artifact/install/register.ps1 -DriverPath $driverDest
 
     - name: Record actual installed version (provenance for triage)
       shell: bash
