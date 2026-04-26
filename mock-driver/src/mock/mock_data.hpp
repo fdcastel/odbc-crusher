@@ -59,9 +59,19 @@ struct ParsedQuery {
     std::vector<ColumnDef> create_columns;
 
     // For INSERT: parsed values
+    //
+    // Multi-tuple INSERTs (`VALUES (…),(…),…`) are stored flat: every
+    // tuple's values are appended in order, and `insert_row_count`
+    // records how many tuples there are. The executor slices the flat
+    // vector into rows by `insert_values.size() / insert_row_count`.
+    // Linear `?`-marker numbering across all tuples matches what
+    // SQLBindParameter expects (param 1 is the first marker, param 2
+    // the second, …), so substitute_params doesn't need to know about
+    // tuple boundaries.
     std::vector<CellValue> insert_values;
     std::vector<bool> insert_param_markers;  // true for each insert_value that was a '?' marker
     std::vector<std::string> insert_columns;
+    size_t insert_row_count = 1;             // ≥1; number of value tuples
 
     // Parameter count
     int param_count = 0;

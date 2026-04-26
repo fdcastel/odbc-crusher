@@ -380,6 +380,59 @@ struct InsertValuesResult {
     std::vector<bool> param_markers;  // parallel: true when the value was '?'
 };
 
+// Split a VALUES clause's interior (the substring between the first `(`
+// after VALUES and the last `)`) into per-tuple slices.
+//
+// For single-tuple `(a, b)` the slice we get is `a, b` and we never see
+// a `)` at depth 1 — the loop falls through with depth==1 and we emit
+// the one tuple verbatim.
+//
+// For multi-tuple `(a, b), (c, d)` the slice is `a, b), (c, d` — we
+// track paren depth (start at 1 because the leading `(` was stripped),
+// pop on `)` back to depth 0, skip the inter-tuple `,`+whitespace, and
+// re-enter at the next `(`. Single-quoted strings are honoured so a
+// literal like `WHERE name = 'a),(b'` doesn't get sliced inside the
+// quote (mock parser limitation: braces and double quotes are not
+// honoured — no probe needs them).
+static std::vector<std::string> split_value_tuples(const std::string& slice) {
+    std::vector<std::string> tuples;
+    std::string cur;
+    int depth = 1;
+    bool in_quote = false;
+    for (char c : slice) {
+        if (in_quote) {
+            cur += c;
+            if (c == '\'') in_quote = false;
+            continue;
+        }
+        if (depth == 0) {
+            // Inter-tuple gap: skip whitespace and ',' until next '('.
+            if (c == '(') { depth = 1; }
+            continue;
+        }
+        if (c == '\'') { in_quote = true; cur += c; continue; }
+        if (c == '(') { depth++; cur += c; continue; }
+        if (c == ')') {
+            if (depth == 1) {
+                tuples.push_back(trim(cur));
+                cur.clear();
+                depth = 0;
+                continue;
+            }
+            depth--;
+            cur += c;
+            continue;
+        }
+        cur += c;
+    }
+    if (depth == 1) {
+        // Single-tuple fall-through (caller stripped the trailing `)`).
+        auto t = trim(cur);
+        if (!t.empty()) tuples.push_back(t);
+    }
+    return tuples;
+}
+
 InsertValuesResult parse_insert_values(const std::string& values_str) {
     InsertValuesResult result;
     auto exprs = split_expressions(values_str);
@@ -1156,19 +1209,28 @@ ParsedQuery parse_sql(const std::string& sql) {
                 }
             }
             
-            // Parse VALUES
+            // Parse VALUES — supports both single-tuple `(…)` and
+            // multi-tuple `(…),(…),…`. Tuples are concatenated into the
+            // flat insert_values vector and `insert_row_count` records
+            // how many tuples there were; the executor slices.
             if (values_pos != std::string::npos) {
                 auto val_open = trimmed.find('(', values_pos);
                 auto val_close = trimmed.rfind(')');
                 if (val_open != std::string::npos && val_close != std::string::npos && val_close > val_open) {
-                    auto ivr = parse_insert_values(trimmed.substr(val_open + 1, val_close - val_open - 1));
-                    result.insert_values = std::move(ivr.values);
-                    result.insert_param_markers = std::move(ivr.param_markers);
+                    auto slice = trimmed.substr(val_open + 1, val_close - val_open - 1);
+                    auto tuples = split_value_tuples(slice);
+                    if (tuples.empty()) tuples.push_back(slice);
+                    result.insert_row_count = tuples.size();
+                    for (const auto& tup : tuples) {
+                        auto ivr = parse_insert_values(tup);
+                        for (auto& v : ivr.values) result.insert_values.push_back(std::move(v));
+                        for (bool m : ivr.param_markers) result.insert_param_markers.push_back(m);
+                    }
                 }
             }
-            
+
             result.is_valid = true;
-            result.affected_rows = 1;
+            result.affected_rows = static_cast<long long>(result.insert_row_count);
         } else {
             result.error_message = "INSERT without INTO clause";
         }
@@ -1557,29 +1619,75 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
         }
         
         case ParsedQuery::QueryType::Insert: {
+            // Multi-tuple `INSERT … VALUES (…),(…),…` lands here as a
+            // flat insert_values vector with insert_row_count tuples.
+            // We slice by stride and emit one MockRow per tuple.
             result.success = true;
-            result.affected_rows = query.affected_rows;
-            if (!query.insert_values.empty()) {
+            const size_t row_count = std::max<size_t>(query.insert_row_count, 1);
+            const size_t total_vals = query.insert_values.size();
+            const size_t stride = (row_count > 0 && total_vals > 0)
+                ? total_vals / row_count : 0;
+            // Defensive: if the tuple count and value count don't divide evenly
+            // we fall back to a single-row insert (shouldn't happen with a
+            // well-formed VALUES clause).
+            if (stride == 0 || stride * row_count != total_vals) {
+                if (!query.insert_values.empty()) {
+                    MockRow row;
+                    if (!query.insert_columns.empty()
+                        && query.insert_columns.size() == query.insert_values.size()) {
+                        row.resize(table->columns.size(), std::monostate{});
+                        for (size_t i = 0; i < query.insert_columns.size(); ++i) {
+                            for (size_t j = 0; j < table->columns.size(); ++j) {
+                                if (to_upper(table->columns[j].name) == query.insert_columns[i]) {
+                                    row[j] = query.insert_values[i];
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        row = query.insert_values;
+                        while (row.size() < table->columns.size())
+                            row.push_back(std::monostate{});
+                    }
+                    auto corruption = BehaviorController::instance().config().silent_corruption;
+                    if (apply_silent_corruption(row, *table, corruption)) {
+                        catalog.insert_row(to_upper(query.table_name), std::move(row));
+                    }
+                }
+                result.affected_rows = static_cast<long long>(query.insert_row_count);
+                break;
+            }
+
+            const auto corruption = BehaviorController::instance().config().silent_corruption;
+            long long inserted = 0;
+            for (size_t r = 0; r < row_count; ++r) {
+                std::vector<CellValue> tuple_values(
+                    query.insert_values.begin() + r * stride,
+                    query.insert_values.begin() + (r + 1) * stride);
+
                 MockRow row;
-                if (!query.insert_columns.empty() && query.insert_columns.size() == query.insert_values.size()) {
+                if (!query.insert_columns.empty()
+                    && query.insert_columns.size() == tuple_values.size()) {
                     row.resize(table->columns.size(), std::monostate{});
                     for (size_t i = 0; i < query.insert_columns.size(); ++i) {
                         for (size_t j = 0; j < table->columns.size(); ++j) {
                             if (to_upper(table->columns[j].name) == query.insert_columns[i]) {
-                                row[j] = query.insert_values[i];
+                                row[j] = tuple_values[i];
                                 break;
                             }
                         }
                     }
                 } else {
-                    row = query.insert_values;
-                    while (row.size() < table->columns.size()) row.push_back(std::monostate{});
+                    row = std::move(tuple_values);
+                    while (row.size() < table->columns.size())
+                        row.push_back(std::monostate{});
                 }
-                auto corruption = BehaviorController::instance().config().silent_corruption;
                 if (apply_silent_corruption(row, *table, corruption)) {
                     catalog.insert_row(to_upper(query.table_name), std::move(row));
+                    ++inserted;
                 }
             }
+            result.affected_rows = inserted;
             break;
         }
         
