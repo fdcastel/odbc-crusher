@@ -114,6 +114,8 @@ add_executable(mock-odbc-tests
     tests/test_error_injection.cpp
     tests/test_performance.cpp
     tests/test_silent_corruption.cpp
+    tests/test_param_binding.cpp
+    tests/test_dml.cpp
     ${MOCK_DRIVER_CORE_SOURCES}
 )
 
