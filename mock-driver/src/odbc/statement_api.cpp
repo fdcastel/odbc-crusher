@@ -18,16 +18,33 @@ static SQLLEN c_type_element_size(SQLSMALLINT value_type, SQLLEN buffer_length) 
     switch (value_type) {
         case SQL_C_SLONG:
         case SQL_C_LONG:
+        case SQL_C_ULONG:
             return static_cast<SQLLEN>(sizeof(SQLINTEGER));
         case SQL_C_SBIGINT:
+        case SQL_C_UBIGINT:
             return static_cast<SQLLEN>(sizeof(SQLBIGINT));
         case SQL_C_SSHORT:
+        case SQL_C_USHORT:
             return static_cast<SQLLEN>(sizeof(SQLSMALLINT));
+        case SQL_C_STINYINT:
+        case SQL_C_UTINYINT:
+        case SQL_C_BIT:
+            return 1;
         case SQL_C_DOUBLE:
             return static_cast<SQLLEN>(sizeof(SQLDOUBLE));
         case SQL_C_FLOAT:
             return static_cast<SQLLEN>(sizeof(SQLREAL));
+        case SQL_C_NUMERIC:
+            return static_cast<SQLLEN>(sizeof(SQL_NUMERIC_STRUCT));
+        case SQL_C_TYPE_DATE:
+            return static_cast<SQLLEN>(sizeof(DATE_STRUCT));
+        case SQL_C_TYPE_TIME:
+            return static_cast<SQLLEN>(sizeof(TIME_STRUCT));
+        case SQL_C_TYPE_TIMESTAMP:
+            return static_cast<SQLLEN>(sizeof(TIMESTAMP_STRUCT));
         case SQL_C_CHAR:
+        case SQL_C_WCHAR:
+        case SQL_C_BINARY:
         default:
             return buffer_length > 0 ? buffer_length : 1;
     }
@@ -79,14 +96,64 @@ static CellValue read_param_value(
         case SQL_C_SLONG:
         case SQL_C_LONG:
             return static_cast<long long>(*reinterpret_cast<const SQLINTEGER*>(data_ptr));
+        case SQL_C_ULONG:
+            return static_cast<long long>(*reinterpret_cast<const SQLUINTEGER*>(data_ptr));
         case SQL_C_SBIGINT:
             return static_cast<long long>(*reinterpret_cast<const SQLBIGINT*>(data_ptr));
+        case SQL_C_UBIGINT:
+            // CellValue's int variant is 64-bit signed; values >= 2^63 wrap.
+            // No probe binds such magnitudes today.
+            return static_cast<long long>(*reinterpret_cast<const SQLUBIGINT*>(data_ptr));
         case SQL_C_SSHORT:
             return static_cast<long long>(*reinterpret_cast<const SQLSMALLINT*>(data_ptr));
+        case SQL_C_USHORT:
+            return static_cast<long long>(*reinterpret_cast<const SQLUSMALLINT*>(data_ptr));
+        case SQL_C_STINYINT:
+            return static_cast<long long>(*reinterpret_cast<const SQLSCHAR*>(data_ptr));
+        case SQL_C_UTINYINT:
+            return static_cast<long long>(*reinterpret_cast<const SQLCHAR*>(data_ptr));
+        case SQL_C_BIT:
+            return static_cast<long long>(*reinterpret_cast<const SQLCHAR*>(data_ptr) ? 1 : 0);
         case SQL_C_DOUBLE:
             return static_cast<double>(*reinterpret_cast<const SQLDOUBLE*>(data_ptr));
         case SQL_C_FLOAT:
             return static_cast<double>(*reinterpret_cast<const SQLREAL*>(data_ptr));
+        case SQL_C_TYPE_DATE: {
+            const auto* d = reinterpret_cast<const DATE_STRUCT*>(data_ptr);
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%04d-%02u-%02u",
+                          d->year, d->month, d->day);
+            return std::string(buf);
+        }
+        case SQL_C_TYPE_TIME: {
+            const auto* t = reinterpret_cast<const TIME_STRUCT*>(data_ptr);
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%02u:%02u:%02u",
+                          t->hour, t->minute, t->second);
+            return std::string(buf);
+        }
+        case SQL_C_TYPE_TIMESTAMP: {
+            const auto* ts = reinterpret_cast<const TIMESTAMP_STRUCT*>(data_ptr);
+            char buf[40];
+            if (ts->fraction == 0) {
+                std::snprintf(buf, sizeof(buf), "%04d-%02u-%02u %02u:%02u:%02u",
+                              ts->year, ts->month, ts->day,
+                              ts->hour, ts->minute, ts->second);
+            } else {
+                std::snprintf(buf, sizeof(buf), "%04d-%02u-%02u %02u:%02u:%02u.%09u",
+                              ts->year, ts->month, ts->day,
+                              ts->hour, ts->minute, ts->second,
+                              static_cast<unsigned>(ts->fraction));
+            }
+            return std::string(buf);
+        }
+        case SQL_C_BINARY: {
+            // Raw bytes: indicator carries the byte length; SQL_NTS is
+            // not meaningful here, so treat negative/SQL_NTS as buffer_length.
+            SQLLEN len = (ind_ptr && *ind_ptr >= 0) ? *ind_ptr : pb.buffer_length;
+            if (len < 0) len = 0;
+            return std::string(data_ptr, static_cast<size_t>(len));
+        }
         case SQL_C_NUMERIC: {
             // Read SQL_NUMERIC_STRUCT and convert to double
             const SQL_NUMERIC_STRUCT* ns = reinterpret_cast<const SQL_NUMERIC_STRUCT*>(data_ptr);
@@ -169,10 +236,20 @@ static void write_output_to_binding(
                     static_cast<SQLINTEGER>(v);
                 if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLINTEGER);
                 break;
+            case SQL_C_ULONG:
+                *static_cast<SQLUINTEGER*>(pb.param_value) =
+                    static_cast<SQLUINTEGER>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLUINTEGER);
+                break;
             case SQL_C_SBIGINT:
                 *static_cast<SQLBIGINT*>(pb.param_value) =
                     static_cast<SQLBIGINT>(v);
                 if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLBIGINT);
+                break;
+            case SQL_C_UBIGINT:
+                *static_cast<SQLUBIGINT*>(pb.param_value) =
+                    static_cast<SQLUBIGINT>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLUBIGINT);
                 break;
             case SQL_C_SSHORT: {
                 auto sv = static_cast<SQLSMALLINT>(v);
@@ -180,6 +257,31 @@ static void write_output_to_binding(
                 if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLSMALLINT);
                 break;
             }
+            case SQL_C_USHORT:
+                *static_cast<SQLUSMALLINT*>(pb.param_value) =
+                    static_cast<SQLUSMALLINT>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLUSMALLINT);
+                break;
+            case SQL_C_STINYINT:
+                *static_cast<SQLSCHAR*>(pb.param_value) =
+                    static_cast<SQLSCHAR>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLSCHAR);
+                break;
+            case SQL_C_UTINYINT:
+                *static_cast<SQLCHAR*>(pb.param_value) =
+                    static_cast<SQLCHAR>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLCHAR);
+                break;
+            case SQL_C_BIT:
+                *static_cast<SQLCHAR*>(pb.param_value) =
+                    static_cast<SQLCHAR>(v ? 1 : 0);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLCHAR);
+                break;
+            case SQL_C_FLOAT:
+                *static_cast<SQLREAL*>(pb.param_value) =
+                    static_cast<SQLREAL>(v);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLREAL);
+                break;
             case SQL_C_DOUBLE:
                 *static_cast<SQLDOUBLE*>(pb.param_value) =
                     static_cast<SQLDOUBLE>(v);
@@ -219,11 +321,15 @@ static void write_output_to_binding(
     if (std::holds_alternative<long long>(value)) {
         write_int(std::get<long long>(value));
     } else if (std::holds_alternative<double>(value)) {
+        const double dv = std::get<double>(value);
         if (pb.value_type == SQL_C_DOUBLE) {
-            *static_cast<SQLDOUBLE*>(pb.param_value) = std::get<double>(value);
+            *static_cast<SQLDOUBLE*>(pb.param_value) = dv;
             if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLDOUBLE);
+        } else if (pb.value_type == SQL_C_FLOAT) {
+            *static_cast<SQLREAL*>(pb.param_value) = static_cast<SQLREAL>(dv);
+            if (pb.str_len_or_ind) *pb.str_len_or_ind = sizeof(SQLREAL);
         } else if (pb.value_type == SQL_C_CHAR || pb.value_type == SQL_C_WCHAR) {
-            write_string(std::to_string(std::get<double>(value)));
+            write_string(std::to_string(dv));
         }
     } else if (std::holds_alternative<std::string>(value)) {
         write_string(std::get<std::string>(value));
