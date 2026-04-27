@@ -368,8 +368,24 @@ jobs:
         Import-Module PSFirebird
 
         # Stage Firebird 5.0.3 under a stable path so subsequent steps
-        # can compute LD_LIBRARY_PATH for libfbclient.so.
-        $fb = New-FirebirdEnvironment -Version '5.0.3' -Path '/tmp/firebird5'
+        # can compute LD_LIBRARY_PATH for libfbclient.so. Retry up to 3x —
+        # PSFirebird's GitHub API release lookup is intermittently flaky on
+        # GitHub-hosted runners (returns an empty/stale release list and
+        # Where-Object filters everything out, surfacing as "Could not find
+        # Firebird release for version 5.0.3 on GitHub").
+        $fb = $null
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+          try {
+            $fb = New-FirebirdEnvironment -Version '5.0.3' -Path '/tmp/firebird5' -Force
+            break
+          } catch {
+            Write-Host "PSFirebird setup attempt $attempt failed: $_"
+            if ($attempt -lt 3) {
+              Remove-Item -Recurse -Force '/tmp/firebird5' -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 15
+            } else { throw }
+          }
+        }
 
         # TCP connections need SYSDBA's password set in the security db.
         # Authenticate as SYSDBA up-front so the embedded isql call has
