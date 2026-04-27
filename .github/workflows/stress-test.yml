@@ -433,15 +433,25 @@ jobs:
         ss -ltn || true
         exit 1
 
-    - name: Install Firebird ODBC driver (download + register)
+    - name: Install Firebird ODBC driver (PATCHED — from PR #297 CI artifact)
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
+        # Throwaway verification — pulls libOdbcFb.so from the linux-x64-binaries
+        # artifact of fdcastel/firebird-odbc-driver run 25024458735 (PR #297,
+        # null-guard fix for SQLCopyDesc SEGV). Revert to the manifest URL
+        # before merging back to master.
         mkdir firebird_odbc
-        cd firebird_odbc
-        curl --no-progress-meter -LO "${DRIVER_URL}"
-        tar xzf firebird-odbc-driver-*-linux-x64.tar.gz
-        DRIVER_PATH=$(readlink -f "${DRIVER_LIB_NAME}")
-        cd ..
-        echo "Firebird ODBC driver ${DRIVER_VERSION}: ${DRIVER_PATH}"
+        gh run download 25024458735 --repo fdcastel/firebird-odbc-driver \
+          -n linux-x64-binaries -D firebird_odbc
+        ls -laR firebird_odbc
+        DRIVER_PATH=$(find firebird_odbc -name "${DRIVER_LIB_NAME}" -type f | head -1 | xargs readlink -f)
+        if [ -z "$DRIVER_PATH" ] || [ ! -f "$DRIVER_PATH" ]; then
+          echo "::error::Could not find ${DRIVER_LIB_NAME} in PR artifact"
+          exit 1
+        fi
+        chmod +x "$DRIVER_PATH"
+        echo "Patched Firebird ODBC driver: ${DRIVER_PATH}"
         {
           echo "[${DRIVER_SECTION}]"
           echo "Description = Firebird ODBC Driver"
@@ -453,10 +463,7 @@ jobs:
 
     - name: Record actual installed version (provenance for triage)
       run: |
-        # The release URL pins the exact tag; the .tar.gz has no version
-        # string we can extract reliably. Record the manifest version
-        # verbatim — same convention as duckdb / clickhouse jobs.
-        echo "$DRIVER_VERSION" > actual_version.txt
+        echo "PATCHED-PR297-${DRIVER_VERSION}" > actual_version.txt
 
     - uses: ./.github/actions/run-crusher
       with:
