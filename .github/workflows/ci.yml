@@ -36,7 +36,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Linux pinned to ubuntu-22.04 (jammy) so the produced .so runs
+        # forward-compatibly on both jammy and noble runners. ubuntu-latest
+        # (noble, glibc 2.39 / libstdc++ GLIBCXX_3.4.32) emits binaries
+        # that won't load on jammy — and PSFirebird only works on jammy
+        # (§7.6 firebird stress-test depends on this).
+        os: [ubuntu-22.04, windows-latest, macos-latest]
         build_type: [Debug, Release]
 
     steps:
@@ -132,7 +137,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # See build-mock-driver above — Linux pinned to jammy for
+        # forward-compatible binaries. The downloaded mock-driver artifact
+        # name (mock-odbc-driver-Linux-Release) doesn't carry the runner
+        # version, so the matrix slot here MUST match the build-mock-driver
+        # slot to avoid a glibc-version mismatch when loading the .so.
+        os: [ubuntu-22.04, windows-latest, macos-latest]
         build_type: [Debug, Release]
 
     steps:
