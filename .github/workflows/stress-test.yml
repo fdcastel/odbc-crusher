@@ -382,13 +382,13 @@ jobs:
         # can dlopen libfbclient.so at connect time. PSFirebird stages
         # libfbclient under <env>/lib (Linux); fall back to a glob just
         # in case the layout shifts in a future PSFirebird release.
-        $libDir = if (Test-Path "$($fb.HomePath)/lib/libfbclient.so") {
-          "$($fb.HomePath)/lib"
+        $libDir = if (Test-Path "$($fb.Path)/lib/libfbclient.so") {
+          "$($fb.Path)/lib"
         } else {
-          (Get-ChildItem -Path $fb.HomePath -Recurse -Filter 'libfbclient.so*' |
+          (Get-ChildItem -Path $fb.Path -Recurse -Filter 'libfbclient.so*' |
             Select-Object -First 1).Directory.FullName
         }
-        if (-not $libDir) { throw "Could not locate libfbclient.so under $($fb.HomePath)" }
+        if (-not $libDir) { throw "Could not locate libfbclient.so under $($fb.Path)" }
         "FIREBIRD_LIB_DIR=$libDir" | Out-File -Append $env:GITHUB_ENV
         Write-Host "FIREBIRD_LIB_DIR=$libDir"
 
