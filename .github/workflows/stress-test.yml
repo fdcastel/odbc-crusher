@@ -31,6 +31,7 @@ on:
           - mysql
           - duckdb
           - clickhouse
+          - firebird
           - mock-driver
 
 jobs:
@@ -317,6 +318,117 @@ jobs:
         artifact-name: clickhouse
         conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.CLICKHOUSE_DRIVER_LIB }}
+
+  # ── Firebird on Linux ───────────────────────────────────────
+  # Driver / version / source: see `.github/drivers.json` → drivers.firebird
+  # Server brought up via PSFirebird (PowerShell module that vendors
+  # Firebird binaries) on port 3050 with SYSDBA/masterkey.
+  firebird:
+    if: ${{ inputs.driver == 'all' || inputs.driver == 'firebird' }}
+    name: Firebird (Linux)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      run: |
+        DRIVER_VERSION=$(jq -er '.drivers.firebird.version' .github/drivers.json)
+        DRIVER_URL=$(jq -er '.drivers.firebird.install.url' .github/drivers.json)
+        DRIVER_LIB=$(jq -er '.drivers.firebird.install.library_name' .github/drivers.json)
+        DRIVER_SECTION=$(jq -er '.drivers.firebird.install.driver_section' .github/drivers.json)
+        CONN=$(jq -er '.drivers.firebird.conn_string' .github/drivers.json)
+        {
+          echo "DRIVER_VERSION=$DRIVER_VERSION"
+          echo "DRIVER_URL=$DRIVER_URL"
+          echo "DRIVER_LIB_NAME=$DRIVER_LIB"
+          echo "DRIVER_SECTION=$DRIVER_SECTION"
+          echo "CONN_STRING=$CONN"
+        } >> "$GITHUB_ENV"
+
+    - name: Install unixODBC
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst
+
+    - name: Bring up Firebird via PSFirebird (5.0.3 on port 3050)
+      shell: pwsh
+      run: |
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        Install-Module -Name PSFirebird -Force -Scope CurrentUser
+        Import-Module PSFirebird
+
+        # Stage Firebird 5.0.3 under a stable path so subsequent steps
+        # can compute LD_LIBRARY_PATH for libfbclient.so.
+        $fb = New-FirebirdEnvironment -Version '5.0.3' -Path '/tmp/firebird5'
+
+        # TCP connections require SYSDBA to exist in the security db;
+        # create it via an embedded connection BEFORE starting the server.
+        $db = New-FirebirdDatabase -Database '/tmp/crusher.fdb' -Environment $fb
+        "CREATE USER SYSDBA PASSWORD 'masterkey';" |
+          Invoke-FirebirdIsql -Database $db -Environment $fb
+
+        $instance = Start-FirebirdInstance -Port 3050 -Environment $fb
+        Write-Host "Firebird PID: $($instance.Process.Id)  Port: $($instance.Port)"
+
+        # Expose the Firebird lib dir to the next step so libOdbcFb.so
+        # can dlopen libfbclient.so at connect time. PSFirebird stages
+        # libfbclient under <env>/lib (Linux); fall back to a glob just
+        # in case the layout shifts in a future PSFirebird release.
+        $libDir = if (Test-Path "$($fb.HomePath)/lib/libfbclient.so") {
+          "$($fb.HomePath)/lib"
+        } else {
+          (Get-ChildItem -Path $fb.HomePath -Recurse -Filter 'libfbclient.so*' |
+            Select-Object -First 1).Directory.FullName
+        }
+        if (-not $libDir) { throw "Could not locate libfbclient.so under $($fb.HomePath)" }
+        "FIREBIRD_LIB_DIR=$libDir" | Out-File -Append $env:GITHUB_ENV
+        Write-Host "FIREBIRD_LIB_DIR=$libDir"
+
+    - name: Smoke-test Firebird is listening on 3050
+      run: |
+        # Verify the detached firebird process is reachable before we
+        # waste a 100-test crusher run on a connection-refused failure.
+        for i in 1 2 3 4 5; do
+          if ss -ltn | grep -q ':3050'; then
+            echo "Firebird is listening on 3050 (attempt $i)"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "::error::Firebird not listening on 3050 after 5s"
+        ss -ltn || true
+        exit 1
+
+    - name: Install Firebird ODBC driver (download + register)
+      run: |
+        mkdir firebird_odbc
+        cd firebird_odbc
+        curl --no-progress-meter -LO "${DRIVER_URL}"
+        tar xzf firebird-odbc-driver-*-linux-x64.tar.gz
+        DRIVER_PATH=$(readlink -f "${DRIVER_LIB_NAME}")
+        cd ..
+        echo "Firebird ODBC driver ${DRIVER_VERSION}: ${DRIVER_PATH}"
+        {
+          echo "[${DRIVER_SECTION}]"
+          echo "Description = Firebird ODBC Driver"
+          echo "Driver = ${DRIVER_PATH}"
+          echo "Setup = ${DRIVER_PATH}"
+          echo "FileUsage = 1"
+        } | sudo tee -a /etc/odbcinst.ini
+        cat /etc/odbcinst.ini
+
+    - name: Record actual installed version (provenance for triage)
+      run: |
+        # The release URL pins the exact tag; the .tar.gz has no version
+        # string we can extract reliably. Record the manifest version
+        # verbatim — same convention as duckdb / clickhouse jobs.
+        echo "$DRIVER_VERSION" > actual_version.txt
+
+    - uses: ./.github/actions/run-crusher
+      with:
+        artifact-name: firebird
+        conn-string: ${{ env.CONN_STRING }}
+        ld-library-path: ${{ env.FIREBIRD_LIB_DIR }}
 
   # ── Mock Driver on Windows ──────────────────────────────────
   # Driver / conn-string: see `.github/drivers.json` → drivers["mock-driver"]

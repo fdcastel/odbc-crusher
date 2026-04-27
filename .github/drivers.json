@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "_about": "Manifest of ODBC drivers under stress-test. Single source of truth for (a) the version of each driver to install in CI, (b) the URL/apt package to install it from, and (c) the upstream git repo + tag whose source matches that binary version. Consumed by .github/workflows/stress-test.yml at runtime via `jq` and by the /triage-driver skill at analysis time. apt_version strings are formatted for `apt-get install pkg=version`; if Ubuntu drops a pinned version from its repos the workflow will fail loudly at the install step and this file must be updated. The `version` field is the upstream form (what SQLGetInfo reports); apt_version is the Debian-formatted form. Firebird is intentionally absent until its driver refactor lands.",
+  "_about": "Manifest of ODBC drivers under stress-test. Single source of truth for (a) the version of each driver to install in CI, (b) the URL/apt package to install it from, and (c) the upstream git repo + tag whose source matches that binary version. Consumed by .github/workflows/stress-test.yml at runtime via `jq` and by the /triage-driver skill at analysis time. apt_version strings are formatted for `apt-get install pkg=version`; if Ubuntu drops a pinned version from its repos the workflow will fail loudly at the install step and this file must be updated. The `version` field is the upstream form (what SQLGetInfo reports); apt_version is the Debian-formatted form. Firebird is included as of v3.5.0-rc1 (the first release of the refactored driver).",
 
   "drivers": {
     "postgresql": {
@@ -84,6 +84,24 @@
         "tag": "v1.5.3.20260311"
       },
       "conn_string": "Driver={ClickHouse};Server=127.0.0.1;Port=8123;",
+      "platform": "linux"
+    },
+
+    "firebird": {
+      "display_name": "Firebird ODBC Driver",
+      "version": "3.5.0-rc1",
+      "install": {
+        "method": "binary_download",
+        "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/releases/download/v3.5.0-rc1/firebird-odbc-driver-3.5.0-rc1-linux-x64.tar.gz",
+        "library_name": "libOdbcFb.so",
+        "driver_section": "Firebird ODBC Driver",
+        "_note": "Server brought up via PSFirebird (Firebird 5.0.3); the .tar.gz ships only libOdbcFb.so + odbcinst.ini.sample, registered manually."
+      },
+      "source": {
+        "repo": "https://github.com/FirebirdSQL/firebird-odbc-driver",
+        "tag": "v3.5.0-rc1"
+      },
+      "conn_string": "Driver={Firebird ODBC Driver};DBNAME=localhost/3050:/tmp/crusher.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;",
       "platform": "linux"
     },
 
