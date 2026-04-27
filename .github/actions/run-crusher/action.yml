@@ -41,9 +41,13 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        RUN_ID=$(gh run list --workflow ci.yml --branch master \
-          --status success --limit 1 \
-          --json databaseId -q '.[0].databaseId')
+        # Recent gh CLI versions silently drop `--status success` here
+        # (filters on `status`, not `conclusion`, returning []). Pull the
+        # last 10 master runs and pick the most recent success via jq —
+        # robust across gh versions.
+        RUN_ID=$(gh run list --workflow ci.yml --branch master --limit 10 \
+          --json databaseId,conclusion \
+          -q '[.[] | select(.conclusion == "success")] | .[0].databaseId')
         if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
           echo "::error::No successful master CI run found — cannot fetch latest crusher binary. Wait for a green ci.yml on master, then re-run stress-test."
           exit 1
