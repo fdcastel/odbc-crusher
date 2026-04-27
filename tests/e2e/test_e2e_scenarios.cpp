@@ -41,18 +41,45 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
     ASSERT_TRUE(run.report.contains("summary"))
         << "stderr: " << run.raw_stderr;
 
+    // Walk every probe once and collect the non-PASS ones grouped by status,
+    // so the EXPECT failure messages can name the offenders. Without this the
+    // canary would report only counts ("failed=6, skipped=23"), which forces
+    // a second debugging round just to find out which probes regressed.
+    std::string failed_names;
+    std::string error_names;
+    std::string skipped_names;
+    if (run.report.contains("categories")) {
+        for (const auto& cat : run.report["categories"]) {
+            const auto cat_name = cat.value("name", std::string{});
+            if (!cat.contains("tests")) continue;
+            for (const auto& t : cat["tests"]) {
+                const auto status = t.value("status", std::string{});
+                if (status == "PASS") continue;
+                std::string& bucket =
+                    (status == "FAIL")  ? failed_names :
+                    (status == "ERROR") ? error_names  : skipped_names;
+                if (!bucket.empty()) bucket += ", ";
+                bucket += cat_name + "/" + t.value("test_name", std::string{});
+                if (status != "FAIL" && status != "ERROR") {
+                    bucket += " (" + status + ")";
+                }
+            }
+        }
+    }
+
     const auto& summary = run.report["summary"];
     EXPECT_GT(summary.value("total_tests", 0), 100)
         << "Expected the full conformance suite to run";
     EXPECT_EQ(summary.value("failed", -1), 0)
         << "Mode=Success is the reference fixture — every probe must PASS. "
            "A FAIL means the mock can't satisfy a probe's contract; fix the "
-           "mock or update the probe.";
+           "mock or update the probe.\n  Failing probes: " << failed_names;
     EXPECT_EQ(summary.value("errors", -1), 0)
-        << "Mode=Success must not produce probe ERRORs.";
+        << "Mode=Success must not produce probe ERRORs.\n"
+           "  Erroring probes: " << error_names;
     EXPECT_EQ(summary.value("skipped", -1), 0)
         << "Mode=Success must not SKIP probes — the mock is supposed to "
-           "satisfy every conformance check.";
+           "satisfy every conformance check.\n  Skipped probes: " << skipped_names;
 
     EXPECT_TRUE(run.report.contains("driver_info"));
     EXPECT_TRUE(run.report.contains("categories"));
