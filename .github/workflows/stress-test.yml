@@ -361,10 +361,14 @@ jobs:
         # can compute LD_LIBRARY_PATH for libfbclient.so.
         $fb = New-FirebirdEnvironment -Version '5.0.3' -Path '/tmp/firebird5'
 
-        # TCP connections require SYSDBA to exist in the security db;
-        # create it via an embedded connection BEFORE starting the server.
+        # TCP connections require SYSDBA's password set in the security db;
+        # do it via an embedded connection BEFORE starting the server. Use
+        # CREATE OR ALTER (PSFirebird's own canonical pattern in
+        # Tests/FirebirdInstance.Tests.ps1) — plain CREATE USER trips on
+        # the SRP plugin's PLG$SRP table when SYSDBA already exists in
+        # PSFirebird's bundled security5.fdb.
         $db = New-FirebirdDatabase -Database '/tmp/crusher.fdb' -Environment $fb
-        "CREATE USER SYSDBA PASSWORD 'masterkey';" |
+        "CREATE OR ALTER USER SYSDBA PASSWORD 'masterkey';" |
           Invoke-FirebirdIsql -Database $db -Environment $fb
 
         $instance = Start-FirebirdInstance -Port 3050 -Environment $fb
