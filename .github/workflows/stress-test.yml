@@ -326,7 +326,11 @@ jobs:
   firebird:
     if: ${{ inputs.driver == 'all' || inputs.driver == 'firebird' }}
     name: Firebird (Linux)
-    runs-on: ubuntu-latest
+    # Pinned to ubuntu-22.04 (jammy) to match PSFirebird's own example
+    # workflow + the parent firebird-odbc-driver-v4 CI. ubuntu-24.04
+    # (noble) lacks libncurses5 in its repos and exhibits other quirks
+    # with PSFirebird's release-resolution path.
+    runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
 
@@ -359,18 +363,9 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        # Diagnostic: confirm the token reached this step. PSFirebird only
-        # reaches the 5000 req/hr API quota when $env:GITHUB_TOKEN is set;
-        # an empty value here would silently demote it to 60 req/hr.
-        Write-Host "GITHUB_TOKEN length: $($env:GITHUB_TOKEN.Length)"
-
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
         Install-Module -Name PSFirebird -Force -Scope CurrentUser
         Import-Module PSFirebird
-
-        # Force verbose output from PSFirebird so its "Using authenticated …"
-        # message surfaces in CI logs while we're debugging the §7.6 setup.
-        $VerbosePreference = 'Continue'
 
         # Stage Firebird 5.0.3 under a stable path so subsequent steps
         # can compute LD_LIBRARY_PATH for libfbclient.so.
