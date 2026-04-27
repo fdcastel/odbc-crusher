@@ -45,6 +45,13 @@ runs:
         # (filters on `status`, not `conclusion`, returning []). Pull the
         # last 10 master runs and pick the most recent success via jq —
         # robust across gh versions.
+        # Diagnostic: log the raw run list so we can see what the runner
+        # gets when this resolution fails.
+        echo "--- gh run list raw output: ---"
+        gh run list --workflow ci.yml --branch master --limit 10 \
+          --json databaseId,conclusion,status,headSha
+        echo "--- end raw output ---"
+
         RUN_ID=$(gh run list --workflow ci.yml --branch master --limit 10 \
           --json databaseId,conclusion \
           -q '[.[] | select(.conclusion == "success")] | .[0].databaseId')
