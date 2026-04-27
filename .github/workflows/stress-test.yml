@@ -490,9 +490,11 @@ jobs:
         # earlier so we can also pull the mock driver from this run. The
         # composite re-resolves it later — that's fine, both will pick the
         # same run since master moves forward only between calls.
-        RUN_ID=$(gh run list --workflow ci.yml --branch master \
-          --status success --limit 1 \
-          --json databaseId -q '.[0].databaseId')
+        # `gh run list --status success` was unreliable across recent gh CLI
+        # versions; filter on `conclusion` via jq instead. (See §7.6.)
+        RUN_ID=$(gh run list --workflow ci.yml --branch master --limit 10 \
+          --json databaseId,conclusion \
+          -q '[.[] | select(.conclusion == "success")] | .[0].databaseId')
         if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
           echo "::error::No successful master CI run found — cannot fetch mock-driver build."
           exit 1
