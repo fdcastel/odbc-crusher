@@ -352,6 +352,12 @@ jobs:
 
     - name: Bring up Firebird via PSFirebird (5.0.3 on port 3050)
       shell: pwsh
+      # PSFirebird's Get-FirebirdReleaseUrl uses GITHUB_TOKEN to authenticate
+      # against the GitHub API (5000 req/hr) — without it, repeated stress-test
+      # runs hit the 60 req/hr unauthenticated cap and fail with "Could not
+      # find Firebird release for version X on GitHub."
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
         Install-Module -Name PSFirebird -Force -Scope CurrentUser
