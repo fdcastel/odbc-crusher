@@ -25,12 +25,47 @@ TestResult StateMachineTests::test_valid_transitions() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLAllocHandle, Statement Transitions",
         [&](TestResult& r) {
-            // Test: Just verify statement allocation works
+            // B1: this allocated a statement and passed. The allocation
+            // throws on failure, so run_test would report ERR - meaning the
+            // probe had exactly one outcome and told a reader nothing about
+            // the state machine it is named for.
+            //
+            // Walk the transition the name promises instead: S1 (allocated)
+            // -> S2 (prepared) -> S3 (executed) -> S1 again after
+            // SQLFreeStmt(SQL_CLOSE), checking the handle is usable at each
+            // step. Every function involved is Core.
             core::OdbcStatement stmt(conn_);
 
-            // State: Allocated - this is success
-            r.status = TestStatus::PASS;
-            r.actual = "Statement allocation successful (basic state transition)";
+            const auto queries = literal_select_variants("SELECT 1");
+            auto attempt = prepare_first_working(stmt, queries);
+            if (!attempt) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.actual = "SQLPrepare failed for every dialect variant, so "
+                           "the S1 -> S2 transition could not be made";
+                r.diagnostic = attempt.format_failures();
+                return;
+            }
+
+            stmt.execute_prepared();              // S2 -> S3
+            SQLRETURN close_rc = SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+            if (!SQL_SUCCEEDED(close_rc)) {
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLFreeStmt(SQL_CLOSE)");
+                return;
+            }
+
+            // Back in S2: the statement is still prepared, so it must
+            // execute again without another SQLPrepare.
+            SQLRETURN again = SQLExecute(stmt.get_handle());
+            if (!SQL_SUCCEEDED(again)) {
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLExecute after SQLFreeStmt(SQL_CLOSE)");
+                return;
+            }
+
+            r.actual = "Allocated -> prepared -> executed -> closed -> "
+                       "re-executed without re-preparing (" + attempt.query + ")";
         });
 }
 
@@ -187,8 +222,19 @@ TestResult StateMachineTests::test_connection_state() {
                 r.status = TestStatus::PASS;
                 r.actual = "Connection active, autocommit=" + std::to_string(autocommit);
             } else {
-                r.status = TestStatus::PASS;
-                r.actual = "Connection state queryable";
+                // B1: the else branch said "Connection state queryable" and
+                // PASSed on the branch where querying it had just failed.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLGetConnectAttr(SQL_ATTR_AUTOCOMMIT) returned " +
+                           std::to_string(rc) + " [" +
+                           first_sqlstate(SQL_HANDLE_DBC, conn_.get_handle(),
+                                          "no diagnostic") +
+                           "] on a connection that is open";
+                r.suggestion =
+                    "The connection is in state C4 (connected, statement "
+                    "allocated), where reading a Core connection attribute "
+                    "must succeed.";
             }
         });
 }

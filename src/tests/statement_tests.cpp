@@ -885,9 +885,12 @@ TestResult StatementTests::test_describe_param() {
                 }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "SQLDescribeParam not supported by this driver";
-                r.suggestion = "SQLDescribeParam is a Level 1 conformance function";
+                // B1: SQLDescribeParam really is optional, so a skip can be
+                // right - but it has to be justified by the driver saying so,
+                // not by the call having failed for any reason at all. B3
+                // reads the SQLSTATE and decides.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLDescribeParam");
             }
         });
 }
@@ -914,9 +917,13 @@ TestResult StatementTests::test_native_sql() {
                 r.actual = "SQLNativeSql: '" + std::string(reinterpret_cast<char*>(input)) +
                                "' -> '" + native_sql + "'";
             } else {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "SQLNativeSql not supported";
-                r.suggestion = "SQLNativeSql is a Core conformance function per ODBC 3.x";
+                // B1: the suggestion said "SQLNativeSql is a Core conformance
+                // function" and the status said "not supported". Both cannot
+                // be right. B3 reads the SQLSTATE: a driver that answers
+                // HYC00 or IM001 is declining and still skips, and anything
+                // else is the Core failure the suggestion describes.
+                report_failure(r, SQL_HANDLE_DBC, conn_.get_handle(),
+                               "SQLNativeSql");
             }
         });
 }

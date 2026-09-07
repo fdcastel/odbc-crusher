@@ -55,16 +55,22 @@ TestResult DescriptorTests::test_implicit_descriptors() {
                 }
             }
 
-            if (obtained == 4) {
-                r.status = TestStatus::PASS;
-                r.actual = "All 4 implicit descriptor handles obtained: " + details.str();
-            } else if (obtained > 0) {
-                r.status = TestStatus::PASS;
-                r.actual = std::to_string(obtained) + "/4 descriptor handles: " + details.str();
-            } else {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "No implicit descriptor handles available";
-                r.suggestion = "Implicit descriptor handles (APD/ARD/IPD/IRD) are Core conformance per ODBC 3.x Descriptor Handles";
+            // B1: every branch here passed or skipped, and the skip's own
+            // suggestion said these handles are Core - so the probe knew the
+            // answer and reported it as "unsupported" anyway. All four
+            // implicit descriptors exist on every ODBC 3.x statement; a
+            // driver that hands back none of them, or three of four, is
+            // failing a Core requirement.
+            r.actual = std::to_string(obtained) + "/4 implicit descriptor "
+                       "handles obtained: " + details.str();
+            if (obtained != 4) {
+                r.status = TestStatus::FAIL;
+                r.severity = obtained == 0 ? Severity::CRITICAL : Severity::ERR;
+                r.suggestion =
+                    "APD, ARD, IPD and IRD are implicitly allocated with every "
+                    "statement in ODBC 3.x and SQLGetStmtAttr must return all "
+                    "four. An application cannot inspect or rebind its own "
+                    "parameter and row descriptors without them.";
             }
         });
 }
@@ -116,9 +122,19 @@ TestResult DescriptorTests::test_ird_after_prepare() {
                 }            } while (false);
 
             if (!success) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not read IRD after prepare";
-                r.suggestion = "IRD should be auto-populated with column metadata after SQLPrepare per ODBC 3.x spec";
+                // B1: the suggestion already said what the spec requires;
+                // the status said it did not matter. SQL_DESC_COUNT on the
+                // IRD after a successful prepare is how an application learns
+                // the shape of the result set before executing.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "Could not read SQL_DESC_COUNT from the IRD after "
+                           "a successful SQLPrepare";
+                r.suggestion =
+                    "The IRD is auto-populated with column metadata after "
+                    "SQLPrepare. A driver that cannot answer SQL_DESC_COUNT "
+                    "there forces an application to execute the statement "
+                    "just to find out how many columns it returns.";
             }
         });
 }
@@ -160,8 +176,20 @@ TestResult DescriptorTests::test_apd_fields() {
                         r.status = TestStatus::PASS;
                         r.actual = "APD DESC_COUNT set to 1 and verified";
                     } else {
-                        r.status = TestStatus::PASS;
-                        r.actual = "APD field settable (read-back returned " + std::to_string(check_count) + ")";
+                        // B1: this was a second PASS - "settable" - on the
+                        // branch where the read-back disagreed with the write.
+                        // A descriptor field that accepts a value and then
+                        // reports a different one is worse than one that
+                        // rejects the write: the application has no way to
+                        // know its binding did not take.
+                        r.status = TestStatus::FAIL;
+                        r.severity = Severity::ERR;
+                        r.actual = "SQLSetDescField(APD, SQL_DESC_COUNT, 1) "
+                                   "succeeded but the read-back returned " +
+                                   std::to_string(check_count);
+                        r.suggestion =
+                            "A descriptor field that was set successfully must "
+                            "read back as the value that was set.";
                     }
                 } else {
                     r.status = TestStatus::SKIP_UNSUPPORTED;
@@ -255,8 +283,18 @@ TestResult DescriptorTests::test_auto_populate_after_exec() {
                         r.actual = "After SQLExecDirect: " + std::to_string(num_cols) +
                                        " col(s), type=" + std::to_string(data_type);
                     } else {
-                        r.status = TestStatus::PASS;
-                        r.actual = "After SQLExecDirect: " + std::to_string(num_cols) + " column(s) detected";
+                        // B1: a second PASS on the branch where SQLDescribeCol
+                        // failed. The probe is about the IRD being populated
+                        // after execute, and SQLNumResultCols answering while
+                        // SQLDescribeCol does not means it is populated only
+                        // half way - which is the defect, not a pass.
+                        r.status = TestStatus::FAIL;
+                        r.severity = Severity::ERR;
+                        r.actual = "SQLNumResultCols reported " +
+                                   std::to_string(num_cols) +
+                                   " column(s) after execute, but "
+                                   "SQLDescribeCol(1) failed - the IRD is "
+                                   "only partly populated";
                     }
                     success = true;
                     break;

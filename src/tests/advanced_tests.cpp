@@ -156,10 +156,23 @@ TestResult AdvancedTests::test_async_capability() {
                         r.actual = "Asynchronous execution supported";
                         r.status = TestStatus::PASS;
                     } else {
-                        // Driver doesn't actually support it even though it accepted the setting
-                        r.actual = "Async mode not persistently supported";
-                        r.status = TestStatus::SKIP_UNSUPPORTED;
-                        r.suggestion = "Driver accepted SQL_ATTR_ASYNC_ENABLE but did not persist the setting";
+                        // B1: "accepted the setting but did not persist it"
+                        // was a SKIP_UNSUPPORTED. It is a FAIL. A driver that
+                        // cannot honour a statement attribute must say so -
+                        // by returning SQL_ERROR, or SQL_SUCCESS_WITH_INFO
+                        // with 01S02 "Option value changed" - not by
+                        // returning success and quietly keeping the old
+                        // value. An application has no way to discover that.
+                        r.status = TestStatus::FAIL;
+                        r.severity = Severity::ERR;
+                        r.actual = "SQLSetStmtAttr(SQL_ATTR_ASYNC_ENABLE, ON) "
+                                   "returned success but SQLGetStmtAttr still "
+                                   "reports OFF";
+                        r.suggestion =
+                            "Reject the attribute with SQL_ERROR, or accept a "
+                            "substitute and report 01S02. Silently ignoring a "
+                            "successful set is the one option the spec does "
+                            "not allow.";
                     }
 
                     // Turn it back off
@@ -170,9 +183,11 @@ TestResult AdvancedTests::test_async_capability() {
                         0
                     );
                 } else {
-                    r.actual = "Could not query async status";
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.suggestion = "SQLGetStmtAttr for SQL_ATTR_ASYNC_ENABLE failed after setting";
+                    // B1: reading back an attribute the driver has just
+                    // accepted must work.
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLGetStmtAttr(SQL_ATTR_ASYNC_ENABLE) "
+                                   "after a successful set");
                 }
             } else {
                 r.actual = "Asynchronous execution not supported";
@@ -277,9 +292,10 @@ TestResult AdvancedTests::test_positioned_operations() {
                     r.actual = oss.str();
                     r.status = TestStatus::PASS;
                 } else {
-                    r.actual = "Could not query concurrency";
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.suggestion = "SQLGetStmtAttr for SQL_ATTR_CONCURRENCY failed after setting";
+                    // B1 - see test_async_capability.
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLGetStmtAttr(SQL_ATTR_CONCURRENCY) "
+                                   "after a successful set");
                 }
             } else {
                 r.actual = "Positioned operations not supported";
