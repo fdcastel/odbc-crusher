@@ -198,6 +198,22 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
     // when someone reads the log and updates the constant above.
     const int observed_failed = summary.value("failed", -1);
     const int observed_skipped = summary.value("skipped", -1);
+    // Phase 6 works by pushing a change and reading this line out of the CI
+    // log - there is no Linux machine to measure on locally. The counts used
+    // to be printed only when they dropped *below* baseline, so a change that
+    // moved nothing was indistinguishable from one that was never measured.
+    // Printed unconditionally now, with the probe names, so each experiment
+    // in orders 43-47 has a number to compare against.
+    std::cerr << "[linux-baseline] failed=" << observed_failed
+              << " (max " << kMaxFailed << ")"
+              << " skipped=" << observed_skipped
+              << " (max " << kMaxSkipped << ")" << std::endl;
+    if (!failed_names.empty()) {
+        std::cerr << "[linux-baseline] failing: " << failed_names << std::endl;
+    }
+    if (!skipped_names.empty()) {
+        std::cerr << "[linux-baseline] skipped: " << skipped_names << std::endl;
+    }
     if (observed_failed >= 0 && observed_failed < kMaxFailed) {
         std::cerr << "[notice] failed=" << observed_failed
                   << " is below baseline " << kMaxFailed

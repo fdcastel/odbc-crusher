@@ -73,13 +73,23 @@ echo "Target ini:    ${INI_PATH:-unknown}"
 template="$(mktemp)"
 trap 'rm -f "$template"' EXIT
 
+# D3: these have to match what register.ps1 writes to the Windows registry,
+# or the Linux and Windows CI slots are not testing the same registration.
+# unixODBC consults APILevel, ConnectFunctions and DriverODBCVer when it
+# decides how to treat a driver - which functions it may assume exist, and
+# whether to emulate the ones it does not find - so omitting them made the two
+# platforms structurally different before a single probe ran.
 cat >"$template" <<EOF
 [Mock ODBC Driver]
-Description = Mock ODBC Driver for conformance testing
-Driver      = $DRIVER_PATH
-Setup       = $DRIVER_PATH
-FileUsage   = 0
-UsageCount  = 1
+Description      = Mock ODBC Driver for conformance testing
+Driver           = $DRIVER_PATH
+Setup            = $DRIVER_PATH
+APILevel         = 2
+ConnectFunctions = YYY
+DriverODBCVer    = 03.80
+SQLLevel         = 1
+FileUsage        = 0
+UsageCount       = 1
 EOF
 
 # -i install, -d driver-section, -f template file. -h sets user scope.
