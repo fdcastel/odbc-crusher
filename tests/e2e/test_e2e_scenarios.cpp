@@ -117,10 +117,22 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
     // that it was previously counted as a skip is precisely the defect B3
     // exists to fix, and skips do not affect the exit code.
     //
+    // B1 then moved two more the same way, for the same reason: 10 fail + 19
+    // skip and 12 fail + 17 skip are again the same 29 non-passing probes.
+    // The two are Catalog Function Depth's test_procedures_result and
+    // test_privileges_result, which used to answer "not supported by driver"
+    // for *any* failure of SQLProcedures / SQLTablePrivileges /
+    // SQLColumnPrivileges. They now classify by SQLSTATE, so a driver that
+    // says HYC00 or IM001 still skips - and on Linux these do not say that,
+    // which is the D1 gap becoming visible rather than growing.
+    //
+    // The total has not moved in two phases. If it ever does, this canary is
+    // what says so.
+    //
     // These are the IMPROVEMENT_PLAN section 8 gaps, tracked as D1 and I1-I5.
     // Phase 6 drives both numbers to zero and B5 then deletes them.
-    constexpr int kMaxFailed = 10;
-    constexpr int kMaxSkipped = 19;
+    constexpr int kMaxFailed = 12;
+    constexpr int kMaxSkipped = 17;
 #else
     constexpr int kMaxFailed = 0;
     constexpr int kMaxSkipped = 0;
