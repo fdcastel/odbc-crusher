@@ -35,15 +35,46 @@ SQLRETURN SQL_API SQLConnect(
     conn->dsn_ = sql_to_string(szDSN, cbDSN);
     conn->uid_ = sql_to_string(szUID, cbUID);
     conn->pwd_ = sql_to_string(szPWD, cbPWD);
-    
+
     // Build a connection string for configuration
     conn->connection_string_ = "DSN=" + conn->dsn_ + ";UID=" + conn->uid_ + ";";
-    
-    // Parse configuration (use defaults for simple connect)
-    DriverConfig config;
-    BehaviorController::instance().set_config(config);
+
+    // D32: this used to default-construct a DriverConfig and push it into the
+    // controller, so a DSN-style connect on *any* handle silently discarded a
+    // configuration a previous SQLDriverConnect had installed - the same
+    // process-global clobbering as D6, reached from a different function.
+    //
+    // There is no DSN registry here to read a configuration from, so the
+    // right thing is to leave the existing one alone: a caller that has not
+    // said anything has not asked for defaults.
+    const DriverConfig config = BehaviorController::instance().config();
+
+    // D32: and it consulted neither should_fail, apply_latency nor
+    // max_connections, all three of which its sibling SQLDriverConnect does -
+    // so `FailOn=SQLConnect` and `Latency=` were inert on this entry point and
+    // the DSN path could not be fault-injected at all.
+    if (config.should_fail("SQLConnect")) {
+        conn->add_diagnostic(config.error_code, 0,
+                             "Simulated connection failure");
+        return SQL_ERROR;
+    }
+
+    config.apply_latency();
+
+    if (config.max_connections > 0) {
+        auto* env = conn->environment();
+        if (env && static_cast<int>(env->connections_.size()) >=
+                       config.max_connections) {
+            conn->add_diagnostic(sqlstate::CONNECTION_FAILURE, 0,
+                                 "Maximum connections exceeded");
+            return SQL_ERROR;
+        }
+    }
+
+    // D6 makes this a no-op when the preset is already loaded, so a second
+    // connect no longer empties the first connection's tables.
     MockCatalog::instance().initialize(config.catalog);
-    
+
     conn->connected_ = true;
     return SQL_SUCCESS;
 }

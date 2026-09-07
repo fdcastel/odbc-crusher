@@ -188,6 +188,11 @@ private:
     // Guards every mutating path. See class comment.
     mutable std::mutex mu_;
 
+    // D6: which preset is loaded, so re-initialising with the same one is a
+    // no-op rather than a wipe.
+    bool initialized_ = false;
+    std::string loaded_preset_;
+
     std::vector<MockTable> tables_;
     std::vector<MockIndex> indexes_;
     std::unordered_map<std::string, std::vector<MockRow>> inserted_data_;

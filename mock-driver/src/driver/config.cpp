@@ -50,8 +50,18 @@ bool DriverConfig::should_fail(const std::string& function_name) const {
             return true;
             
         case BehaviorMode::Random: {
-            static std::random_device rd;
-            static std::mt19937 gen(rd());
+            // D20: this was a function-local `static std::mt19937` mutated by
+            // every entry point that calls should_fail on its own *copy* of
+            // the config - so it bypassed BehaviorController's mutex entirely
+            // and two connections advanced the same 624-word generator state
+            // concurrently. The observable symptom of that race is a
+            // correlated failure pattern rather than a crash, which for a
+            // fault-injection knob is worse than an outright break.
+            //
+            // thread_local rather than a mutex: the sequence carries no
+            // meaning across threads, and per-thread is what a caller of
+            // Mode=Random actually wants.
+            thread_local std::mt19937 gen(std::random_device{}());
             std::uniform_int_distribution<> dis(1, 100);
             return dis(gen) <= failure_probability;
         }

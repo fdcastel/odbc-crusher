@@ -425,12 +425,11 @@ TEST_F(ConnectionTest, SQLNativeSql_InvalidHandle) {
 
 // ===== Behavior Controller Tests =====
 
-// DISABLED — known mock defect D32, scheduled for Phase 5: SQLConnect never
-// calls should_fail(), so no fault injection can reach it. The assertions below
-// are correct as written; drop the DISABLED_ prefix when D32 lands.
-// (DISABLED_ rather than GTEST_SKIP: the skip macro returns, and the resulting
-// unreachable body trips C4702 under the /W4 /WX added in E1.)
-TEST_F(ConnectionTest, DISABLED_SimulatedConnectionFailure) {
+// D32 landed: SQLConnect consults should_fail() now, so this runs. It was
+// DISABLED_ for exactly as long as the defect existed, with its assertions
+// unchanged - which is what made dropping the prefix the regression test the
+// row asked for rather than a new test written to match the fix.
+TEST_F(ConnectionTest, SimulatedConnectionFailure) {
     // Configure to fail connections. There is no configure_failure() — the
     // real mechanism is Mode=Partial plus a FailOn list and an ErrorCode.
     DriverConfig cfg;
@@ -450,11 +449,10 @@ TEST_F(ConnectionTest, DISABLED_SimulatedConnectionFailure) {
     EXPECT_FALSE(conn->is_connected());
 }
 
-// DISABLED — known mock defect D32, scheduled for Phase 5: SQLConnect never
-// calls apply_latency(), and it overwrites the BehaviorController config with a
-// default-constructed one, so the Latency set here is discarded before it could
-// be read. Drop the DISABLED_ prefix when D32 lands.
-TEST_F(ConnectionTest, DISABLED_SimulatedConnectionTimeout) {
+// D32 landed: SQLConnect calls apply_latency() and no longer overwrites the
+// controller's config with a default-constructed one, so the Latency set here
+// survives to be read.
+TEST_F(ConnectionTest, SimulatedConnectionTimeout) {
     auto& ctrl = BehaviorController::instance();
     DriverConfig config;
     config.latency = std::chrono::milliseconds(100);  // 100ms delay

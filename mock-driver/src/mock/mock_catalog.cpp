@@ -23,14 +23,34 @@ MockCatalog& MockCatalog::instance() {
 
 void MockCatalog::initialize(const std::string& preset) {
     std::lock_guard<std::mutex> g(mu_);
-    tables_.clear();
-    indexes_.clear();
-    inserted_data_.clear();
-    procedures_.clear();
 
     std::string lower_preset = preset;
     std::transform(lower_preset.begin(), lower_preset.end(), lower_preset.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    // D6: this cleared everything on every call, and every SQLDriverConnect
+    // calls it - so connection B's connect destroyed every table and row
+    // connection A had created. The tool opens one connection per run today,
+    // which is the only reason it has not bitten, but a probe that opens a
+    // second connection to test isolation would have found its own schema
+    // gone.
+    //
+    // Asking for the preset that is already loaded is now a no-op. That is
+    // not the full fix - a genuinely per-connection catalog is - but it is
+    // the difference between "a second connection is fatal" and "a second
+    // connection asking for a *different* preset resets the shared state",
+    // which is a documented consequence of the catalog being process-global
+    // rather than a silent data loss.
+    if (initialized_ && loaded_preset_ == lower_preset) {
+        return;
+    }
+
+    tables_.clear();
+    indexes_.clear();
+    inserted_data_.clear();
+    procedures_.clear();
+    loaded_preset_ = lower_preset;
+    initialized_ = true;
 
     if (lower_preset == "empty") {
         create_empty_catalog();

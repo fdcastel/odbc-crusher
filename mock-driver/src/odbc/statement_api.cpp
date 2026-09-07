@@ -1788,32 +1788,49 @@ SQLRETURN SQL_API SQLFreeStmt(
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    // SQL_DROP deletes `stmt`; take the lock/clear only for the other
-    // options so we don't touch freed memory when fOption == SQL_DROP.
-    if (fOption != SQL_DROP) {
-        stmt->clear_diagnostics();
+
+    // D4: the `fOption != SQL_DROP` guard used to wrap only
+    // clear_diagnostics(), so every option did its real work with no lock at
+    // all. SQL_CLOSE clears result_data_, SQL_UNBIND clears
+    // column_bindings_, SQL_RESET_PARAMS clears parameter_bindings_ - each of
+    // which a concurrent SQLFetch iterates. That was the one place this
+    // driver broke the invariant its own README states, and it is the shape
+    // that corrupts rather than merely races.
+    //
+    // SQL_DROP is the exception, and has to stay outside the lock: it
+    // deletes the object the mutex lives in, so unlocking afterwards would
+    // touch freed memory.
+    if (fOption == SQL_DROP) {
+        delete stmt;
+        return SQL_SUCCESS;
     }
+
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
 
     switch (fOption) {
         case SQL_CLOSE:
             stmt->cursor_open_ = false;
             stmt->current_row_ = -1;
             stmt->result_data_.clear();
+            // D37: a closed cursor has no value to continue retrieving.
+            stmt->getdata_col_ = 0;
+            stmt->getdata_row_ = -1;
+            stmt->getdata_offset_ = 0;
             break;
-            
+
         case SQL_UNBIND:
             stmt->column_bindings_.clear();
             break;
-            
+
         case SQL_RESET_PARAMS:
             stmt->parameter_bindings_.clear();
             break;
-            
-        case SQL_DROP:
-            delete stmt;
+
+        default:
             break;
     }
-    
+
     return SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hstmt)

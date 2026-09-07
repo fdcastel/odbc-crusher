@@ -139,3 +139,58 @@ TEST_F(DescriptorOwnershipTest, FreeingAnExplicitDescriptorIsAllowed) {
 
     EXPECT_EQ(SQLFreeHandle(SQL_HANDLE_DESC, mine), SQL_SUCCESS);
 }
+
+// ── D6: a second connect must not empty the first one's tables ────────────
+//
+// Every SQLDriverConnect calls MockCatalog::initialize, which cleared
+// tables_, indexes_, inserted_data_ and procedures_ unconditionally — so
+// connection B's connect destroyed every table and row connection A had
+// created. The tool opens one connection per run, which is the only reason
+// this had not bitten; a probe opening a second connection to test isolation
+// would have found its own schema gone.
+TEST(CatalogSharing, SecondConnectKeepsTheFirstConnectionsTables) {
+    SQLHENV henv = SQL_NULL_HENV;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv), SQL_SUCCESS);
+    ASSERT_EQ(SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0), SQL_SUCCESS);
+
+    SQLHDBC a = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &a), SQL_SUCCESS);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDriverConnect(
+        a, NULL, (SQLCHAR*)kConn, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT)));
+
+    SQLHSTMT sa = SQL_NULL_HSTMT;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_STMT, a, &sa), SQL_SUCCESS);
+    SQLExecDirect(sa, (SQLCHAR*)"DROP TABLE D6_SHARED", SQL_NTS);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        sa, (SQLCHAR*)"CREATE TABLE D6_SHARED (ID INTEGER, V VARCHAR(16))",
+        SQL_NTS)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        sa, (SQLCHAR*)"INSERT INTO D6_SHARED (ID, V) VALUES (1, 'a')", SQL_NTS)));
+    SQLCloseCursor(sa);
+
+    // A second connection, same preset.
+    SQLHDBC b = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &b), SQL_SUCCESS);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDriverConnect(
+        b, NULL, (SQLCHAR*)kConn, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT)));
+
+    // Connection A's table and its row must still be there.
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        sa, (SQLCHAR*)"SELECT COUNT(*) FROM D6_SHARED", SQL_NTS)))
+        << "the second connect dropped the first connection's table";
+    ASSERT_EQ(SQLFetch(sa), SQL_SUCCESS);
+    SQLBIGINT n = -1;
+    SQLLEN ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetData(sa, 1, SQL_C_SBIGINT, &n,
+                                         sizeof(n), &ind)));
+    EXPECT_EQ(n, 1) << "the second connect emptied the first one's rows";
+    SQLCloseCursor(sa);
+
+    SQLExecDirect(sa, (SQLCHAR*)"DROP TABLE D6_SHARED", SQL_NTS);
+    SQLDisconnect(b);
+    SQLFreeHandle(SQL_HANDLE_DBC, b);
+    SQLDisconnect(a);
+    SQLFreeHandle(SQL_HANDLE_DBC, a);
+    SQLFreeHandle(SQL_HANDLE_ENV, henv);
+}
