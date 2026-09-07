@@ -280,3 +280,37 @@ TEST_F(FaultInjectionTest, ArrayOutputPointersAreAcceptedByDefault) {
     EXPECT_EQ(SQLSetStmtAttr(hstmt, SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0),
               SQL_SUCCESS);
 }
+
+// D35 — a driver that warns on every row it returns. Without this there was no
+// way to tell a fetch loop written `== SQL_SUCCESS` from one written with
+// SQL_SUCCEEDED, which is why 14 of them in the probe suite had the former.
+TEST_F(FaultInjectionTest, FetchReturnsWarningWarnsOnEveryRowButStillReturnsThem) {
+    Connect("FetchReturnsWarning=true;ResultSetSize=3;");
+    ASSERT_EQ(SQLExecDirect(hstmt,
+              reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT * FROM USERS")),
+              SQL_NTS), SQL_SUCCESS);
+
+    int rows = 0;
+    SQLRETURN ret;
+    while (SQL_SUCCEEDED(ret = SQLFetch(hstmt))) {
+        EXPECT_EQ(ret, SQL_SUCCESS_WITH_INFO) << "every row must carry the warning";
+        SQLCHAR state[6] = {0};
+        SQLSMALLINT msg_len = 0;
+        ASSERT_TRUE(SQL_SUCCEEDED(SQLGetDiagRec(SQL_HANDLE_STMT, hstmt, 1, state,
+                                                nullptr, nullptr, 0, &msg_len)));
+        EXPECT_STREQ(reinterpret_cast<const char*>(state), "01004");
+        ++rows;
+        if (rows > 10) break;   // guard against a runaway loop in the mock
+    }
+
+    EXPECT_EQ(ret, SQL_NO_DATA) << "the cursor must still end properly";
+    EXPECT_EQ(rows, 3) << "every row must still be delivered";
+}
+
+TEST_F(FaultInjectionTest, FetchIsQuietByDefault) {
+    Connect("ResultSetSize=2;");
+    ASSERT_EQ(SQLExecDirect(hstmt,
+              reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT * FROM USERS")),
+              SQL_NTS), SQL_SUCCESS);
+    EXPECT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
+}

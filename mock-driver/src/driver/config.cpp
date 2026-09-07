@@ -275,6 +275,11 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     config.procedures_broken_inout = (procs_str == "brokeninout");
 
     // PORT plan port 6 — array-bind misbehavior knobs.
+    std::string fetch_warn_str =
+        to_lower(get_string_value(pairs, "fetchreturnswarning", "false"));
+    config.fetch_returns_warning =
+        (fetch_warn_str == "true" || fetch_warn_str == "yes");
+
     config.array_bind_row_fails_at =
         clamp_int(get_int_value(pairs, "arraybindrowfailsat", 0), 0, 1000000);
     std::string supports_str =

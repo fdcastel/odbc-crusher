@@ -51,22 +51,40 @@ TestResult CursorBehaviorTests::test_forward_only_past_end() {
                 return;
             }
 
-            // Fetch all rows
+            // A11. Two bugs here, both of which FAILed a spec-compliant
+            // driver.
+            //
+            // The loop condition was `== SQL_SUCCESS`, so it exited early on
+            // any row that happened to carry SQL_SUCCESS_WITH_INFO — a driver
+            // warning of 01004, 01S07, or its own 01000 mid-result-set. The
+            // confirming fetch below then returned success again, and the
+            // probe reported "SQLFetch past end must return SQL_NO_DATA".
+            //
+            // The 10,000-row safety break produced exactly the same false FAIL
+            // on any real table larger than that, because hitting the cap was
+            // indistinguishable from reaching the end.
+            constexpr int kRowCap = 10000;
             int row_count = 0;
-            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS) {
+            bool hit_cap = false;
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
                 row_count++;
-                if (row_count > 10000) break;  // Safety limit
+                if (row_count >= kRowCap) { hit_cap = true; break; }
             }
 
-            // The last fetch should have returned SQL_NO_DATA
-            // Try one more fetch to verify
             SQLRETURN ret = SQLFetch(stmt.get_handle());
 
             std::ostringstream actual;
             actual << "Fetched " << row_count << " rows, then SQLFetch returned " << ret;
+            if (hit_cap) actual << " (stopped at the " << kRowCap << "-row cap)";
             r.actual = actual.str();
 
-            if (ret != SQL_NO_DATA) {
+            if (hit_cap) {
+                // We stopped early by choice; the result set was not exhausted,
+                // so SQL_NO_DATA is not owed and says nothing about the driver.
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual += " — result set larger than the probe's cap, so "
+                            "end-of-cursor behaviour was not exercised";
+            } else if (ret != SQL_NO_DATA) {
                 r.status = TestStatus::FAIL;
                 r.suggestion = "SQLFetch past end of result set must return SQL_NO_DATA (100)";
             }

@@ -659,3 +659,41 @@ TEST_F(CrusherE2EFixture, ParamsetSizeOneSkipsRatherThanFailsWhenAttrsDeclined) 
     EXPECT_EQ(t->value("status", std::string{}), "SKIP_UNSUPPORTED")
         << "declining an optional Level 1 attribute is not a Core failure";
 }
+
+// A11 — 14 fetch loops were written `SQLFetch(h) == SQL_SUCCESS`, so they
+// exited mid-result-set on any row carrying SQL_SUCCESS_WITH_INFO: a driver
+// warning of 01004, 01S07, or its own 01000. Real drivers do warn per row, and
+// an application must keep fetching until SQL_NO_DATA.
+//
+// The assertion is deliberately whole-suite rather than per-probe: the bug was
+// one line repeated across five files, and comparing the two runs of the same
+// binary catches any of them without hard-coding a platform baseline.
+// Measured before the fix: 188 pass / 1 fail / 6 skip, including
+// "Fetched 0 rows, then SQLFetch returned 1" from test_forward_only_past_end.
+TEST_F(CrusherE2EFixture, PerRowWarningsDoNotTruncateFetchLoops) {
+    const std::string base =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;";
+
+    auto quiet = run_crusher(base);
+    ASSERT_TRUE(quiet.report.contains("summary")) << quiet.raw_stderr;
+    auto warning = run_crusher(base + "FetchReturnsWarning=true;");
+    ASSERT_TRUE(warning.report.contains("summary")) << warning.raw_stderr;
+
+    const auto& q = quiet.report["summary"];
+    const auto& w = warning.report["summary"];
+
+    // A driver that warns on every row is still a working driver: the verdicts
+    // must be identical to the quiet run.
+    EXPECT_EQ(w.value("failed", -1), q.value("failed", -2))
+        << "per-row warnings changed the failure count";
+    EXPECT_EQ(w.value("skipped", -1), q.value("skipped", -2))
+        << "per-row warnings changed the skip count — a fetch loop stopped early";
+    EXPECT_EQ(w.value("passed", -1), q.value("passed", -2))
+        << "per-row warnings changed the pass count";
+
+    // Name the probe the plan calls out, so a failure points somewhere useful.
+    auto t = find_test(warning.report, "Cursor Behavior Tests", "test_forward_only_past_end");
+    ASSERT_TRUE(t.has_value());
+    EXPECT_NE(t->value("status", std::string{}), "FAIL")
+        << "actual: " << t->value("actual", std::string{});
+}

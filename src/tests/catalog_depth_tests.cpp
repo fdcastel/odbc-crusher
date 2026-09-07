@@ -50,7 +50,7 @@ TestResult CatalogDepthTests::test_tables_search_patterns() {
             }
 
             int count = 0;
-            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS && count < 100) {
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle())) && count < 100) {
                 count++;
             }
 
@@ -125,7 +125,7 @@ TestResult CatalogDepthTests::test_statistics_result() {
             SQLNumResultCols(stmt.get_handle(), &num_cols);
 
             int row_count = 0;
-            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS && row_count < 50) {
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle())) && row_count < 50) {
                 row_count++;
             }
 
@@ -165,7 +165,7 @@ TestResult CatalogDepthTests::test_procedures_result() {
             SQLNumResultCols(stmt.get_handle(), &num_cols);
 
             int row_count = 0;
-            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS && row_count < 50) {
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle())) && row_count < 50) {
                 row_count++;
             }
 
@@ -201,7 +201,7 @@ TestResult CatalogDepthTests::test_privileges_result() {
             bool tbl_priv_ok = SQL_SUCCEEDED(ret);
             int tbl_priv_rows = 0;
             if (tbl_priv_ok) {
-                while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS && tbl_priv_rows < 50) {
+                while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle())) && tbl_priv_rows < 50) {
                     tbl_priv_rows++;
                 }
             }
@@ -252,7 +252,7 @@ TestResult CatalogDepthTests::test_catalog_null_parameters() {
             }
 
             int count = 0;
-            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS && count < 200) {
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle())) && count < 200) {
                 count++;
             }
 

@@ -96,7 +96,7 @@ TestResult MetadataTests::test_columns_catalog() {
                     char sch_buf[128] = {0};
                     char name_buf[128] = {0};
                     SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
-                    while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                    while (SQL_SUCCEEDED(SQLFetch(tbl_stmt.get_handle()))
                            && discovered.size() < 5) {
                         cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
                         SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
@@ -355,7 +355,7 @@ TestResult MetadataTests::test_special_columns() {
                     char sch_buf[128] = {0};
                     char name_buf[128] = {0};
                     SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
-                    while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                    while (SQL_SUCCEEDED(SQLFetch(tbl_stmt.get_handle()))
                            && discovered.size() < 5) {
                         cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
                         SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
@@ -458,7 +458,7 @@ TestResult MetadataTests::test_foreign_keys() {
                     if (SQL_SUCCEEDED(tbl_ret)) {
                         char name_buf[128] = {0};
                         SQLLEN ind = 0;
-                        while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS
+                        while (SQL_SUCCEEDED(SQLFetch(tbl_stmt.get_handle()))
                                && user_tables.size() < 20) {
                             if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3,
                                     SQL_C_CHAR, name_buf, sizeof(name_buf), &ind))
@@ -839,7 +839,7 @@ TestResult MetadataTests::test_sqlprocedures_smoke() {
             // Walk the result, count rows, capture the first procedure name.
             int row_count = 0;
             std::string first_name;
-            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS) {
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
                 if (row_count == 0) {
                     first_name = fetch_string_col(stmt.get_handle(), 3);
                 }
@@ -899,7 +899,7 @@ TestResult MetadataTests::test_sqlprocedurecolumns_smoke() {
             int input_count = 0, output_count = 0, inout_count = 0,
                 result_count = 0, return_count = 0, other_count = 0;
             std::ostringstream first_rows;
-            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS) {
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
                 ++row_count;
                 std::string proc = fetch_string_col(stmt.get_handle(), 3);
                 std::string colname = fetch_string_col(stmt.get_handle(), 4);

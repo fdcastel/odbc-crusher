@@ -897,7 +897,7 @@ std::string find_mock_inout(core::OdbcConnection& conn) {
                                      const_cast<char*>(name_filter)),
                                  SQL_NTS);
     if (!SQL_SUCCEEDED(rc)) return {};
-    while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS) {
+    while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
         char buf[128] = {0};
         SQLLEN ind = 0;
         if (SQL_SUCCEEDED(SQLGetData(stmt.get_handle(), 3, SQL_C_CHAR,

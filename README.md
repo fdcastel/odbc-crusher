@@ -208,6 +208,7 @@ The mock driver supports these connection-string parameters:
 | `ErrorCode` | SQLSTATE | SQLSTATE returned for failures (default: HY000). |
 | `ErrorCount` | Number | Number of diagnostic records emitted per error (default: 1). |
 | `Latency` | e.g. `10ms` | Simulated per-call delay. |
+| `FetchReturnsWarning` | `false` (default), `true` | Every `SQLFetch` that returns a row also posts `01004` and returns `SQL_SUCCESS_WITH_INFO`. Real drivers warn per row; an application must keep fetching until `SQL_NO_DATA`. |
 | `BufferValidation` | `Strict` (default), `Lenient` | `Lenient` returns `SQLGetInfo` strings **without** their NUL terminator, the classic careless-driver behaviour. |
 | `StateChecking` | `Strict`, `Lenient` | ODBC state-machine validation. |
 | `TransactionMode` | `ReadOnly`, `ReadWrite` | Transaction read/write capability. |

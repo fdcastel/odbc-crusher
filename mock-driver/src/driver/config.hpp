@@ -118,6 +118,15 @@ struct DriverConfig {
     // the surrounding rows succeed. Drives the per-row status probe.
     int array_bind_row_fails_at = 0;
 
+    // D35 — when true, every SQLFetch that returns a row also posts SQLSTATE
+    // 01004 and returns SQL_SUCCESS_WITH_INFO instead of SQL_SUCCESS. Real
+    // drivers do warn per-row (truncation, 01S07 fractional truncation, or a
+    // driver-specific 01000), and an application must keep fetching. Without
+    // this knob nothing could distinguish a fetch loop written as
+    // `SQLFetch(h) == SQL_SUCCESS` from one written as `SQL_SUCCEEDED(...)`,
+    // which is why 14 loops in the probe suite had the former.
+    bool fetch_returns_warning = false;
+
     // PORT plan port 6 — when false, SQLSetStmtAttr(SQL_ATTR_PARAMSET_SIZE)
     // with size > 1 returns HYC00 (driver doesn't support array parameter
     // execution). Lets the SKIP_UNSUPPORTED probe land here.

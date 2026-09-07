@@ -287,7 +287,7 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
                 // Iterate through results to find a table NOT in information_schema.
                 // information_schema views are dynamically-defined in many databases
                 // (e.g. PostgreSQL) and SQLColumns cannot enumerate their columns.
-                while (SQLFetch(tbl_stmt.get_handle()) == SQL_SUCCESS) {
+                while (SQL_SUCCEEDED(SQLFetch(tbl_stmt.get_handle()))) {
                     char cat_buf[128] = {0};
                     char sch_buf[128] = {0};
                     char name_buf[128] = {0};
@@ -347,7 +347,7 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
             }
 
             int col_count = 0;
-            while (SQLFetch(stmt.get_handle()) == SQL_SUCCESS && col_count < 50) {
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle())) && col_count < 50) {
                 col_count++;
             }
 

@@ -912,6 +912,15 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
         }
     }
     
+    // D35: a driver that warns on every row it returns. The application must
+    // keep fetching until SQL_NO_DATA; a loop written `== SQL_SUCCESS` stops
+    // here instead, mid-result-set.
+    if (config.fetch_returns_warning) {
+        stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                             "String data, right truncated");
+        return SQL_SUCCESS_WITH_INFO;
+    }
+
     return SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hstmt)
