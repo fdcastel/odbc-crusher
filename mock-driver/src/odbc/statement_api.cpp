@@ -601,6 +601,100 @@ static void substitute_params(
 
 } // anonymous namespace
 
+namespace mock_odbc {
+
+// D18: SQLFetch and SQLFetchScroll each had their own copy of this loop,
+// and they drifted. This one went through write_numeric_as when D11 rebuilt
+// the conversion table; the copy in driver_main.cpp kept the original
+// switch, which knew four C types and laid the decimal spelling of a number
+// over the caller's buffer for everything else - so an application that
+// scrolled got the pre-D11 driver. One loop now, and D11's table reaches
+// the scroll path with it.
+// Returns SQL_ERROR when a column cannot be converted to its bound C type
+// (07006 posted); SQL_SUCCESS otherwise.
+SQLRETURN deliver_row_to_bound_columns(StatementHandle* stmt,
+                                       const std::vector<std::variant<
+                                           std::monostate, long long, double,
+                                           std::string>>& row) {
+    
+    for (const auto& [col_num, binding] : stmt->column_bindings_) {
+        if (col_num < 1 || col_num > static_cast<SQLUSMALLINT>(row.size())) {
+            continue;
+        }
+        
+        const auto& cell = row[col_num - 1];
+        
+        // Handle NULL
+        if (std::holds_alternative<std::monostate>(cell)) {
+            if (binding.str_len_or_ind) {
+                *binding.str_len_or_ind = SQL_NULL_DATA;
+            }
+            continue;
+        }
+        
+        // D11/D18: one delivery path for every numeric C type.
+        //
+        // This used to be two switches that between them handled SQL_C_SLONG,
+        // SQL_C_SBIGINT, SQL_C_SSHORT, SQL_C_DOUBLE and SQL_C_FLOAT, with
+        // everything else falling through to `default:` and being written as
+        // an **ANSI decimal string**. An application binding a column as
+        // SQL_C_ULONG, SQL_C_UBIGINT, SQL_C_UTINYINT, SQL_C_BIT or
+        // SQL_C_WCHAR got the characters of the number laid over its buffer
+        // and an indicator claiming a string length - SQL_SUCCESS returned,
+        // garbage delivered. write_numeric_as knows every C type in the
+        // table, so a type added there is handled here without an edit.
+        const bool is_float_cell = std::holds_alternative<double>(cell);
+        if (is_float_cell || std::holds_alternative<long long>(cell)) {
+            // D34
+            const long long ival = is_float_cell
+                ? 0
+                : apply_numeric_skew(std::get<long long>(cell),
+                                     FetchPath::BoundColumn);
+            const double dval = is_float_cell
+                ? apply_numeric_skew(std::get<double>(cell),
+                                     FetchPath::BoundColumn)
+                : 0.0;
+
+            const SQLRETURN wrote = write_numeric_as(
+                binding.target_type, ival, dval, is_float_cell,
+                binding.target_value, binding.buffer_length,
+                binding.str_len_or_ind);
+
+            if (wrote == SQL_ERROR) {
+                // A numeric cell requested as a date, an interval or an
+                // unknown C type. 07006 is the spec's answer for a
+                // conversion it does not define, and it is a great deal more
+                // useful than silently writing digits.
+                stmt->add_diagnostic(sqlstate::DATA_TYPE_ATTRIBUTE_VIOLATION, 0,
+                                     "Restricted data type attribute "
+                                     "violation for column " +
+                                     std::to_string(col_num));
+                return SQL_ERROR;
+            }
+            if (wrote == SQL_SUCCESS_WITH_INFO) {
+                stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                     "String data, right truncated");
+            }
+        
+        } else if (std::holds_alternative<std::string>(cell)) {
+            const std::string& value = std::get<std::string>(cell);
+            
+            if (binding.target_value && binding.buffer_length > 0) {
+                size_t copy_len = std::min(value.length(),
+                                           static_cast<size_t>(binding.buffer_length - 1));
+                std::memcpy(binding.target_value, value.c_str(), copy_len);
+                static_cast<char*>(binding.target_value)[copy_len] = '\0';
+            }
+            if (binding.str_len_or_ind) {
+                *binding.str_len_or_ind = static_cast<SQLLEN>(value.length());
+            }
+        }
+    }
+    return SQL_SUCCESS;
+}
+
+}  // namespace mock_odbc
+
 extern "C" {
 
 SQLRETURN SQL_API SQLExecDirect(
@@ -1027,81 +1121,10 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
         return SQL_NO_DATA;
     }
     
-    // Transfer data to bound columns
-    const auto& row = stmt->result_data_[stmt->current_row_];
-    
-    for (const auto& [col_num, binding] : stmt->column_bindings_) {
-        if (col_num < 1 || col_num > static_cast<SQLUSMALLINT>(row.size())) {
-            continue;
-        }
-        
-        const auto& cell = row[col_num - 1];
-        
-        // Handle NULL
-        if (std::holds_alternative<std::monostate>(cell)) {
-            if (binding.str_len_or_ind) {
-                *binding.str_len_or_ind = SQL_NULL_DATA;
-            }
-            continue;
-        }
-        
-        // D11/D18: one delivery path for every numeric C type.
-        //
-        // This used to be two switches that between them handled SQL_C_SLONG,
-        // SQL_C_SBIGINT, SQL_C_SSHORT, SQL_C_DOUBLE and SQL_C_FLOAT, with
-        // everything else falling through to `default:` and being written as
-        // an **ANSI decimal string**. An application binding a column as
-        // SQL_C_ULONG, SQL_C_UBIGINT, SQL_C_UTINYINT, SQL_C_BIT or
-        // SQL_C_WCHAR got the characters of the number laid over its buffer
-        // and an indicator claiming a string length - SQL_SUCCESS returned,
-        // garbage delivered. write_numeric_as knows every C type in the
-        // table, so a type added there is handled here without an edit.
-        const bool is_float_cell = std::holds_alternative<double>(cell);
-        if (is_float_cell || std::holds_alternative<long long>(cell)) {
-            // D34
-            const long long ival = is_float_cell
-                ? 0
-                : apply_numeric_skew(std::get<long long>(cell),
-                                     FetchPath::BoundColumn);
-            const double dval = is_float_cell
-                ? apply_numeric_skew(std::get<double>(cell),
-                                     FetchPath::BoundColumn)
-                : 0.0;
-
-            const SQLRETURN wrote = write_numeric_as(
-                binding.target_type, ival, dval, is_float_cell,
-                binding.target_value, binding.buffer_length,
-                binding.str_len_or_ind);
-
-            if (wrote == SQL_ERROR) {
-                // A numeric cell requested as a date, an interval or an
-                // unknown C type. 07006 is the spec's answer for a
-                // conversion it does not define, and it is a great deal more
-                // useful than silently writing digits.
-                stmt->add_diagnostic(sqlstate::DATA_TYPE_ATTRIBUTE_VIOLATION, 0,
-                                     "Restricted data type attribute "
-                                     "violation for column " +
-                                     std::to_string(col_num));
-                return SQL_ERROR;
-            }
-            if (wrote == SQL_SUCCESS_WITH_INFO) {
-                stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
-                                     "String data, right truncated");
-            }
-        
-        } else if (std::holds_alternative<std::string>(cell)) {
-            const std::string& value = std::get<std::string>(cell);
-            
-            if (binding.target_value && binding.buffer_length > 0) {
-                size_t copy_len = std::min(value.length(),
-                                           static_cast<size_t>(binding.buffer_length - 1));
-                std::memcpy(binding.target_value, value.c_str(), copy_len);
-                static_cast<char*>(binding.target_value)[copy_len] = '\0';
-            }
-            if (binding.str_len_or_ind) {
-                *binding.str_len_or_ind = static_cast<SQLLEN>(value.length());
-            }
-        }
+    // Transfer data to bound columns - D18.
+    if (deliver_row_to_bound_columns(
+            stmt, stmt->result_data_[stmt->current_row_]) == SQL_ERROR) {
+        return SQL_ERROR;
     }
     
     // D35: a driver that warns on every row it returns. The application must

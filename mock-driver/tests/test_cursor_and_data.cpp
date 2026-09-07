@@ -156,4 +156,58 @@ TEST_F(CursorDataTest, CancelOnAnIdleStatementSucceeds) {
     EXPECT_TRUE(SQL_SUCCEEDED(SQLCancel(hstmt)));
 }
 
+// ── the scroll path uses the same conversion table as SQLFetch ───────────
+//
+// D18: SQLFetch and SQLFetchScroll each had their own copy of the loop that
+// delivers a row to the bound columns, and they drifted. SQLFetch's went
+// through write_numeric_as when D11 rebuilt the conversion table; the
+// SQLFetchScroll copy kept the original switch, which knew four C types and
+// laid the *decimal spelling* of a number over the caller's buffer for
+// anything else. An application that scrolled was talking to the pre-D11
+// driver, and no test could tell.
+
+TEST_F(CursorDataTest, FetchScrollBindsTheSameCTypesAsFetch) {
+    Exec("INSERT INTO CD (ID, V) VALUES (7, 'x')");
+
+    // SQL_C_UTINYINT is one of the types the stale switch did not know: it
+    // fell through to the SQL_C_CHAR branch and wrote '7' - 0x37 - instead
+    // of 7.
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT ID FROM CD WHERE ID = 7", SQL_NTS)));
+    SQLCHAR tiny = 0;
+    SQLLEN ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindCol(hstmt, 1, SQL_C_UTINYINT, &tiny,
+                                         sizeof(tiny), &ind)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFetchScroll(hstmt, SQL_FETCH_NEXT, 0)));
+    SQLCloseCursor(hstmt);
+
+    EXPECT_EQ(tiny, 7)
+        << "the scroll path wrote the decimal spelling of the number, not the "
+           "number - it is not using D11's conversion table";
+    EXPECT_EQ(ind, static_cast<SQLLEN>(sizeof(SQLCHAR)));
+}
+
+// And the two paths agree, which is the property the shared loop exists for.
+TEST_F(CursorDataTest, FetchAndFetchScrollDeliverTheSameBytes) {
+    Exec("INSERT INTO CD (ID, V) VALUES (9, 'y')");
+
+    auto read_with = [&](bool scroll) {
+        SQLINTEGER v = -1;
+        SQLLEN ind = 0;
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+            hstmt, (SQLCHAR*)"SELECT ID FROM CD WHERE ID = 9", SQL_NTS)));
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLBindCol(hstmt, 1, SQL_C_SLONG, &v,
+                                             sizeof(v), &ind)));
+        if (scroll) {
+            EXPECT_TRUE(SQL_SUCCEEDED(SQLFetchScroll(hstmt, SQL_FETCH_NEXT, 0)));
+        } else {
+            EXPECT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+        }
+        SQLCloseCursor(hstmt);
+        return v;
+    };
+    EXPECT_EQ(read_with(false), 9);
+    EXPECT_EQ(read_with(true), 9);
+}
+
 }  // namespace

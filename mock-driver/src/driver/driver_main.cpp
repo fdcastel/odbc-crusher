@@ -329,6 +329,8 @@ SQLRETURN SQL_API SQLSetCursorName(
     // SQL_ERROR, and the application still sees SQL_SUCCESS - the driver
     // manager maintains cursor names itself and does not surface the
     // driver's refusal. The guard is kept for unixODBC, which forwards.
+    // SQLGetCursorName is different: its error does surface, and
+    // FaultReachTest.GetCursorNameCanBeMadeToFail asserts so.
     {
         const auto& fi_config = BehaviorController::instance().config();
         if (fi_config.should_fail("SQLSetCursorName")) {
@@ -352,6 +354,18 @@ SQLRETURN SQL_API SQLGetCursorName(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetCursorName")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLGetCursorName failure");
+            return SQL_ERROR;
+        }
+    }
     
     // D29: this used to synthesise a name from the handle address, which
     // both failed to round-trip a name the application had set and leaked a
@@ -401,16 +415,6 @@ SQLRETURN SQL_API SQLFetchScroll(
         if (fi_config.should_fail("SQLFetchScroll")) {
             stmt->add_diagnostic(fi_config.error_code, 0,
                                 "Simulated SQLFetchScroll failure");
-            return SQL_ERROR;
-        }
-    }
-    // D36: fault injection reached 18 of the mock's 65 entry points, so most
-    // probes had no configuration that could make them fail.
-    {
-        const auto& fi_config = BehaviorController::instance().config();
-        if (fi_config.should_fail("SQLGetCursorName")) {
-            stmt->add_diagnostic(fi_config.error_code, 0,
-                                "Simulated SQLGetCursorName failure");
             return SQL_ERROR;
         }
     }
@@ -471,88 +475,13 @@ SQLRETURN SQL_API SQLFetchScroll(
     // Transfer data to bound columns (same logic as SQLFetch)
     const auto& row = stmt->result_data_[stmt->current_row_];
     
-    for (const auto& [col_num, binding] : stmt->column_bindings_) {
-        if (col_num < 1 || col_num > static_cast<SQLUSMALLINT>(row.size())) {
-            continue;
-        }
-        
-        const auto& cell = row[col_num - 1];
-        
-        // Handle NULL
-        if (std::holds_alternative<std::monostate>(cell)) {
-            if (binding.str_len_or_ind) {
-                *binding.str_len_or_ind = SQL_NULL_DATA;
-            }
-            continue;
-        }
-        
-        // Convert and copy data based on target type
-        if (std::holds_alternative<long long>(cell)) {
-            // D34
-            long long value = apply_numeric_skew(std::get<long long>(cell),
-                                                 FetchPath::BoundColumn);
-            switch (binding.target_type) {
-                case SQL_C_SLONG:
-                case SQL_C_LONG:
-                    if (binding.target_value)
-                        *static_cast<SQLINTEGER*>(binding.target_value) = static_cast<SQLINTEGER>(value);
-                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLINTEGER);
-                    break;
-                case SQL_C_SBIGINT:
-                    if (binding.target_value) *static_cast<SQLBIGINT*>(binding.target_value) = value;
-                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLBIGINT);
-                    break;
-                case SQL_C_SSHORT:
-                    if (binding.target_value)
-                        *static_cast<SQLSMALLINT*>(binding.target_value) = static_cast<SQLSMALLINT>(value);
-                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLSMALLINT);
-                    break;
-                case SQL_C_CHAR:
-                default: {
-                    std::string str = std::to_string(value);
-                    if (binding.target_value && binding.buffer_length > 0) {
-                        size_t copy_len = std::min(str.length(), static_cast<size_t>(binding.buffer_length - 1));
-                        std::memcpy(binding.target_value, str.c_str(), copy_len);
-                        static_cast<char*>(binding.target_value)[copy_len] = '\0';
-                    }
-                    if (binding.str_len_or_ind) *binding.str_len_or_ind = static_cast<SQLLEN>(str.length());
-                    break;
-                }
-            }
-        } else if (std::holds_alternative<double>(cell)) {
-            // D34
-            double value = apply_numeric_skew(std::get<double>(cell),
-                                              FetchPath::BoundColumn);
-            switch (binding.target_type) {
-                case SQL_C_DOUBLE:
-                    if (binding.target_value) *static_cast<SQLDOUBLE*>(binding.target_value) = value;
-                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLDOUBLE);
-                    break;
-                case SQL_C_FLOAT:
-                    if (binding.target_value) *static_cast<SQLREAL*>(binding.target_value) = static_cast<SQLREAL>(value);
-                    if (binding.str_len_or_ind) *binding.str_len_or_ind = sizeof(SQLREAL);
-                    break;
-                case SQL_C_CHAR:
-                default: {
-                    std::string str = std::to_string(value);
-                    if (binding.target_value && binding.buffer_length > 0) {
-                        size_t copy_len = std::min(str.length(), static_cast<size_t>(binding.buffer_length - 1));
-                        std::memcpy(binding.target_value, str.c_str(), copy_len);
-                        static_cast<char*>(binding.target_value)[copy_len] = '\0';
-                    }
-                    if (binding.str_len_or_ind) *binding.str_len_or_ind = static_cast<SQLLEN>(str.length());
-                    break;
-                }
-            }
-        } else if (std::holds_alternative<std::string>(cell)) {
-            const std::string& value = std::get<std::string>(cell);
-            if (binding.target_value && binding.buffer_length > 0) {
-                size_t copy_len = std::min(value.length(), static_cast<size_t>(binding.buffer_length - 1));
-                std::memcpy(binding.target_value, value.c_str(), copy_len);
-                static_cast<char*>(binding.target_value)[copy_len] = '\0';
-            }
-            if (binding.str_len_or_ind) *binding.str_len_or_ind = static_cast<SQLLEN>(value.length());
-        }
+    // D18: this was a second copy of the delivery loop, and it had drifted -
+    // it kept the original C-type switch, which knows four types and lays the
+    // decimal spelling of a number over the caller's buffer for anything
+    // else, so an application that scrolled got the pre-D11 driver. The one
+    // in statement_api.cpp is the loop now.
+    if (deliver_row_to_bound_columns(stmt, row) == SQL_ERROR) {
+        return SQL_ERROR;
     }
     
     return SQL_SUCCESS;

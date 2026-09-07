@@ -206,17 +206,22 @@ TEST_F(FaultReachTest, ConnectionAndInfoCallsCanBeMadeToFail) {
 
 // ── the cursor-name pair ─────────────────────────────────────────────────
 
-// ── the cursor-name pair: measured, and not assertable here ──────────────
+// ── the cursor-name pair ─────────────────────────────────────────────────
 //
-// The guards are in the driver, but neither can be asserted through the
-// Windows driver manager. Instrumented and confirmed: with
-// FailOn=SQLSetCursorName the driver *is* reached and *does* return
-// SQL_ERROR, and the application still sees SQL_SUCCESS - the DM maintains
-// cursor names itself and answers both calls without surfacing the driver's
-// refusal. That is the A23 class: a fact about the stack, not the driver, so
-// there is nothing here a fixture change could make fail. The guards stay,
-// because unixODBC forwards these; the assertion does not, because it would
-// be asserting about the driver manager.
+// SQLSetCursorName cannot be asserted through the Windows driver manager:
+// instrumented and confirmed, the driver *is* reached and *does* return
+// SQL_ERROR, and the application still sees SQL_SUCCESS, because the DM
+// maintains cursor names itself. That is the A23 class - a fact about the
+// stack rather than the driver - so the guard stays for unixODBC and the
+// assertion does not. SQLGetCursorName does surface, so it is asserted.
+TEST_F(FaultReachTest, GetCursorNameCanBeMadeToFail) {
+    Open("SQLGetCursorName");
+    char name[64] = {0};
+    SQLSMALLINT len = 0;
+    EXPECT_EQ(SQLGetCursorName(hstmt, (SQLCHAR*)name, sizeof(name), &len),
+              SQL_ERROR);
+    Close();
+}
 
 // And the guard against over-correcting: a FailOn that names one function
 // must not break the others.

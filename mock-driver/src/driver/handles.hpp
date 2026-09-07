@@ -282,6 +282,15 @@ private:
 };
 
 // RAII lock guard for any OdbcHandle
+// D18: SQLFetch and SQLFetchScroll each had their own copy of the loop that
+// delivers a row to the bound columns, and they drifted - the SQLFetch one
+// went through write_numeric_as when D11 rebuilt the conversion table and
+// the other did not. Defined in statement_api.cpp, called by both.
+SQLRETURN deliver_row_to_bound_columns(StatementHandle* stmt,
+                                       const std::vector<std::variant<
+                                           std::monostate, long long, double,
+                                           std::string>>& row);
+
 class HandleLock {
 public:
     explicit HandleLock(OdbcHandle* h) : handle_(h) {
