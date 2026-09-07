@@ -106,6 +106,13 @@ public:
     // Attributes
     SQLUINTEGER access_mode_ = SQL_MODE_READ_WRITE;
     SQLUINTEGER autocommit_ = SQL_AUTOCOMMIT_ON;
+    // D28: there was no transaction state at all, so SQLDisconnect could
+    // never answer 25000 and turning autocommit back ON could not commit
+    // what the manual-commit transaction had accumulated. A transaction
+    // is open from the first statement executed with autocommit OFF
+    // until SQLEndTran, which is how ODBC's implicit model works - there
+    // is no BEGIN.
+    bool in_transaction_ = false;
     SQLUINTEGER login_timeout_ = 0;
     SQLUINTEGER connection_timeout_ = 0;
     SQLUINTEGER txn_isolation_ = SQL_TXN_READ_COMMITTED;

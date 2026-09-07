@@ -178,7 +178,17 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC hdbc) MOCK_ENTRY_TRY {
                             "Connection not open");
         return SQL_ERROR;
     }
-    
+
+    // D28: disconnecting with a transaction still open is 25000. The
+    // mock had no transaction state, so it could never say so and an
+    // application that forgot to commit was told everything was fine.
+    if (conn->in_transaction_) {
+        conn->add_diagnostic(sqlstate::INVALID_TRANSACTION_STATE, 0,
+                             "Transaction is still active; commit or "
+                             "roll back before disconnecting");
+        return SQL_ERROR;
+    }
+
     // Check for open statements with transactions
     // (simplified - just close all statements)
     for (auto* stmt : conn->statements_) {
@@ -311,9 +321,22 @@ SQLRETURN SQL_API SQLSetConnectAttr(
             conn->access_mode_ = ptr_to_uint(rgbValue);
             break;
 
-        case SQL_ATTR_AUTOCOMMIT:
-            conn->autocommit_ = ptr_to_uint(rgbValue);
+        case SQL_ATTR_AUTOCOMMIT: {
+            // D28: this only stored the value. The spec is explicit that
+            // switching from manual-commit to autocommit commits whatever
+            // the open transaction has accumulated - so an application
+            // that finished its work and turned autocommit back on used
+            // to leave the transaction dangling, and a later rollback
+            // discarded rows it had every reason to think were committed.
+            const SQLUINTEGER want = ptr_to_uint(rgbValue);
+            if (want == SQL_AUTOCOMMIT_ON
+                && conn->autocommit_ == SQL_AUTOCOMMIT_OFF
+                && conn->in_transaction_) {
+                conn->in_transaction_ = false;   // committed
+            }
+            conn->autocommit_ = want;
             break;
+        }
 
         case SQL_ATTR_CONNECTION_TIMEOUT:
             conn->connection_timeout_ = ptr_to_uint(rgbValue);

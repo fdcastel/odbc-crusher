@@ -1,5 +1,6 @@
 // Transaction API - SQLEndTran
 
+#include <string>
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/behaviors.hpp"
@@ -14,14 +15,37 @@ SQLRETURN SQL_API SQLEndTran(
     SQLSMALLINT fHandleType,
     SQLHANDLE hHandle,
     SQLSMALLINT fType) MOCK_ENTRY_TRY {
-    
+
+    // D28: validate the handle before anything else. The fault-injection
+    // check used to run first, so a garbage handle came back SQL_ERROR - the
+    // one return code that says "the handle was fine, the call was not".
+    if (fHandleType != SQL_HANDLE_ENV && fHandleType != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* tx_env = (fHandleType == SQL_HANDLE_ENV)
+                 ? validate_env_handle(hHandle) : nullptr;
+    auto* tx_conn = (fHandleType == SQL_HANDLE_DBC)
+                  ? validate_dbc_handle(hHandle) : nullptr;
+    if (!tx_env && !tx_conn) return SQL_INVALID_HANDLE;
+
+    // D28: only SQL_COMMIT and SQL_ROLLBACK are completion types. Treating
+    // anything that was not SQL_ROLLBACK as a commit meant a typo in the
+    // caller's argument silently committed.
+    if (fType != SQL_COMMIT && fType != SQL_ROLLBACK) {
+        if (tx_conn) {
+            tx_conn->clear_diagnostics();
+            tx_conn->add_diagnostic(sqlstate::INVALID_TRANSACTION_OPERATION_CODE, 0,
+                                    "Invalid transaction operation code: "
+                                    + std::to_string(fType));
+        }
+        return SQL_ERROR;
+    }
+
     const auto& config = BehaviorController::instance().config();
     if (config.should_fail("SQLEndTran")) {
-        if (fHandleType == SQL_HANDLE_DBC) {
-            auto* conn = validate_dbc_handle(hHandle);
-            if (conn) {
-                conn->add_diagnostic(config.error_code, 0, "Simulated transaction failure");
-            }
+        if (tx_conn) {
+            tx_conn->add_diagnostic(config.error_code, 0,
+                                    "Simulated transaction failure");
         }
         // D40: a COMMIT that returns SQL_ERROR did not commit, so its rows
         // must stop being visible. The mock used to return the error and
@@ -35,41 +59,18 @@ SQLRETURN SQL_API SQLEndTran(
         }
         return SQL_ERROR;
     }
-    
+
     config.apply_latency();
-    
-    if (fHandleType == SQL_HANDLE_ENV) {
-        auto* env = validate_env_handle(hHandle);
-        if (!env) return SQL_INVALID_HANDLE;
-        
-        // Commit/rollback all connections
-        for (auto* conn : env->connections_) {
-            // Close all cursors
-            for (auto* stmt : conn->statements_) {
-                stmt->cursor_open_ = false;
-                if (fType == SQL_ROLLBACK) {
-                    stmt->executed_ = false;
-                    stmt->result_data_.clear();
-                }
-            }
-        }
-        
-        if (fType == SQL_ROLLBACK) {
-            MockCatalog::instance().clear_inserted_data();
-        }
-    } else if (fHandleType == SQL_HANDLE_DBC) {
-        auto* conn = validate_dbc_handle(hHandle);
-        if (!conn) return SQL_INVALID_HANDLE;
-        
-        conn->clear_diagnostics();
-        
-        if (!conn->is_connected()) {
-            conn->add_diagnostic(sqlstate::CONNECTION_NOT_OPEN, 0,
-                                "Connection not open");
-            return SQL_ERROR;
-        }
-        
-        // Close all cursors on this connection
+
+    // D28: a rollback only discards what an *open transaction* accumulated.
+    // This used to call clear_inserted_data() on any rollback, autocommit ON
+    // included - so a probe that inserted rows in autocommit mode and then
+    // rolled back (which should do nothing) lost them, and the mock whose
+    // purpose is validating "the rows persisted" assertions was the thing
+    // deleting the rows.
+    auto end_transaction = [&](ConnectionHandle* conn) {
+        const bool had_transaction = conn->in_transaction_;
+        conn->in_transaction_ = false;
         for (auto* stmt : conn->statements_) {
             stmt->cursor_open_ = false;
             if (fType == SQL_ROLLBACK) {
@@ -77,14 +78,26 @@ SQLRETURN SQL_API SQLEndTran(
                 stmt->result_data_.clear();
             }
         }
-        
-        if (fType == SQL_ROLLBACK) {
+        if (fType == SQL_ROLLBACK && had_transaction) {
             MockCatalog::instance().clear_inserted_data();
         }
-    } else {
-        return SQL_INVALID_HANDLE;
+    };
+
+    if (tx_env) {
+        for (auto* conn : tx_env->connections_) {
+            end_transaction(conn);
+        }
+        return SQL_SUCCESS;
     }
-    
+
+    tx_conn->clear_diagnostics();
+    if (!tx_conn->is_connected()) {
+        tx_conn->add_diagnostic(sqlstate::CONNECTION_NOT_OPEN, 0,
+                                "Connection not open");
+        return SQL_ERROR;
+    }
+    end_transaction(tx_conn);
+
     return SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hHandle)

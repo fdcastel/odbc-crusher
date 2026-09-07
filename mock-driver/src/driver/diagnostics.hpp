@@ -26,6 +26,9 @@ namespace sqlstate {
     constexpr const char* STRING_TRUNCATED = "01004";
     constexpr const char* INVALID_CURSOR_STATE = "24000";
     constexpr const char* INVALID_TRANSACTION_STATE = "25000";
+    // D28: SQLEndTran with an fType that is neither SQL_COMMIT nor
+    // SQL_ROLLBACK.
+    constexpr const char* INVALID_TRANSACTION_OPERATION_CODE = "HY012";
     constexpr const char* INVALID_CURSOR_POSITION = "34000";
     constexpr const char* SYNTAX_ERROR = "42000";
     constexpr const char* TABLE_NOT_FOUND = "42S02";

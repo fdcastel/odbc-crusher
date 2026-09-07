@@ -680,6 +680,15 @@ SQLRETURN SQL_API SQLExecDirect(
                        ? static_cast<SQLLEN>(-1)
                        : static_cast<SQLLEN>(result.affected_rows);
     record_dynamic_function(stmt, parsed, result.data.size());
+    // D28: ODBC's transaction model is implicit - there is no BEGIN, so a
+    // transaction opens the moment a statement executes with autocommit
+    // OFF and stays open until SQLEndTran. Without this the connection
+    // had no notion of being mid-transaction at all.
+    if (auto* txn_conn = stmt->connection()) {
+        if (txn_conn->autocommit_ == SQL_AUTOCOMMIT_OFF) {
+            txn_conn->in_transaction_ = true;
+        }
+    }
     
     stmt->column_names_ = std::move(result.column_names);
     stmt->column_types_.clear();
@@ -959,6 +968,15 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
                        ? static_cast<SQLLEN>(-1)
                        : static_cast<SQLLEN>(result.affected_rows);
     record_dynamic_function(stmt, parsed, result.data.size());
+    // D28: ODBC's transaction model is implicit - there is no BEGIN, so a
+    // transaction opens the moment a statement executes with autocommit
+    // OFF and stays open until SQLEndTran. Without this the connection
+    // had no notion of being mid-transaction at all.
+    if (auto* txn_conn = stmt->connection()) {
+        if (txn_conn->autocommit_ == SQL_AUTOCOMMIT_OFF) {
+            txn_conn->in_transaction_ = true;
+        }
+    }
 
     stmt->column_names_ = std::move(result.column_names);
     stmt->column_types_.clear();
