@@ -77,15 +77,19 @@ set(MOCK_DRIVER_CORE_SOURCES
     src/utils/c_types.cpp
 )
 
-# Driver shared library
-add_library(mock-odbc-driver SHARED ${MOCK_DRIVER_CORE_SOURCES})
+# D19: the core sources were listed in both targets, so every build compiled
+# all 26 of them twice. An object library compiles them once and both targets
+# link the same objects. The include directories and warning flags are PUBLIC
+# on the object library so the consumers inherit them rather than repeating
+# them - which is what let the two lists drift in the first place.
+add_library(mock_core OBJECT ${MOCK_DRIVER_CORE_SOURCES})
 
-target_link_libraries(mock-odbc-driver PRIVATE
+target_link_libraries(mock_core PUBLIC
     project_warnings
     project_options
 )
 
-target_include_directories(mock-odbc-driver PRIVATE
+target_include_directories(mock_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
@@ -93,8 +97,21 @@ target_include_directories(mock-odbc-driver PRIVATE
 # the headers and the link library (odbc32 / unixodbc / iODBC). The
 # driver itself doesn't link against the DM (it IS the driver), but
 # the test exe below does need the link.
-target_include_directories(mock-odbc-driver PRIVATE
+target_include_directories(mock_core PUBLIC
     $<TARGET_PROPERTY:ODBC::ODBC,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
+# The shared library is built from the DLL's own position-independent copy of
+# those objects. POSITION_INDEPENDENT_CODE has to be set on the object library
+# itself: on Linux a SHARED target's objects need -fPIC, and objects compiled
+# into an OBJECT library do not inherit it from the consumer.
+set_target_properties(mock_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Driver shared library
+add_library(mock-odbc-driver SHARED $<TARGET_OBJECTS:mock_core>)
+
+target_link_libraries(mock-odbc-driver PRIVATE
+    mock_core
 )
 
 # Platform-specific output name
@@ -163,19 +180,14 @@ add_executable(mock-odbc-tests
     tests/test_buffer_copy.cpp
     tests/test_c_types.cpp
     tests/test_handle_lifetime.cpp
-    ${MOCK_DRIVER_CORE_SOURCES}
+    $<TARGET_OBJECTS:mock_core>
 )
 
 target_link_libraries(mock-odbc-tests PRIVATE
+    mock_core
     GTest::gtest
     GTest::gtest_main
     ODBC::ODBC
-    project_warnings
-    project_options
-)
-
-target_include_directories(mock-odbc-tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 include(GoogleTest)
