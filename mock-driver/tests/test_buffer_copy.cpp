@@ -260,3 +260,41 @@ TEST_F(TruncationDiagnosticTest, GetInfoWRefusesAnUndersizedNumericBuffer) {
     EXPECT_EQ(first_state(SQL_HANDLE_DBC, hdbc), "HY090");
     EXPECT_EQ(probe.guard, 0xAAAAAAAAu) << "wrote past the caller's variable";
 }
+
+// ── D15: the wide copy behaves the same on both platforms ─────────────────
+//
+// utf8_to_utf16's Windows branch used MultiByteToWideChar, which returns 0
+// with ERROR_INSUFFICIENT_BUFFER when the source does not fit and writes
+// nothing. A truncating copy therefore handed back an *empty* string on
+// Windows and the truncated prefix on POSIX — the same driver, two
+// behaviours, in exactly the area D1 is about. This asserts the prefix,
+// which is the answer both platforms give now.
+TEST(BufferCopy, WideTruncationYieldsThePrefixNotAnEmptyString) {
+    const std::string src = "abcdefghij";
+    SQLWCHAR buf[4];                      // 3 characters plus a terminator
+    SQLSMALLINT reported = -1;
+
+    const SQLRETURN rc = copy_string_to_wbuffer(src, buf, static_cast<SQLINTEGER>(sizeof(buf)), &reported);
+
+    EXPECT_EQ(rc, SQL_SUCCESS_WITH_INFO);
+    EXPECT_EQ(buf[0], 'a');
+    EXPECT_EQ(buf[1], 'b');
+    EXPECT_EQ(buf[2], 'c');
+    EXPECT_EQ(buf[3], 0);
+    EXPECT_EQ(reported, static_cast<SQLSMALLINT>(10 * sizeof(SQLWCHAR)))
+        << "the reported length is the bytes available, not the bytes written";
+}
+
+// The byte total was cast to SQLSMALLINT, so beyond 16383 UTF-16 units it
+// wrapped negative — and a negative StrLen_or_IndPtr is SQL_NULL_DATA to an
+// application, which then reads a perfectly good value as NULL.
+TEST(BufferCopy, WideLengthNeverReportsNegative) {
+    const std::string big(40000, 'x');
+    SQLWCHAR buf[8];
+    SQLSMALLINT reported = -1;
+
+    copy_string_to_wbuffer(big, buf, static_cast<SQLINTEGER>(sizeof(buf)), &reported);
+
+    EXPECT_GT(reported, 0)
+        << "a negative length is SQL_NULL_DATA to the application";
+}

@@ -118,90 +118,12 @@ static std::string utf16_to_utf8(const SQLWCHAR* src, SQLINTEGER char_count) {
 #endif
 }
 
-// Internal: UTF-8 → UTF-16 conversion
-// Returns number of SQLWCHAR characters written (excluding null terminator).
-// If target is null, just returns the required character count.
-static SQLINTEGER utf8_to_utf16(const std::string& src,
-                                SQLWCHAR* target,
-                                SQLINTEGER max_chars) {
-#ifdef _WIN32
-    if (src.empty()) {
-        if (target && max_chars > 0) target[0] = 0;
-        return 0;
-    }
-    // First get the required size
-    int needed = MultiByteToWideChar(CP_UTF8, 0,
-                                     src.c_str(), static_cast<int>(src.length()),
-                                     nullptr, 0);
-    if (!target || max_chars <= 0) {
-        return static_cast<SQLINTEGER>(needed);
-    }
-    // Convert into buffer (leave room for null terminator)
-    int written = MultiByteToWideChar(CP_UTF8, 0,
-                                      src.c_str(), static_cast<int>(src.length()),
-                                      reinterpret_cast<wchar_t*>(target),
-                                      max_chars);
-    if (written < max_chars) {
-        target[written] = 0;
-    } else {
-        target[max_chars - 1] = 0;
-        written = max_chars - 1;
-    }
-    return static_cast<SQLINTEGER>(needed); // total chars needed (may > written)
-#else
-    // Portable implementation
-    if (src.empty()) {
-        if (target && max_chars > 0) target[0] = 0;
-        return 0;
-    }
-    SQLINTEGER out_idx = 0;
-    SQLINTEGER total_chars = 0;
-    const unsigned char* p = reinterpret_cast<const unsigned char*>(src.c_str());
-    const unsigned char* end = p + src.length();
-    while (p < end) {
-        uint32_t cp;
-        if (*p < 0x80) {
-            cp = *p++;
-        } else if ((*p & 0xE0) == 0xC0) {
-            cp = (*p++ & 0x1F) << 6;
-            if (p < end) cp |= (*p++ & 0x3F);
-        } else if ((*p & 0xF0) == 0xE0) {
-            cp = (*p++ & 0x0F) << 12;
-            if (p < end) cp |= (*p++ & 0x3F) << 6;
-            if (p < end) cp |= (*p++ & 0x3F);
-        } else if ((*p & 0xF8) == 0xF0) {
-            cp = (*p++ & 0x07) << 18;
-            if (p < end) cp |= (*p++ & 0x3F) << 12;
-            if (p < end) cp |= (*p++ & 0x3F) << 6;
-            if (p < end) cp |= (*p++ & 0x3F);
-        } else {
-            ++p; // skip invalid byte
-            continue;
-        }
-        if (cp < 0x10000) {
-            ++total_chars;
-            if (target && out_idx < max_chars - 1) {
-                target[out_idx++] = static_cast<SQLWCHAR>(cp);
-            }
-        } else {
-            // surrogate pair
-            total_chars += 2;
-            cp -= 0x10000;
-            if (target && out_idx < max_chars - 2) {
-                target[out_idx++] = static_cast<SQLWCHAR>(0xD800 + (cp >> 10));
-                target[out_idx++] = static_cast<SQLWCHAR>(0xDC00 + (cp & 0x3FF));
-            }
-        }
-    }
-    if (target && max_chars > 0) {
-        if (out_idx < max_chars)
-            target[out_idx] = 0;
-        else
-            target[max_chars - 1] = 0;
-    }
-    return total_chars;
-#endif
-}
+// D15/D18: utf8_to_utf16 is gone. It was the only place the driver behaved
+// differently on Windows and POSIX - MultiByteToWideChar writes nothing and
+// returns 0 when the source does not fit, so the Windows build handed back an
+// empty string where the portable branch handed back the truncated prefix.
+// copy_wchars in utils/buffer_copy.cpp is the one implementation now, and it
+// also stops on a codepoint boundary rather than splitting a surrogate pair.
 
 // --- Public API ---
 
@@ -220,31 +142,33 @@ SQLRETURN copy_string_to_wbuffer(
     SQLWCHAR* target,
     SQLINTEGER buffer_length,
     SQLSMALLINT* string_length) {
-    
-    // How many SQLWCHAR characters does src need?
-    SQLINTEGER total_chars = utf8_to_utf16(src, nullptr, 0);
-    SQLINTEGER total_bytes = total_chars * static_cast<SQLINTEGER>(sizeof(SQLWCHAR));
-    
+
+    // D15/D18: one implementation, in copy_wchars, and one behaviour on
+    // every platform.
+    //
+    // The Windows branch of utf8_to_utf16 used MultiByteToWideChar, which
+    // returns **0** with ERROR_INSUFFICIENT_BUFFER when the source does not
+    // fit and writes nothing at all. So a truncating call handed the caller
+    // an *empty* string alongside its 01004, while the POSIX branch of the
+    // same function gave it the truncated prefix - the same driver behaving
+    // differently on the two platforms, in exactly the area D1 is about.
+    //
+    // copy_wchars also stops on a codepoint boundary, so a chunk never ends
+    // half way through a surrogate pair.
+    const BufferCopyResult res =
+        copy_wchars(src, /*offset=*/0, target, static_cast<SQLLEN>(buffer_length));
+
     if (string_length) {
-        *string_length = static_cast<SQLSMALLINT>(total_bytes);
+        // The signature is SQLSMALLINT and the value is a *byte* count, so it
+        // overflows at 16384 UTF-16 units. It used to wrap: a negative
+        // StrLen_or_IndPtr is SQL_NULL_DATA to an application, which then
+        // reads a perfectly good value as NULL. Saturate instead - "there is
+        // more than you asked for" stays true, and NULL is never claimed.
+        constexpr SQLLEN kMaxSmallint = 32767;
+        *string_length = static_cast<SQLSMALLINT>(
+            res.remaining > kMaxSmallint ? kMaxSmallint : res.remaining);
     }
-    
-    if (!target || buffer_length <= 0) {
-        return SQL_SUCCESS;
-    }
-    
-    SQLINTEGER max_chars = buffer_length / static_cast<SQLINTEGER>(sizeof(SQLWCHAR));
-    if (max_chars <= 0) {
-        return SQL_SUCCESS;
-    }
-    
-    utf8_to_utf16(src, target, max_chars);
-    
-    if (total_bytes >= buffer_length) {
-        return SQL_SUCCESS_WITH_INFO;  // Truncation
-    }
-    
-    return SQL_SUCCESS;
+    return res.rc;
 }
 
 std::string sqlw_to_string(const SQLWCHAR* sql_str, SQLSMALLINT length) {
