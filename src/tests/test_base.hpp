@@ -75,6 +75,23 @@ struct RowVerification {
     }
 };
 
+// Outcome of TestBase::commit_now — A22.
+//
+// The probes that INSERT, commit and then check the rows landed used to
+// throw the commit's return code away. When the commit failed,
+// verify_rows_persisted found nothing and the probe blamed the *bind path*
+// — "this is the Firebird #161 silent-corruption shape" — for what was a
+// plain commit failure, at CRITICAL. Root-cause text belongs to the first
+// failure, which is the same principle AGENTS.md states for rollback paths.
+struct CommitOutcome {
+    SQLRETURN rc = SQL_SUCCESS;
+    bool ok = true;
+    std::string sqlstate;   // First SQLSTATE on the connection, when !ok
+    std::string summary;    // Ready to print: rc, SQLSTATE and driver message
+
+    explicit operator bool() const { return ok; }
+};
+
 // Run DDL with autocommit ON, restoring the previous setting on scope exit
 // — A14.
 //
@@ -447,6 +464,15 @@ protected:
         const std::string& pk_col,
         const std::string& value_col,
         long expected_count);
+
+    // SQLEndTran(SQL_COMMIT) on this connection, keeping the return code and
+    // the diagnostics that came with it — A22.
+    //
+    // Pair it with verify_rows_persisted: when the commit failed, the rows
+    // are missing *because of that*, and saying so is the difference between
+    // a report that names the real fault and one that sends a driver author
+    // to look at the parameter-binding code.
+    CommitOutcome commit_now();
 };
 
 // RAII guard for a round-trip test table.

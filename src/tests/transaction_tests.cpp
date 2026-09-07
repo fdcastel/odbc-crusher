@@ -270,19 +270,46 @@ TestResult TransactionTests::test_manual_commit() {
                             if (stmt.fetch()) {
                                 SQLINTEGER count = 0;
                                 SQLLEN indicator = 0;
-                                SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                          &count, sizeof(count), &indicator);
+                                // A27: this return code was discarded. On a
+                                // failed read `count` keeps its initial 0,
+                                // which this probe reads as "not committed" -
+                                // right verdict, wrong reason - and which the
+                                // rollback probe reads as success outright.
+                                SQLRETURN get_rc =
+                                    SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                               &count, sizeof(count), &indicator);
 
-                                if (count == 1) {
+                                if (!SQL_SUCCEEDED(get_rc)) {
+                                    // B3 decides SKIP vs FAIL from the SQLSTATE.
+                                    report_failure(r, SQL_HANDLE_STMT,
+                                                   stmt.get_handle(),
+                                                   "SQLGetData(COUNT(*))");
+                                } else if (count == 1) {
                                     r.actual = "Transaction committed successfully";
                                     r.status = TestStatus::PASS;
                                 } else {
-                                    r.actual = "Data not committed";
+                                    r.actual = "Data not committed (COUNT(*) = " +
+                                               std::to_string(count) + ")";
                                     r.status = TestStatus::FAIL;
                                 }
+                            } else {
+                                // A22: no `else` here meant a COUNT(*) that
+                                // returned no row left run_test's PASS default
+                                // standing, with an empty `actual`. A committed
+                                // INSERT that the engine will not count is not
+                                // a pass.
+                                r.actual = "SELECT COUNT(*) returned no row "
+                                           "after a successful COMMIT";
+                                r.status = TestStatus::FAIL;
                             }
                         } else {
-                            r.actual = "SQLEndTran(COMMIT) failed";
+                            // A22: name the SQLSTATE. "SQLEndTran(COMMIT)
+                            // failed" told a driver author nothing.
+                            r.actual = "SQLEndTran(SQL_COMMIT) rc=" +
+                                       std::to_string(ret) + " [" +
+                                       first_sqlstate(SQL_HANDLE_DBC,
+                                                      conn_.get_handle(),
+                                                      "no diagnostic") + "]";
                             r.status = TestStatus::FAIL;
                         }
 
@@ -379,19 +406,40 @@ TestResult TransactionTests::test_manual_rollback() {
                             if (stmt.fetch()) {
                                 SQLINTEGER count = 0;
                                 SQLLEN indicator = 0;
-                                SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                          &count, sizeof(count), &indicator);
+                                // A27: the discarded return code mattered most
+                                // here. `count` starts at 0 and 0 is this
+                                // probe's PASS condition, so a driver whose
+                                // SQLGetData failed outright was reported as
+                                // having rolled back correctly.
+                                SQLRETURN get_rc =
+                                    SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                               &count, sizeof(count), &indicator);
 
-                                if (count == 0) {
+                                if (!SQL_SUCCEEDED(get_rc)) {
+                                    report_failure(r, SQL_HANDLE_STMT,
+                                                   stmt.get_handle(),
+                                                   "SQLGetData(COUNT(*))");
+                                } else if (count == 0) {
                                     r.actual = "Transaction rolled back successfully";
                                     r.status = TestStatus::PASS;
                                 } else {
-                                    r.actual = "Data was not rolled back";
+                                    r.actual = "Data was not rolled back (COUNT(*) = " +
+                                               std::to_string(count) + ")";
                                     r.status = TestStatus::FAIL;
                                 }
+                            } else {
+                                // A22 - see test_manual_commit.
+                                r.actual = "SELECT COUNT(*) returned no row "
+                                           "after a successful ROLLBACK";
+                                r.status = TestStatus::FAIL;
                             }
                         } else {
-                            r.actual = "SQLEndTran(ROLLBACK) failed";
+                            // A22: name the SQLSTATE.
+                            r.actual = "SQLEndTran(SQL_ROLLBACK) rc=" +
+                                       std::to_string(ret) + " [" +
+                                       first_sqlstate(SQL_HANDLE_DBC,
+                                                      conn_.get_handle(),
+                                                      "no diagnostic") + "]";
                             r.status = TestStatus::FAIL;
                         }
 

@@ -938,6 +938,19 @@ SQLRETURN SQL_API SQLGetData(
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
 
+    // D36 (down payment): SQLGetData was not faultable, so a probe that
+    // ignored its return code could not be caught. A27 is exactly that bug -
+    // two transaction probes read COUNT(*) into a variable initialised to 0
+    // and never checked the call, and 0 was one of them's PASS condition.
+    {
+        const auto& config = BehaviorController::instance().config();
+        if (config.should_fail("SQLGetData")) {
+            stmt->add_diagnostic(config.error_code, 0,
+                                 "Simulated SQLGetData failure");
+            return SQL_ERROR;
+        }
+    }
+
     if (!stmt->executed_ || stmt->current_row_ < 0) {
         stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,
                             "No current row");

@@ -23,6 +23,16 @@ SQLRETURN SQL_API SQLEndTran(
                 conn->add_diagnostic(config.error_code, 0, "Simulated transaction failure");
             }
         }
+        // D40: a COMMIT that returns SQL_ERROR did not commit, so its rows
+        // must stop being visible. The mock used to return the error and
+        // leave every inserted row in place, so a probe that INSERTs,
+        // commits, and then verifies persistence still *passed* while the
+        // driver was reporting a failed commit - the fixture could not
+        // produce the one shape A22 exists to report. A failed ROLLBACK is
+        // left alone: there, the rows may legitimately still be there.
+        if (fType == SQL_COMMIT) {
+            MockCatalog::instance().clear_inserted_data();
+        }
         return SQL_ERROR;
     }
     

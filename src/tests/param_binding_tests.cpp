@@ -468,7 +468,9 @@ TestResult ParameterBindingTests::run_int_to_string_roundtrip(
         return result;
     }
 
-    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+    // A22: keep the return code. A failed COMMIT used to be discarded,
+    // and the missing rows were then blamed on the bind path.
+    const CommitOutcome commit = commit_now();
 
     RowVerification v = verify_rows_persisted(
         table_name, "ID", "VAL", kRowCount);
@@ -476,11 +478,16 @@ TestResult ParameterBindingTests::run_int_to_string_roundtrip(
     if (!v.ok) {
         result.status = TestStatus::FAIL;
         result.actual = "verify_rows_persisted failed: " + v.diagnostic +
-                        " (count=" + std::to_string(v.actual_count) + ")";
-        result.suggestion =
-            "Rows did not persist after SQL_SUCCESS INSERTs — this is the "
-            "Firebird #161 silent-corruption shape. Check the driver's "
-            "numeric-C → character-SQL conversion on the bind path.";
+                        " (count=" + std::to_string(v.actual_count) +
+                        ", " + commit.summary + ")";
+        result.suggestion = commit
+            ? "Rows did not persist after SQL_SUCCESS INSERTs — this is the "
+              "Firebird #161 silent-corruption shape. Check the driver's "
+              "numeric-C → character-SQL conversion on the bind path."
+            : "The COMMIT failed, so the rows are missing because the "
+              "transaction never committed — not because the driver lost "
+              "them on the bind path. Fix the commit failure first; this "
+              "probe cannot say anything about binding until it succeeds.";
     } else {
         std::string mismatches;
         for (int i = 0; i < kRowCount; ++i) {
@@ -652,17 +659,24 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
         return result;
     }
 
-    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+    // A22: keep the return code. A failed COMMIT used to be discarded,
+    // and the missing rows were then blamed on the bind path.
+    const CommitOutcome commit = commit_now();
 
     RowVerification v = verify_rows_persisted(
         table_name, "ID", "VAL", kRowCount);
 
     if (!v.ok) {
         result.status = TestStatus::FAIL;
-        result.actual = "verify_rows_persisted failed: " + v.diagnostic;
-        result.suggestion =
-            "Rows did not persist — Firebird #161 silent-corruption shape. "
-            "Check driver's " + c_type_name + " → " + sql_type_name + " path.";
+        result.actual = "verify_rows_persisted failed: " + v.diagnostic +
+                        " (" + commit.summary + ")";
+        result.suggestion = commit
+            ? "Rows did not persist — Firebird #161 silent-corruption shape. "
+              "Check driver's " + c_type_name + " → " + sql_type_name + " path."
+            : "The COMMIT failed, so the rows are missing because the "
+              "transaction never committed — not because the driver lost "
+              "them on the bind path. Fix the commit failure first; this "
+              "probe cannot say anything about binding until it succeeds.";
     } else {
         std::string mismatches;
         const double kEpsilon = 1e-3;
@@ -1313,10 +1327,14 @@ TestResult ParameterBindingTests::test_param_reexecute_requires_close() {
         return result;
     }
 
-    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+    // A22: this commit only tidies up - the finding is already decided by
+    // exec1/exec2 above - but a silently discarded return code is how a
+    // broken commit stays invisible, so it is reported when it fails.
+    const CommitOutcome commit = commit_now();
 
     std::ostringstream actual;
     actual << "exec1=" << exec1 << " exec2=" << exec2;
+    if (!commit) actual << "  (" << commit.summary << ")";
     if (close_was_needed) {
         actual << " exec_after_close=" << exec_after_close
                << "  (driver REQUIRES SQLFreeStmt(SQL_CLOSE) between executes)";
@@ -1448,7 +1466,18 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_update() {
         seed2.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (2, 'b')");
         core::OdbcStatement seed3(conn_);
         seed3.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (3, 'c')");
-        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+        // A22: this is the seed, and the probe asserts SQLRowCount == 3
+        // against it. If the seed did not commit, the probe's premise is
+        // gone and any row count it reads means nothing - so say so rather
+        // than grade the driver on a fixture that was never established.
+        const CommitOutcome seed_commit = commit_now();
+        if (!seed_commit) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not seed 3 rows: " + seed_commit.summary;
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
 
         core::OdbcStatement stmt(conn_);
         stmt.execute("UPDATE ODBC_TEST_ROUNDTRIP SET VAL = 'X'");
@@ -1506,7 +1535,15 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_delete() {
         seed.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (1, 'a')");
         core::OdbcStatement seed2(conn_);
         seed2.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (2, 'b')");
-        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+        // A22 - see test_sqlrowcount_after_update.
+        const CommitOutcome seed_commit = commit_now();
+        if (!seed_commit) {
+            result.status = TestStatus::SKIP_INCONCLUSIVE;
+            result.actual = "Could not seed 2 rows: " + seed_commit.summary;
+            drop_roundtrip_table();
+            result.duration = elapsed();
+            return result;
+        }
 
         core::OdbcStatement stmt(conn_);
         stmt.execute("DELETE FROM ODBC_TEST_ROUNDTRIP");
@@ -1622,7 +1659,9 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_execute_procedure() {
         return result;
     }
 
-    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+    // A22: keep the return code. A failed COMMIT used to be discarded,
+    // and the missing rows were then blamed on the bind path.
+    const CommitOutcome commit = commit_now();
 
     RowVerification v = verify_rows_persisted(
         "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kRowCount);
@@ -1631,6 +1670,7 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_execute_procedure() {
     actual << "exec_rc=" << exec_rc
            << " SQLRowCount=" << row_count
            << " (spec baseline -1; some engines return 0 or the real count)"
+           << " " << commit.summary
            << " verify=" << (v.ok ? "OK" : v.diagnostic)
            << " persisted_rows=" << v.actual_count;
     result.actual = actual.str();
@@ -1641,11 +1681,15 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_execute_procedure() {
         // hard FAIL.
         result.status = TestStatus::FAIL;
         result.severity = Severity::CRITICAL;
-        result.suggestion =
-            "Procedure CALL returned SQL_SUCCESS but the rows it claimed to "
-            "insert are not visible. This is a silent-corruption shape — "
-            "either the SP body never ran, the txn rolled back, or the data "
-            "went somewhere unexpected.";
+        result.suggestion = commit
+            ? "Procedure CALL returned SQL_SUCCESS but the rows it claimed to "
+              "insert are not visible. This is a silent-corruption shape — "
+              "either the SP body never ran, the txn rolled back, or the data "
+              "went somewhere unexpected."
+            : "The COMMIT failed, so the rows are missing because the "
+              "transaction never committed — not because the driver lost "
+              "them on the bind path. Fix the commit failure first; this "
+              "probe cannot say anything about binding until it succeeds.";
     }
 
     drop_roundtrip_table();
@@ -1749,7 +1793,9 @@ TestResult ParameterBindingTests::test_param_rebind_per_row_row_count() {
         return result;
     }
 
-    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+    // A22: keep the return code. A failed COMMIT used to be discarded,
+    // and the missing rows were then blamed on the bind path.
+    const CommitOutcome commit = commit_now();
 
     RowVerification v = verify_rows_persisted(
         "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kRowCount);
@@ -1760,14 +1806,19 @@ TestResult ParameterBindingTests::test_param_rebind_per_row_row_count() {
         actual << v.diagnostic
                << " (count=" << v.actual_count
                << ", fetched_rows=" << v.actual_values.size()
-               << ", execute_errors=" << execute_errors << ")";
+               << ", execute_errors=" << execute_errors
+               << ", " << commit.summary << ")";
         result.actual = actual.str();
         if (!first_error.empty()) result.diagnostic = first_error;
-        result.suggestion =
-            "Per-row rebind+execute lost rows — this is the Firebird #161 / "
-            "MySQL/MSSQL silent-corruption shape. Driver's parameter-binding "
-            "path is broken. Application-side workaround: bind once and reuse "
-            "the buffer instead of re-binding per row.";
+        result.suggestion = commit
+            ? "Per-row rebind+execute lost rows — this is the Firebird #161 / "
+              "MySQL/MSSQL silent-corruption shape. Driver's parameter-binding "
+              "path is broken. Application-side workaround: bind once and reuse "
+              "the buffer instead of re-binding per row."
+            : "The COMMIT failed, so the rows are missing because the "
+              "transaction never committed — not because the driver lost "
+              "them on the bind path. Fix the commit failure first; this "
+              "probe cannot say anything about binding until it succeeds.";
     } else {
         if (execute_errors == 0) {
             result.actual = "All " + std::to_string(kRowCount) +
@@ -2074,7 +2125,9 @@ TestResult ParameterBindingTests::test_param_batch_then_single_row_tail() {
         return result;
     }
 
-    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+    // A22: keep the return code. A failed COMMIT used to be discarded,
+    // and the missing rows were then blamed on the bind path.
+    const CommitOutcome commit = commit_now();
 
     RowVerification v = verify_rows_persisted(
         "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kTotalRows);
@@ -2086,13 +2139,18 @@ TestResult ParameterBindingTests::test_param_batch_then_single_row_tail() {
                << " tail_executed=" << tail_executed
                << " count=" << v.actual_count
                << " expected=" << kTotalRows
+               << " " << commit.summary
                << " verify_diag=" << v.diagnostic;
         result.actual = actual.str();
         if (!failure_diag.empty()) result.diagnostic = failure_diag;
-        result.suggestion =
-            "Batch-then-tail INSERT lost rows. The most common cause is the "
-            "driver carrying batch-prepare state into the tail prepare; some "
-            "drivers need a fresh statement handle for the tail.";
+        result.suggestion = commit
+            ? "Batch-then-tail INSERT lost rows. The most common cause is the "
+              "driver carrying batch-prepare state into the tail prepare; some "
+              "drivers need a fresh statement handle for the tail."
+            : "The COMMIT failed, so the rows are missing because the "
+              "transaction never committed — not because the driver lost "
+              "them on the bind path. Fix the commit failure first; this "
+              "probe cannot say anything about binding until it succeeds.";
     } else {
         result.actual = "All " + std::to_string(kTotalRows) +
                         " rows persisted (" + std::to_string(kBatchSize) +

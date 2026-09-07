@@ -943,3 +943,98 @@ TEST_F(CrusherE2EFixture, CoreFunctionFailureIsNotExcusedAsUnsupported) {
            "this must not be excused as SKIP_UNSUPPORTED. actual: "
         << t->value("actual", std::string{});
 }
+
+// ── A22: a failed SQLEndTran must be reported as itself ───────────────────
+//
+// The transaction probes used to say "SQLEndTran(COMMIT) failed" with no
+// SQLSTATE and no return code, which tells a driver author nothing about
+// which failure they are looking at. FailOn=SQLEndTran with a chosen
+// ErrorCode gives an exact string to assert on: if the state stops reaching
+// the report, this fails.
+TEST_F(CrusherE2EFixture, FailedEndTranNamesItsSqlstate) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Partial;FailOn=SQLEndTran;"
+        "ErrorCode=40001;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("categories"));
+
+    struct Case {
+        const char* probe;
+        const char* verb;
+    };
+    for (const Case& c : {Case{"test_manual_commit", "SQL_COMMIT"},
+                          Case{"test_manual_rollback", "SQL_ROLLBACK"}}) {
+        auto t = find_test(run.report, "Transaction Tests", c.probe);
+        ASSERT_TRUE(t.has_value()) << c.probe << " is missing from the report";
+
+        const auto status = t->value("status", std::string{});
+        const auto actual = t->value("actual", std::string{});
+        if (status != "FAIL") {
+            // The probe has to reach its SQLEndTran for the assertion to mean
+            // anything; on a platform where it does not, say so rather than
+            // fail. Same reasoning as baseline_blocker above.
+            ADD_FAILURE() << c.probe << " is " << status
+                          << " under FailOn=SQLEndTran, not FAIL: " << actual;
+            continue;
+        }
+        EXPECT_NE(actual.find("40001"), std::string::npos)
+            << c.probe << " did not name the injected SQLSTATE: " << actual;
+        EXPECT_NE(actual.find(c.verb), std::string::npos)
+            << c.probe << " did not say which transaction verb failed: "
+            << actual;
+    }
+}
+
+// A22's other half, on the probes that INSERT and then verify persistence.
+// Those run in autocommit, where the Driver Manager answers SQLEndTran
+// itself, so the commit cannot fail and the blame branch is unreachable
+// against the mock on Windows — what this pins instead is that they stay
+// green when SQLEndTran is gated, i.e. that the reporting change did not
+// turn a working autocommit round trip into a failure.
+TEST_F(CrusherE2EFixture, AutocommitRoundTripsAreUnaffectedByFailOnEndTran) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Partial;FailOn=SQLEndTran;"
+        "ErrorCode=40001;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("categories"));
+
+    for (const char* probe : {"test_bindparam_int_to_varchar_roundtrip",
+                              "test_param_rebind_per_row_row_count",
+                              "test_param_batch_then_single_row_tail"}) {
+        auto t = find_test(run.report, "Parameter Binding Tests", probe);
+        ASSERT_TRUE(t.has_value()) << probe << " is missing from the report";
+        EXPECT_EQ(t->value("status", std::string{}), "PASS")
+            << probe << " under FailOn=SQLEndTran: "
+            << t->value("actual", std::string{});
+    }
+}
+
+// ── A27: a discarded SQLGetData return code produced a false PASS ─────────
+//
+// Both transaction probes read SELECT COUNT(*) into a variable initialised to
+// 0 and threw the return code away. For test_manual_rollback, 0 *is* the pass
+// condition — so a driver whose SQLGetData returned SQL_ERROR was reported as
+// "Transaction rolled back successfully". Measured, not assumed: with the
+// return code discarded this probe PASSes under this exact configuration.
+//
+// FailOn=SQLGetData is a fault-injection hook added with this fix; before it,
+// no configuration of the reference driver could make either probe wrong.
+TEST_F(CrusherE2EFixture, DiscardedGetDataRcDoesNotBecomeARollbackPass) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Partial;FailOn=SQLGetData;"
+        "ErrorCode=HY000;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("categories"));
+
+    for (const char* probe : {"test_manual_rollback", "test_manual_commit"}) {
+        auto t = find_test(run.report, "Transaction Tests", probe);
+        ASSERT_TRUE(t.has_value()) << probe << " is missing from the report";
+
+        const auto status = t->value("status", std::string{});
+        const auto actual = t->value("actual", std::string{});
+        EXPECT_NE(status, "PASS")
+            << probe << " passed while SQLGetData was failing: " << actual;
+        EXPECT_NE(actual.find("SQLGetData"), std::string::npos)
+            << probe << " did not say which call failed: " << actual;
+    }
+}

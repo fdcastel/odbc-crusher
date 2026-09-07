@@ -446,6 +446,31 @@ RowVerification TestBase::verify_rows_persisted(
     return v;
 }
 
+// A22
+CommitOutcome TestBase::commit_now() {
+    CommitOutcome out;
+    out.rc = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
+    out.ok = SQL_SUCCEEDED(out.rc) != 0;
+
+    std::string message;
+    try {
+        auto err = core::OdbcError::from_handle(SQL_HANDLE_DBC,
+                                                conn_.get_handle(),
+                                                "SQLEndTran(SQL_COMMIT)");
+        if (!err.diagnostics().empty()) {
+            out.sqlstate = err.diagnostics()[0].sqlstate;
+            message = err.diagnostics()[0].message;
+        }
+    } catch (...) {
+        // Reading diagnostics must never be the thing that fails a probe.
+    }
+
+    out.summary = "SQLEndTran(SQL_COMMIT) rc=" + std::to_string(out.rc);
+    if (!out.sqlstate.empty()) out.summary += " [" + out.sqlstate + "]";
+    if (!message.empty()) out.summary += " " + message;
+    return out;
+}
+
 // ── RoundTripTableGuard ─────────────────────────────────────────────────────
 
 const std::vector<std::string>& RoundTripTableGuard::default_id_ddl_variants() {
