@@ -43,7 +43,7 @@ odbc-crusher <connection_string> [--verbose] [-o console|json] [-f file.json]
 
 ## 3. Current tasks
 
-Refer to `tmp\IMPROVEMENT_PLAN.md`
+Refer to [`docs/IMPROVEMENT_PLAN.md`](docs/IMPROVEMENT_PLAN.md)
 
 
 ## 4. Test Categories (131 tests)
