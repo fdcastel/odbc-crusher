@@ -126,13 +126,31 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
     // says HYC00 or IM001 still skips - and on Linux these do not say that,
     // which is the D1 gap becoming visible rather than growing.
     //
-    // The total has not moved in two phases. If it ever does, this canary is
-    // what says so.
+    // The total held at 29 non-passing probes for two phases. B11 moved it
+    // to 32, and this is the first time the number has grown rather than
+    // shifted between the two columns - so it is recorded rather than
+    // absorbed. B11 added three probes for the SQLGetDiagField header fields
+    // nothing used to read, and on Linux all three land in gaps that already
+    // exist:
+    //
+    //   * test_diagfield_return_code joins the failing diagnostic cluster
+    //     alongside test_diagfield_sqlstate, test_diagfield_record_count and
+    //     test_multiple_diagnostic_records - the same I1 routing gap, one
+    //     more field;
+    //   * test_diagfield_dynamic_function and test_diagfield_cursor_row_count
+    //     both SKIP because no SELECT variant executes at all through the W
+    //     path on Linux, which is what already makes test_diagfield_row_count
+    //     skip there. That is the D1/D2 export-surface gap, not a property of
+    //     the new probes.
+    //
+    // Nothing new is broken: three probes were added and each landed in a
+    // hole the plan already tracks. If the number moves again for any other
+    // reason, this canary is what says so.
     //
     // These are the IMPROVEMENT_PLAN section 8 gaps, tracked as D1 and I1-I5.
     // Phase 6 drives both numbers to zero and B5 then deletes them.
-    constexpr int kMaxFailed = 12;
-    constexpr int kMaxSkipped = 17;
+    constexpr int kMaxFailed = 13;
+    constexpr int kMaxSkipped = 19;
 #else
     constexpr int kMaxFailed = 0;
     constexpr int kMaxSkipped = 0;
