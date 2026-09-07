@@ -23,6 +23,25 @@ namespace odbc_crusher::tests {
  */
 class EscapeSequenceTests : public TestBase {
 public:
+    // What a scalar probe got back — A4.
+    //
+    // These helpers used to return std::optional<std::string> and swallow
+    // everything else: `catch (...) { return std::nullopt; }`. A failed scalar
+    // function was reported as UCASE='NULL', with no SQLSTATE and no failing
+    // SQL, which is why the DuckDB triage had to be resolved by reading driver
+    // source to find SetNotImplemented/HYC00. The caller can now tell
+    // "unsupported" from "wrong answer" from "never ran".
+    struct ScalarResult {
+        std::optional<std::string> value;   // set only when the call succeeded
+        std::string sqlstate;               // empty when the driver posted none
+        std::string message;                // the driver's text
+        std::string query;                  // the SQL that was actually sent
+        bool truncated = false;             // value longer than the buffer
+
+        explicit operator bool() const { return value.has_value(); }
+        const std::string& operator*() const { return *value; }
+    };
+
     explicit EscapeSequenceTests(core::OdbcConnection& conn)
         : TestBase(conn) {}
 
@@ -73,6 +92,14 @@ private:
     // Helpers
     std::optional<SQLUINTEGER> get_info_uint(SQLUSMALLINT info_type);
     std::optional<std::string> call_native_sql(const std::string& sql);
+
+    // Execute a scalar SELECT and return the first column, with the SQLSTATE
+    // when it fails. A4.
+    ScalarResult exec_scalar_ex(const std::string& sql);
+
+    // Backwards-compatible wrapper for the call sites that only need the
+    // value. New code should prefer exec_scalar_ex() so that a failure can be
+    // classified rather than reported as 'NULL'.
     std::optional<std::string> exec_scalar(const std::string& sql);
 };
 

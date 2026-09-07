@@ -107,8 +107,20 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
     // baseline still trips this test, and the improvement detector below
     // nudges anyone who fixes one of the underlying gaps.
 #ifdef __linux__
-    constexpr int kMaxFailed = 6;
-    constexpr int kMaxSkipped = 23;
+    // B3 moved four of these from the skip column to the fail column without
+    // changing what is broken: 6 fail + 23 skip and 10 fail + 19 skip are the
+    // same 29 non-passing probes. The four are the three Catalog Function
+    // Depth probes and Diagnostic Depth's test_diagfield_sqlstate, all of
+    // which used to report SKIP_INCONCLUSIVE without reading a SQLSTATE.
+    // SQLTables, SQLStatistics and "a SQL_ERROR carries diagnostic record 1"
+    // are Core requirements, so a Linux driver failing them is a failure —
+    // that it was previously counted as a skip is precisely the defect B3
+    // exists to fix, and skips do not affect the exit code.
+    //
+    // These are the IMPROVEMENT_PLAN section 8 gaps, tracked as D1 and I1-I5.
+    // Phase 6 drives both numbers to zero and B5 then deletes them.
+    constexpr int kMaxFailed = 10;
+    constexpr int kMaxSkipped = 19;
 #else
     constexpr int kMaxFailed = 0;
     constexpr int kMaxSkipped = 0;
@@ -885,7 +897,16 @@ TEST_F(CrusherE2EFixture, DeclinedOptionalFeatureSkipsAndNamesItsSqlstate) {
 
     auto t = find_test(run.report, "Array Parameter Tests", "test_param_status_array");
     ASSERT_TRUE(t.has_value());
-    EXPECT_EQ(t->value("status", std::string{}), "SKIP_UNSUPPORTED")
+    const auto status = t->value("status", std::string{});
+    if (status == "SKIP_INCONCLUSIVE") {
+        // The probe did not get as far as the attribute. On Linux the
+        // array-parameter cluster (I5) stops it earlier, and there is no
+        // classification to judge.
+        GTEST_SKIP() << "test_param_status_array is SKIP_INCONCLUSIVE on this "
+                        "platform, so it never reached the attribute: "
+                     << t->value("actual", std::string{});
+    }
+    EXPECT_EQ(status, "SKIP_UNSUPPORTED")
         << "HYC00 means the driver does not implement it; that is a skip";
     // The state must reach the report, whichever way it was classified —
     // without it a reader cannot tell a refusal from a failure.

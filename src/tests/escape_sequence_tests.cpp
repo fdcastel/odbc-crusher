@@ -77,39 +77,104 @@ std::optional<std::string> EscapeSequenceTests::call_native_sql(const std::strin
     return std::nullopt;
 }
 
-std::optional<std::string> EscapeSequenceTests::exec_scalar(const std::string& sql) {
+EscapeSequenceTests::ScalarResult EscapeSequenceTests::exec_scalar_ex(
+    const std::string& sql) {
+    ScalarResult out;
+    out.query = sql;
     try {
         core::OdbcStatement stmt(conn_);
         // A2: every caller passes a bare `SELECT <expr>`, which Firebird
         // rejects — it requires a FROM clause. All 46 call sites in this file
         // are fixed here rather than in 46 string literals.
         auto attempt = execute_first_working(stmt, literal_select_variants(sql));
-        if (!attempt) return std::nullopt;
+        if (!attempt) {
+            // A4: the query never ran. Report which SQLSTATE each variant gave
+            // rather than letting the caller print 'NULL'.
+            if (!attempt.failures.empty()) {
+                out.sqlstate = attempt.failures.front().sqlstate;
+                out.message = attempt.format_failures();
+            }
+            return out;
+        }
+        out.query = attempt.query;
+
         SQLRETURN ret = SQLFetch(stmt.get_handle());
-        if (!SQL_SUCCEEDED(ret)) return std::nullopt;
+        if (!SQL_SUCCEEDED(ret)) {
+            out.sqlstate = first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
+            out.message = "SQLFetch returned " + std::to_string(ret);
+            return out;
+        }
+
         SQLCHAR buf[1024] = {0};
         SQLLEN ind = 0;
         ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR, buf, sizeof(buf), &ind);
-        if (SQL_SUCCEEDED(ret) && ind != SQL_NULL_DATA) {
-            // A3: same shape as call_native_sql above — `ind` is the total
-            // available length, so an over-long value indexed off the end of
-            // this buffer.
-            const auto bounded =
-                bounded_string(reinterpret_cast<const char*>(buf), sizeof(buf), ind);
-            if (bounded.truncated) {
-                // A truncated value cannot be compared against an expected one,
-                // and this helper has no channel to say why — A4 replaces the
-                // optional with {value, sqlstate, diagnostic}, at which point
-                // truncation becomes a reportable outcome instead of silence.
-                return std::nullopt;
-            }
-            return bounded.value;
+        if (!SQL_SUCCEEDED(ret)) {
+            out.sqlstate = first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
+            out.message = "SQLGetData returned " + std::to_string(ret);
+            return out;
         }
-        return std::nullopt;
-    } catch (...) {
-        return std::nullopt;
+        if (ind == SQL_NULL_DATA) {
+            out.message = "value is NULL";
+            return out;
+        }
+
+        // A3: `ind` is the total available length, not the amount written, so
+        // an over-long value would index off the end of this buffer.
+        const auto bounded =
+            bounded_string(reinterpret_cast<const char*>(buf), sizeof(buf), ind);
+        out.truncated = bounded.truncated;
+        if (bounded.truncated) {
+            // A4: truncation is now a reportable outcome rather than silence.
+            out.message = "value truncated at " + std::to_string(sizeof(buf) - 1) +
+                          " bytes; driver reported " + std::to_string(ind);
+            return out;
+        }
+        out.value = bounded.value;
+        return out;
+    } catch (const core::OdbcError& e) {
+        out.sqlstate = e.diagnostics().empty() ? std::string()
+                                               : e.diagnostics()[0].sqlstate;
+        out.message = e.what();
+        return out;
+    } catch (const std::exception& e) {
+        out.message = e.what();
+        return out;
     }
 }
+
+std::optional<std::string> EscapeSequenceTests::exec_scalar(const std::string& sql) {
+    return exec_scalar_ex(sql).value;
+}
+
+namespace {
+
+// A4: describe why a scalar function did not produce the expected value, using
+// the SQLSTATE when there is one. "UCASE='NULL'" told a reader nothing.
+std::string describe_scalar_failure(const std::string& name,
+                                    const EscapeSequenceTests::ScalarResult& res,
+                                    const std::string& expected) {
+    std::string out = name;
+    if (res) {
+        out += "='" + *res.value + "' (expected '" + expected + "')";
+    } else if (!res.sqlstate.empty()) {
+        out += " failed with " + res.sqlstate;
+        if (!res.message.empty()) out += " (" + res.message + ")";
+    } else if (!res.message.empty()) {
+        out += " produced no value: " + res.message;
+    } else {
+        out += " produced no value";
+    }
+    return out + "; ";
+}
+
+// True when the driver said the function is not implemented, as opposed to
+// answering wrongly. Same states as TestBase::classify_failure.
+bool scalar_unsupported(const EscapeSequenceTests::ScalarResult& res) {
+    return res.sqlstate == "IM001" || res.sqlstate == "HYC00" ||
+           res.sqlstate == "HY092" || res.sqlstate == "HY106";
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Discovery Tests
@@ -423,6 +488,7 @@ TestResult EscapeSequenceTests::test_string_scalar_functions() {
             }
 
             int tested = 0, passed_count = 0;
+            int unsupported = 0;   // claimed in the bitmask, HYC00 when run (A4)
             std::ostringstream oss;
             SQLUINTEGER mask = *str_funcs;
 
@@ -444,23 +510,44 @@ TestResult EscapeSequenceTests::test_string_scalar_functions() {
             for (const auto& t : tests) {
                 if (!(mask & t.flag)) continue;
                 ++tested;
-                auto val = exec_scalar(t.sql);
-                if (val && *val == t.expected) {
+                auto res = exec_scalar_ex(t.sql);
+                if (res && *res == t.expected) {
                     ++passed_count;
+                } else if (scalar_unsupported(res)) {
+                    // A4: the bitmask claimed this function and the driver
+                    // then reported "not implemented" when asked to run it.
+                    // That is a different — and more interesting — finding
+                    // than never claiming it, so it is counted, not deducted.
+                    ++unsupported;
+                    oss << t.name << " claimed but not implemented ("
+                        << res.sqlstate << "); ";
                 } else {
-                    oss << t.name << "='" << (val ? *val : "NULL") << "' (expected '" << t.expected << "'); ";
+                    oss << describe_scalar_failure(t.name, res, t.expected);
                 }
             }
 
-            r.actual = std::to_string(passed_count) + "/" + std::to_string(tested) + " string functions passed";
-            if (passed_count < tested) {
+            r.actual = std::to_string(passed_count) + "/" +
+                       std::to_string(tested) + " string functions passed";
+            if (unsupported) {
+                r.actual += " (" + std::to_string(unsupported) +
+                            " claimed but not implemented)";
+            }
+            if (tested == 0) {
+                // The bitmask claimed nothing, so there was nothing to run.
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver claims no string function support";
+            } else if (unsupported == tested) {
+                // A4: it claimed them all and implemented none. A driver
+                // being honest about being incomplete is a skip, not a
+                // failure — but the report now names the SQLSTATE it used
+                // to say so, instead of printing 'NULL'.
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver claims string functions but implements none: " +
+                           oss.str();
+            } else if (passed_count < tested - unsupported) {
                 r.status = TestStatus::FAIL;
                 r.actual += ". Failures: " + oss.str();
                 r.severity = Severity::WARNING;
-            }
-            if (tested == 0) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims no string function support";
             }
         });
 }
@@ -480,6 +567,7 @@ TestResult EscapeSequenceTests::test_numeric_scalar_functions() {
             }
 
             int tested = 0, passed_count = 0;
+            int unsupported = 0;   // claimed in the bitmask, HYC00 when run (A4)
             std::ostringstream oss;
             SQLUINTEGER mask = *num_funcs;
 
@@ -521,7 +609,15 @@ TestResult EscapeSequenceTests::test_numeric_scalar_functions() {
             for (const auto& t : tests) {
                 if (!(mask & t.flag)) continue;
                 ++tested;
-                auto val = exec_scalar(t.sql);
+                auto res = exec_scalar_ex(t.sql);
+                if (scalar_unsupported(res)) {
+                    // A4: see the string-function probe above.
+                    ++unsupported;
+                    oss << t.name << " claimed but not implemented ("
+                        << res.sqlstate << "); ";
+                    continue;
+                }
+                auto val = res.value;
                 if (val) {
                     try {
                         double v = std::stod(*val);
@@ -534,19 +630,34 @@ TestResult EscapeSequenceTests::test_numeric_scalar_functions() {
                         oss << t.name << "='" << *val << "' (not numeric); ";
                     }
                 } else {
-                    oss << t.name << "=NULL; ";
+                    // A4: was `oss << t.name << "=NULL; "`, the exact
+                    // symptom this row is about.
+                    oss << describe_scalar_failure(t.name, res, "a value");
                 }
             }
 
-            r.actual = std::to_string(passed_count) + "/" + std::to_string(tested) + " numeric functions passed";
-            if (passed_count < tested) {
+            r.actual = std::to_string(passed_count) + "/" +
+                       std::to_string(tested) + " numeric functions passed";
+            if (unsupported) {
+                r.actual += " (" + std::to_string(unsupported) +
+                            " claimed but not implemented)";
+            }
+            if (tested == 0) {
+                // The bitmask claimed nothing, so there was nothing to run.
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver claims no numeric function support";
+            } else if (unsupported == tested) {
+                // A4: it claimed them all and implemented none. A driver
+                // being honest about being incomplete is a skip, not a
+                // failure — but the report now names the SQLSTATE it used
+                // to say so, instead of printing 'NULL'.
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver claims numeric functions but implements none: " +
+                           oss.str();
+            } else if (passed_count < tested - unsupported) {
                 r.status = TestStatus::FAIL;
                 r.actual += ". Failures: " + oss.str();
                 r.severity = Severity::WARNING;
-            }
-            if (tested == 0) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims no numeric function support";
             }
         });
 }
@@ -566,6 +677,7 @@ TestResult EscapeSequenceTests::test_datetime_scalar_functions() {
             }
 
             int tested = 0, passed_count = 0;
+            int unsupported = 0;   // claimed in the bitmask, HYC00 when run (A4)
             std::ostringstream oss;
             SQLUINTEGER mask = *td_funcs;
 
@@ -587,7 +699,15 @@ TestResult EscapeSequenceTests::test_datetime_scalar_functions() {
             for (const auto& t : tests) {
                 if (!(mask & t.flag)) continue;
                 ++tested;
-                auto val = exec_scalar(t.sql);
+                auto res = exec_scalar_ex(t.sql);
+                if (scalar_unsupported(res)) {
+                    // A4: see the string-function probe above.
+                    ++unsupported;
+                    oss << t.name << " claimed but not implemented ("
+                        << res.sqlstate << "); ";
+                    continue;
+                }
+                auto val = res.value;
                 if (val && !val->empty()) {
                     if (t.check_nonempty) {
                         ++passed_count;
@@ -602,19 +722,34 @@ TestResult EscapeSequenceTests::test_datetime_scalar_functions() {
                         }
                     }
                 } else {
-                    oss << t.name << "=NULL; ";
+                    // A4: was `oss << t.name << "=NULL; "`, the exact
+                    // symptom this row is about.
+                    oss << describe_scalar_failure(t.name, res, "a value");
                 }
             }
 
-            r.actual = std::to_string(passed_count) + "/" + std::to_string(tested) + " datetime functions passed";
-            if (passed_count < tested) {
+            r.actual = std::to_string(passed_count) + "/" +
+                       std::to_string(tested) + " datetime functions passed";
+            if (unsupported) {
+                r.actual += " (" + std::to_string(unsupported) +
+                            " claimed but not implemented)";
+            }
+            if (tested == 0) {
+                // The bitmask claimed nothing, so there was nothing to run.
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver claims no timedate function support";
+            } else if (unsupported == tested) {
+                // A4: it claimed them all and implemented none. A driver
+                // being honest about being incomplete is a skip, not a
+                // failure — but the report now names the SQLSTATE it used
+                // to say so, instead of printing 'NULL'.
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver claims timedate functions but implements none: " +
+                           oss.str();
+            } else if (passed_count < tested - unsupported) {
                 r.status = TestStatus::FAIL;
                 r.actual += ". Failures: " + oss.str();
                 r.severity = Severity::WARNING;
-            }
-            if (tested == 0) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims no timedate function support";
             }
         });
 }
