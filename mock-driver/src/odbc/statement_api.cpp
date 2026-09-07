@@ -634,7 +634,7 @@ SQLRETURN SQL_API SQLExecDirect(
     config.apply_latency();
     
     // Parse and execute SQL
-    stmt->sql_ = sql_to_string(szSqlStr, static_cast<SQLSMALLINT>(cbSqlStr));
+    stmt->sql_ = sql_to_string(szSqlStr, cbSqlStr);   // D14: no truncation
     auto parsed = parse_sql(stmt->sql_);
     
     if (!parsed.is_valid) {
@@ -657,16 +657,28 @@ SQLRETURN SQL_API SQLExecDirect(
     // Store result
     stmt->executed_ = true;
     stmt->prepared_ = false;
-    stmt->cursor_open_ = !result.data.empty();
+    // D14: a cursor opens because the statement returned a *result set*,
+    // not because that result set has rows. Keying it on `!data.empty()`
+    // meant a SELECT matching nothing left no cursor to close, and the
+    // SQLCloseCursor an application is told to make then failed 24000.
+    stmt->cursor_open_ = !result.column_names.empty();
     stmt->current_row_ = -1;
     stmt->num_result_cols_ = static_cast<SQLSMALLINT>(result.column_names.size());
     // Propagate the executor's affected_rows verbatim when it set one — this
     // includes the spec-baseline -1 from `EXECUTE PROCEDURE` (affected count
-    // unknown). Only fall back to the result-set size when `affected_rows`
-    // is exactly 0 (no DML happened, the rows are query results).
-    stmt->row_count_ = result.affected_rows != 0
-                       ? result.affected_rows
-                       : static_cast<SQLLEN>(result.data.size());
+    // unknown).
+    //
+    // D14: the fallback used to be the *result-set size*, so SQLRowCount
+    // answered a SELECT with the number of rows it had produced. SQLRowCount
+    // reports rows **affected** by an INSERT, UPDATE or DELETE; a cursor
+    // statement has none, and -1 is what says so. The cursor's own row count
+    // has its own field, SQL_DIAG_CURSOR_ROW_COUNT, which D22 now fills in.
+    const bool cursor_statement =
+        parsed.query_type == ParsedQuery::QueryType::Select ||
+        parsed.is_literal_select;
+    stmt->row_count_ = cursor_statement
+                       ? static_cast<SQLLEN>(-1)
+                       : static_cast<SQLLEN>(result.affected_rows);
     record_dynamic_function(stmt, parsed, result.data.size());
     
     stmt->column_names_ = std::move(result.column_names);
@@ -674,6 +686,7 @@ SQLRETURN SQL_API SQLExecDirect(
     for (auto t : result.column_types) {
         stmt->column_types_.push_back(t);
     }
+    stmt->column_sizes_ = result.column_sizes;   // D14
     stmt->result_data_.clear();
     for (const auto& row : result.data) {
         std::vector<std::variant<std::monostate, long long, double, std::string>> converted_row;
@@ -711,7 +724,7 @@ SQLRETURN SQL_API SQLPrepare(
         return SQL_ERROR;
     }
     
-    stmt->sql_ = sql_to_string(szSqlStr, static_cast<SQLSMALLINT>(cbSqlStr));
+    stmt->sql_ = sql_to_string(szSqlStr, cbSqlStr);   // D14: no truncation
     
     // Validate SQL syntax
     auto parsed = parse_sql(stmt->sql_);
@@ -723,7 +736,39 @@ SQLRETURN SQL_API SQLPrepare(
     stmt->prepared_ = true;
     stmt->executed_ = false;
     stmt->cursor_open_ = false;
-    
+
+    // D14: SQLNumResultCols and SQLDescribeCol answered 0 columns until the
+    // statement had been executed, because the metadata was only ever built
+    // by the execute path. A prepared cursor statement has a known result
+    // shape and the spec expects both calls to describe it.
+    //
+    // The shape is taken from the executor rather than from a second
+    // implementation, so the two cannot drift - that is the mistake D13 spent
+    // 88 lines undoing. The WHERE clause is cleared first: it has no bearing
+    // on the column list, and at prepare time it still holds unsubstituted
+    // `?` markers that the predicate builder would rightly reject.
+    const bool cursor_statement =
+        parsed.query_type == ParsedQuery::QueryType::Select ||
+        parsed.is_literal_select;
+    if (cursor_statement) {
+        ParsedQuery shape = parsed;
+        shape.where_clause.clear();
+        auto described = execute_query(shape, config.result_set_size);
+        if (described.success) {
+            stmt->num_result_cols_ =
+                static_cast<SQLSMALLINT>(described.column_names.size());
+            stmt->column_names_ = std::move(described.column_names);
+            stmt->column_types_.assign(described.column_types.begin(),
+                                       described.column_types.end());
+            stmt->column_sizes_ = described.column_sizes;
+        }
+    } else {
+        stmt->num_result_cols_ = 0;
+        stmt->column_names_.clear();
+        stmt->column_types_.clear();
+        stmt->column_sizes_.clear();
+    }
+
     return SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hstmt)
@@ -899,14 +944,20 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     }
 
     stmt->executed_ = true;
-    stmt->cursor_open_ = !result.data.empty();
+    // D14: a cursor opens because the statement returned a *result set*,
+    // not because that result set has rows. Keying it on `!data.empty()`
+    // meant a SELECT matching nothing left no cursor to close, and the
+    // SQLCloseCursor an application is told to make then failed 24000.
+    stmt->cursor_open_ = !result.column_names.empty();
     stmt->current_row_ = -1;
     stmt->num_result_cols_ = static_cast<SQLSMALLINT>(result.column_names.size());
-    // Same `affected_rows != 0` semantics as SQLExecDirect — propagates -1
-    // from EXECUTE PROCEDURE verbatim into SQLRowCount.
-    stmt->row_count_ = result.affected_rows != 0
-                       ? result.affected_rows
-                       : static_cast<SQLLEN>(result.data.size());
+    // Same semantics as SQLExecDirect — see the D14 note there.
+    const bool cursor_statement =
+        parsed.query_type == ParsedQuery::QueryType::Select ||
+        parsed.is_literal_select;
+    stmt->row_count_ = cursor_statement
+                       ? static_cast<SQLLEN>(-1)
+                       : static_cast<SQLLEN>(result.affected_rows);
     record_dynamic_function(stmt, parsed, result.data.size());
 
     stmt->column_names_ = std::move(result.column_names);
@@ -914,6 +965,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     for (auto t : result.column_types) {
         stmt->column_types_.push_back(t);
     }
+    stmt->column_sizes_ = result.column_sizes;   // D14
     stmt->result_data_.clear();
     for (const auto& row : result.data) {
         std::vector<std::variant<std::monostate, long long, double, std::string>> converted_row;
@@ -950,7 +1002,10 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     stmt->current_row_++;
     
     if (stmt->current_row_ >= static_cast<SQLLEN>(stmt->result_data_.size())) {
-        stmt->cursor_open_ = false;
+        // D14: the cursor used to close itself here. Running off the end of a
+        // result set is not the same as closing the cursor - the spec has the
+        // application call SQLCloseCursor after its fetch loop, and closing
+        // early made that call fail 24000 on every well-written program.
         return SQL_NO_DATA;
     }
     
@@ -1553,8 +1608,12 @@ SQLRETURN SQL_API SQLDescribeCol(
     
     if (pfSqlType) *pfSqlType = type;
     
-    // Default column size based on type
-    if (pcbColDef) {
+    // D14: the parser's own measurement first; the per-type default is a
+    // fallback for a column the executor did not size, not the answer.
+    if (pcbColDef && icol <= stmt->column_sizes_.size()
+        && stmt->column_sizes_[icol - 1] != 0) {
+        *pcbColDef = stmt->column_sizes_[icol - 1];
+    } else if (pcbColDef) {
         switch (type) {
             case SQL_INTEGER: *pcbColDef = 10; break;
             case SQL_SMALLINT: *pcbColDef = 5; break;
@@ -1697,6 +1756,15 @@ SQLRETURN SQL_API SQLRowCount(
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
 
+    // D14: SQLRowCount on a statement that has not been executed is a
+    // function sequence error. This used to answer 0, which an application
+    // cannot tell from "the DELETE matched nothing".
+    if (!stmt->executed_) {
+        stmt->add_diagnostic(sqlstate::FUNCTION_SEQUENCE_ERROR, 0,
+                             "Statement has not been executed");
+        return SQL_ERROR;
+    }
+
     if (pcrow) {
         *pcrow = stmt->row_count_;
     }
@@ -1761,6 +1829,31 @@ SQLRETURN SQL_API SQLGetStmtAttr(
             
         case SQL_ATTR_CONCURRENCY:
             if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->concurrency_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN);
+            break;
+
+        // D14: three of these had fields on the handle already and were
+        // simply never wired up; SQL_ATTR_CURSOR_SCROLLABLE had no field.
+        // All four fell through to a default branch that returned
+        // SQL_SUCCESS and left the caller's buffer untouched, so an
+        // application read whatever was already there and believed it.
+        case SQL_ATTR_MAX_LENGTH:
+            if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->max_length_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN);
+            break;
+
+        case SQL_ATTR_NOSCAN:
+            if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->noscan_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN);
+            break;
+
+        case SQL_ATTR_RETRIEVE_DATA:
+            if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->retrieve_data_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN);
+            break;
+
+        case SQL_ATTR_CURSOR_SCROLLABLE:
+            if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->cursor_scrollable_;
             if (pcbValue) *pcbValue = sizeof(SQLULEN);
             break;
             
@@ -1836,7 +1929,15 @@ SQLRETURN SQL_API SQLGetStmtAttr(
             break;
             
         default:
-            return SQL_SUCCESS;  // Ignore unknown attributes
+            // D14: this answered SQL_SUCCESS for every attribute it did not
+            // implement, leaving the caller's buffer untouched — so an
+            // application read whatever was already there and believed the
+            // driver had supplied it. HY092 is what "I do not know that
+            // attribute" is spelled as.
+            stmt->add_diagnostic(sqlstate::INVALID_ATTRIBUTE_IDENTIFIER, 0,
+                                 "Invalid attribute/option identifier: "
+                                 + std::to_string(fAttribute));
+            return SQL_ERROR;
     }
     
     return SQL_SUCCESS;
@@ -1865,6 +1966,33 @@ SQLRETURN SQL_API SQLSetStmtAttr(
             
         case SQL_ATTR_CONCURRENCY:
             stmt->concurrency_ = value;
+            break;
+
+        // D14: accepted silently before, so an application could not tell a
+        // setting had been ignored. SQL_ATTR_CURSOR_SCROLLABLE also moves
+        // cursor_type_, since asking for a scrollable cursor and then being
+        // told the cursor is forward-only is exactly the contradiction a
+        // conformance probe exists to catch.
+        case SQL_ATTR_MAX_LENGTH:
+            stmt->max_length_ = value;
+            break;
+
+        case SQL_ATTR_NOSCAN:
+            stmt->noscan_ = value;
+            break;
+
+        case SQL_ATTR_RETRIEVE_DATA:
+            stmt->retrieve_data_ = value;
+            break;
+
+        case SQL_ATTR_CURSOR_SCROLLABLE:
+            stmt->cursor_scrollable_ = value;
+            if (value == SQL_SCROLLABLE
+                && stmt->cursor_type_ == SQL_CURSOR_FORWARD_ONLY) {
+                stmt->cursor_type_ = SQL_CURSOR_STATIC;
+            } else if (value == SQL_NONSCROLLABLE) {
+                stmt->cursor_type_ = SQL_CURSOR_FORWARD_ONLY;
+            }
             break;
             
         case SQL_ATTR_MAX_ROWS:
@@ -1937,8 +2065,16 @@ SQLRETURN SQL_API SQLSetStmtAttr(
             break;
             
         default:
-            // Ignore unknown attributes
-            break;
+            // D14: silently accepting an attribute the driver does not
+            // implement tells the application its setting took effect. The
+            // spec distinguishes the two cases: HYC00 when the attribute is
+            // recognised but unimplemented, HY092 when it is not recognised
+            // at all. The mock knows every attribute it names above, so
+            // anything reaching here is the latter.
+            stmt->add_diagnostic(sqlstate::INVALID_ATTRIBUTE_IDENTIFIER, 0,
+                                 "Invalid attribute/option identifier: "
+                                 + std::to_string(fAttribute));
+            return SQL_ERROR;
     }
     
     return SQL_SUCCESS;
@@ -1974,6 +2110,12 @@ SQLRETURN SQL_API SQLFreeStmt(
     switch (fOption) {
         case SQL_CLOSE:
             stmt->cursor_open_ = false;
+            // D14: `executed_` used to survive SQL_CLOSE, so a SQLFetch after
+            // closing the cursor walked past the end of an emptied result set
+            // and answered SQL_NO_DATA - "there are no more rows" - when the
+            // truthful answer is 24000, "there is no cursor". An application
+            // looping until SQL_NO_DATA could not tell it had lost its cursor.
+            stmt->executed_ = false;
             stmt->current_row_ = -1;
             stmt->result_data_.clear();
             // D37: a closed cursor has no value to continue retrieving.
@@ -2020,12 +2162,11 @@ SQLRETURN SQL_API SQLNumParams(
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
 
-    // Count ? placeholders in SQL
-    int count = 0;
-    for (char c : stmt->sql_) {
-        if (c == '?') count++;
-    }
-    
+    // D14: this counted every `?` in the statement text, including ones
+    // inside string literals - `SELECT '?' FROM t WHERE a = ?` reported two
+    // parameters. count_param_markers has done quote-aware counting all
+    // along; SQLDescribeParam and the parser already used it.
+    const int count = count_param_markers(stmt->sql_);    
     if (pcpar) *pcpar = static_cast<SQLSMALLINT>(count);
     
     return SQL_SUCCESS;

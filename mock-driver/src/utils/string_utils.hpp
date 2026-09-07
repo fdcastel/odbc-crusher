@@ -28,7 +28,11 @@ SQLRETURN copy_string_to_wbuffer(
     SQLSMALLINT* string_length);
 
 // Convert SQLCHAR* to std::string (UTF-8 passthrough)
-std::string sql_to_string(const SQLCHAR* sql_str, SQLSMALLINT length);
+// D14: `length` is an SQLINTEGER because that is what SQLPrepare and
+// SQLExecDirect are handed. It used to be SQLSMALLINT, and the callers
+// cast on the way in - so a statement of 32 768 bytes or more wrapped
+// negative and came back as "Empty SQL statement".
+std::string sql_to_string(const SQLCHAR* sql_str, SQLINTEGER length);
 
 // Convert SQLWCHAR* (UTF-16) to std::string (UTF-8)
 std::string sqlw_to_string(const SQLWCHAR* sql_str, SQLSMALLINT length);

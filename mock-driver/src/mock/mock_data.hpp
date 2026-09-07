@@ -88,6 +88,11 @@ struct ParsedQuery {
 
 ParsedQuery parse_sql(const std::string& sql);
 
+// Count `?` parameter markers, ignoring any inside a string literal.
+// D14: SQLNumParams used to do its own naive scan and counted the ones
+// in `SELECT '?' FROM t WHERE a = ?` as two parameters.
+int count_param_markers(const std::string& sql);
+
 // Execute a parsed query and get results
 struct QueryResult {
     bool success = false;

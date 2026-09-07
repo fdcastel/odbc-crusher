@@ -117,27 +117,6 @@ std::string generate_product_name(int index) {
     return std::string(products[index % 14]) + " " + std::to_string(index);
 }
 
-// Count '?' parameter markers in SQL (outside of quoted strings)
-int count_param_markers(const std::string& sql) {
-    int count = 0;
-    bool in_single_quote = false;
-    bool in_double_quote = false;
-    for (size_t i = 0; i < sql.length(); ++i) {
-        char c = sql[i];
-        if (c == '\'' && !in_double_quote) {
-            if (in_single_quote && i + 1 < sql.length() && sql[i + 1] == '\'') {
-                ++i;
-                continue;
-            }
-            in_single_quote = !in_single_quote;
-        } else if (c == '"' && !in_single_quote) {
-            in_double_quote = !in_double_quote;
-        } else if (c == '?' && !in_single_quote && !in_double_quote) {
-            ++count;
-        }
-    }
-    return count;
-}
 
 // Parse a SQL type name to SQL type constant
 SQLSMALLINT parse_sql_type(const std::string& type_str, SQLULEN& column_size, SQLSMALLINT& decimal_digits) {
@@ -880,6 +859,33 @@ std::vector<ParsedQuery::ColumnDef> parse_column_defs(const std::string& defs_st
 }
 
 } // anonymous namespace
+
+// D14: this lives outside the anonymous namespace now because
+// SQLNumParams needs it. It was doing quote-aware counting all along;
+// SQLNumParams had its own naive scan that counted a `?` inside a
+// string literal as a parameter.
+
+// Count '?' parameter markers in SQL (outside of quoted strings)
+int count_param_markers(const std::string& sql) {
+    int count = 0;
+    bool in_single_quote = false;
+    bool in_double_quote = false;
+    for (size_t i = 0; i < sql.length(); ++i) {
+        char c = sql[i];
+        if (c == '\'' && !in_double_quote) {
+            if (in_single_quote && i + 1 < sql.length() && sql[i + 1] == '\'') {
+                ++i;
+                continue;
+            }
+            in_single_quote = !in_single_quote;
+        } else if (c == '"' && !in_single_quote) {
+            in_double_quote = !in_double_quote;
+        } else if (c == '?' && !in_single_quote && !in_double_quote) {
+            ++count;
+        }
+    }
+    return count;
+}
 
 CellValue generate_value(const MockColumn& column, int row_index) {
     std::string upper_name = to_upper(column.name);

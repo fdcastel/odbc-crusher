@@ -42,7 +42,7 @@ SQLRETURN copy_string_to_buffer(
     return res.rc;
 }
 
-std::string sql_to_string(const SQLCHAR* sql_str, SQLSMALLINT length) {
+std::string sql_to_string(const SQLCHAR* sql_str, SQLINTEGER length) {
     if (!sql_str) return "";
     
     if (length == SQL_NTS) {

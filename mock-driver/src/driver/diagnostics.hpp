@@ -34,6 +34,10 @@ namespace sqlstate {
     constexpr const char* CONNECTION_FAILURE = "08001";
     constexpr const char* INVALID_HANDLE = "HY000";
     constexpr const char* INVALID_HANDLE_TYPE = "HY092";
+    // D14: same SQLSTATE, different meaning - HY092 is "invalid
+    // attribute/option identifier" as well as "invalid handle type",
+    // and the attribute call sites read better naming what they mean.
+    constexpr const char* INVALID_ATTRIBUTE_IDENTIFIER = "HY092";
     constexpr const char* FUNCTION_SEQUENCE_ERROR = "HY010";
     constexpr const char* INVALID_STRING_OR_BUFFER_LENGTH = "HY090";
     constexpr const char* INVALID_ATTRIBUTE_VALUE = "HY024";

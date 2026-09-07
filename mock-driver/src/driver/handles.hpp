@@ -164,6 +164,11 @@ public:
     SQLULEN noscan_ = SQL_NOSCAN_OFF;
     SQLULEN max_length_ = 0;
     SQLULEN retrieve_data_ = SQL_RD_ON;
+    // D14: the three above were stored but never wired to
+    // SQLGetStmtAttr/SQLSetStmtAttr - the calls fell through to a
+    // default branch that returned SQL_SUCCESS and left the caller's
+    // buffer untouched. SQL_ATTR_CURSOR_SCROLLABLE had no field at all.
+    SQLULEN cursor_scrollable_ = SQL_NONSCROLLABLE;
     
     // Array parameter attributes (ODBC Arrays of Parameter Values)
     SQLUSMALLINT* param_status_ptr_ = nullptr;       // SQL_ATTR_PARAM_STATUS_PTR
@@ -198,6 +203,10 @@ public:
     std::vector<std::vector<std::variant<std::monostate, long long, double, std::string>>> result_data_;
     std::vector<std::string> column_names_;
     std::vector<SQLSMALLINT> column_types_;
+    // D14: the executor produced real column sizes and threw them away,
+    // so SQLDescribeCol hard-coded one per SQL type and reported every
+    // VARCHAR as 255 whatever the DDL said.
+    std::vector<SQLULEN> column_sizes_;
     
     // Descriptors
     DescriptorHandle* app_param_desc_ = nullptr;
