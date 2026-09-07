@@ -1,5 +1,6 @@
 // Info API - SQLGetInfo, SQLGetTypeInfo, SQLGetFunctions
 
+#include "odbc/info_types.hpp"
 #include "driver/handles.hpp"
 #include "utils/buffer_copy.hpp"
 #include "driver/diagnostics.hpp"
@@ -145,6 +146,7 @@ namespace {
 // probe needs in order to be able to fail.
 //
 // Strict (the default) is unchanged, so no existing caller is affected.
+
 SQLRETURN info_return_string(const DriverConfig& config,
                              ConnectionHandle* conn,
                              const std::string& value,
@@ -176,7 +178,57 @@ SQLRETURN info_return_string(const DriverConfig& config,
     return ret;
 }
 
+
 }  // namespace
+
+namespace mock_odbc {
+
+// D49: the one list. SQLGetInfoW kept a second, incomplete copy of this and
+// the two drifted - see info_types.hpp. Every entry here has a RETURN_STRING
+// case in the switch below.
+
+bool info_type_is_string(SQLUSMALLINT type) {
+    switch (type) {
+        case SQL_CATALOG_NAME:
+        case SQL_CATALOG_NAME_SEPARATOR:
+        case SQL_CATALOG_TERM:
+        case SQL_COLUMN_ALIAS:
+        case SQL_DATABASE_NAME:
+        case SQL_DATA_SOURCE_NAME:
+        case SQL_DATA_SOURCE_READ_ONLY:
+        case SQL_DBMS_NAME:
+        case SQL_DBMS_VER:
+        case SQL_DESCRIBE_PARAMETER:
+        case SQL_DRIVER_NAME:
+        case SQL_DRIVER_ODBC_VER:
+        case SQL_DRIVER_VER:
+        case SQL_EXPRESSIONS_IN_ORDERBY:
+        case SQL_IDENTIFIER_QUOTE_CHAR:
+        case SQL_INTEGRITY:
+        case SQL_KEYWORDS:
+        case SQL_LIKE_ESCAPE_CLAUSE:
+        case SQL_MULTIPLE_ACTIVE_TXN:
+        case SQL_MULT_RESULT_SETS:
+        case SQL_NEED_LONG_DATA_LEN:
+        case SQL_ODBC_VER:
+        case SQL_ORDER_BY_COLUMNS_IN_SELECT:
+        case SQL_OUTER_JOINS:
+        case SQL_PROCEDURES:
+        case SQL_PROCEDURE_TERM:
+        case SQL_ROW_UPDATES:
+        case SQL_SCHEMA_TERM:
+        case SQL_SEARCH_PATTERN_ESCAPE:
+        case SQL_SERVER_NAME:
+        case SQL_SPECIAL_CHARACTERS:
+        case SQL_TABLE_TERM:
+        case SQL_USER_NAME:
+            return true;
+        default:
+            return false;
+    }
+}
+
+}  // namespace mock_odbc
 
 extern "C" {
 

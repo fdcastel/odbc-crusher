@@ -1571,6 +1571,19 @@ ParsedQuery parse_sql(const std::string& sql) {
             result.is_literal_select = true;
             std::string expr_str = trim(trimmed.substr(6));
             while (!expr_str.empty() && expr_str.back() == ';') { expr_str.pop_back(); expr_str = trim(expr_str); }
+            // D44: `SELECT 1 WHERE <predicate>` used to parse the whole tail as
+            // one select-list expression, so the predicate was neither
+            // evaluated nor reported - the row came back whatever it said.
+            // That is the portable no-table shape a literal predicate probe
+            // needs, so the WHERE is split off here and evaluated below.
+            {
+                const std::string expr_upper = to_upper(expr_str);
+                const size_t w = find_top_level(expr_str, expr_upper, "WHERE", 0, true);
+                if (w != std::string::npos) {
+                    result.where_clause = trim(expr_str.substr(w + 5));
+                    expr_str = trim(expr_str.substr(0, w));
+                }
+            }
             auto expressions = split_expressions(expr_str);
             int expr_idx = 1;
             for (const auto& expr : expressions) {
@@ -1823,6 +1836,22 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             result.column_types.push_back(lit.sql_type);
             result.column_sizes.push_back(lit.column_size);
             row.push_back(lit.value);
+        }
+        // D44: a literal SELECT can carry a constant predicate - it is the
+        // portable way to ask a driver whether it evaluates one, with no table
+        // involved. There are no columns to resolve, so an empty table is the
+        // right context; an unreadable predicate is reported rather than
+        // ignored, exactly as it is for a table query (D12).
+        if (!query.where_clause.empty()) {
+            static const MockTable kNoColumns{};
+            auto filter = make_where_filter(kNoColumns, query.where_clause);
+            if (!filter.understood) {
+                result.success = false;
+                result.error_sqlstate = filter.sqlstate;
+                result.error_message = filter.message;
+                return result;
+            }
+            if (!filter.match(row)) return result;   // predicate is false: no rows
         }
         result.data.push_back(std::move(row));
         return result;

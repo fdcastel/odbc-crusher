@@ -885,21 +885,73 @@ TestResult EscapeSequenceTests::test_like_escape_sequence() {
                 return;
             }
 
-            // B1/B2: the probe reads a SQLGetInfo string and stops. Every
-            // answer it can get is legal, so there is nothing to grade, and
-            // scoring it as PASS gave every driver a free point.
+            // D44: the probe used to read the string and stop, which gave
+            // every driver a free point for a claim nobody checked. It sends
+            // the escape now and holds the driver to it. D42 taught the
+            // reference driver to evaluate LIKE, which is what made this
+            // possible - before, the probe would have been failing the
+            // fixture rather than testing a driver.
             //
-            // It is named for an escape it never sends, which is the real
-            // defect. Sending one was written and backed out, because the
-            // reference driver accepts `{escape '!'}` and ignores it -
-            // measured, with 'xzy' still matching 'x!_y' - since it does not
-            // evaluate LIKE predicates at all. The probe would have been
-            // failing the fixture, not testing a driver. Fixture gap: D42.
-            // The redesign of these three probes: D44.
-            r.status = TestStatus::INFORMATIONAL;
-            r.actual = "SQL_LIKE_ESCAPE_CLAUSE = '" + like_support +
-                       "' (advertised only; this probe does not send the "
-                       "escape - D44)";
+            // With `!` named as the escape, `x!_y` matches the literal `x_y`
+            // and nothing else. Two statements, because either answer alone
+            // could be produced by a driver that ignores the clause: one that
+            // ignores it matches both, one that rejects the pattern matches
+            // neither.
+            struct Case { const char* subject; bool should_match; };
+            static const Case kCases[] = {
+                {"x_y", true},    // the escaped underscore, matched literally
+                {"xzy", false},   // would match only if `_` stayed a wildcard
+            };
+
+            std::ostringstream oss;
+            oss << "SQL_LIKE_ESCAPE_CLAUSE = '" << like_support << "'";
+            bool all_correct = true;
+            bool ran_any = false;
+
+            for (const auto& c : kCases) {
+                const std::string predicate =
+                    std::string(" WHERE '") + c.subject
+                    + "' LIKE 'x!_y' ESCAPE '!'";
+                // A2's dialect helper, with the predicate appended to each
+                // variant - Firebird needs a FROM, Oracle wants DUAL.
+                std::vector<std::string> variants;
+                for (const auto& base : literal_select_variants("SELECT 1")) {
+                    variants.push_back(base + predicate);
+                }
+                core::OdbcStatement stmt(conn_);
+                auto attempt = execute_first_working(stmt, variants);
+                if (!attempt) {
+                    oss << "; '" << c.subject << "' did not execute";
+                    continue;
+                }
+                int rows = 0;
+                while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) ++rows;
+                SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+                ran_any = true;
+                const bool matched = rows > 0;
+                oss << "; '" << c.subject << "' " << (matched ? "matched" : "did not match");
+                if (matched != c.should_match) all_correct = false;
+            }
+
+            r.actual = oss.str();
+            if (!ran_any) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion =
+                    "No dialect variant of a literal SELECT with a WHERE "
+                    "executed, so the escape could not be sent.";
+                return;
+            }
+            if (!all_correct) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.suggestion =
+                    "The driver advertises SQL_LIKE_ESCAPE_CLAUSE but does "
+                    "not honour the ESCAPE clause: with '!' named as the "
+                    "escape, 'x!_y' must match the literal 'x_y' and must not "
+                    "match 'xzy'. A driver that matches both is ignoring the "
+                    "clause; one that matches neither is rejecting the "
+                    "pattern.";
+            }
         });
 }
 
@@ -931,15 +983,59 @@ TestResult EscapeSequenceTests::test_outer_join_escape() {
             if (caps & SQL_OJ_INNER) oss << "INNER ";
             if (caps & SQL_OJ_ALL_COMPARISON_OPS) oss << "ALL_COMPARISON_OPS ";
 
-            // B1/B2 - see test_like_escape_sequence. Sending
-            // `{oj ... LEFT OUTER JOIN ...}` needs a second table or a derived
-            // table, and the reference driver can run neither (42S02 on
-            // `FROM (SELECT 1 AS A) T1`) - fixture gap D43, redesign D44.
-            r.status = TestStatus::INFORMATIONAL;
+            // D44: the probe used to read the bitmask and stop. It sends the
+            // escape now, for the one capability it can construct portably: a
+            // LEFT OUTER JOIN of a discovered table to itself, which needs no
+            // second table and no derived table. D43 assumed the reference
+            // driver could run neither and therefore could not be sent this;
+            // re-measuring showed `FROM {oj T1 LEFT OUTER JOIN T2 ON …}` does
+            // execute, so the blocker was not where the row thought it was.
             r.actual = "OJ capabilities: " +
-                       (oss.str().empty() ? std::string("none") : oss.str()) +
-                       " (advertised only; this probe does not send the "
-                       "escape - D44)";
+                       (oss.str().empty() ? std::string("none") : oss.str());
+
+            if (!(caps & SQL_OJ_LEFT)) {
+                // Nothing claimed, nothing to hold the driver to.
+                r.status = TestStatus::INFORMATIONAL;
+                r.actual += " (LEFT not claimed, so nothing to send)";
+                return;
+            }
+
+            const auto tables = discover_tables(1);
+            if (tables.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual += "; SQLTables reported no table to join";
+                r.suggestion =
+                    "The probe joins one discovered table to itself, so it "
+                    "needs SQLTables to report at least one.";
+                return;
+            }
+
+            // A self-join needs no second table and no column list: `ON 1 = 1`
+            // is a constant join condition every engine in the matrix accepts,
+            // and the point is whether the {oj} escape is accepted at all.
+            const std::string name = tables.front().qualified();
+            const std::string sql =
+                "SELECT * FROM {oj " + name + " T1 LEFT OUTER JOIN "
+                + name + " T2 ON 1 = 1}";
+
+            core::OdbcStatement stmt(conn_);
+            const SQLRETURN rc = SQLExecDirect(
+                stmt.get_handle(),
+                reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())),
+                SQL_NTS);
+            r.actual += "; sent `" + sql + "` -> rc=" + std::to_string(rc);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.actual += " " + first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.suggestion =
+                    "The driver advertises SQL_OJ_LEFT in "
+                    "SQL_OJ_CAPABILITIES but rejected a LEFT OUTER JOIN sent "
+                    "through the {oj} escape. Either support the escape or "
+                    "stop claiming the capability.";
+                return;
+            }
+            SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
         });
 }
 
@@ -966,13 +1062,56 @@ TestResult EscapeSequenceTests::test_interval_literal_escape() {
             if (mask & SQL_DL_SQL92_INTERVAL_MONTH) oss << "INTERVAL_MONTH ";
             if (mask & SQL_DL_SQL92_INTERVAL_DAY) oss << "INTERVAL_DAY ";
 
-            // B1/B2 - see test_like_escape_sequence. The redesign that
-            // actually sends `{d '...'}` is D44.
-            r.status = TestStatus::INFORMATIONAL;
-            r.actual = "Datetime literals: " +
-                       (oss.str().empty() ? std::string("none") : oss.str()) +
-                       " (advertised only; this probe does not send the "
-                       "escape - D44)";
+            // D44: the probe used to read the bitmask and stop. It now sends
+            // the escape for each literal kind the driver claims, and fails on
+            // any claimed-but-rejected one - the same shape as
+            // test_scalar_function_claim_vs_execute further up this file.
+            struct Literal { SQLUINTEGER bit; const char* expr; const char* name; };
+            static const Literal kLiterals[] = {
+                {SQL_DL_SQL92_DATE,      "{d '2026-01-15'}",              "DATE"},
+                {SQL_DL_SQL92_TIME,      "{t '14:30:00'}",                "TIME"},
+                {SQL_DL_SQL92_TIMESTAMP, "{ts '2026-01-15 14:30:00'}",    "TIMESTAMP"},
+            };
+
+            std::vector<std::string> broken;
+            int claimed = 0;
+            for (const auto& lit : kLiterals) {
+                if (!(mask & lit.bit)) continue;
+                ++claimed;
+                core::OdbcStatement stmt(conn_);
+                auto attempt = execute_first_working(
+                    stmt,
+                    literal_select_variants(std::string("SELECT ") + lit.expr));
+                if (attempt) {
+                    SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+                } else {
+                    broken.push_back(lit.name);
+                }
+            }
+
+            std::ostringstream detail;
+            detail << "Datetime literals: "
+                   << (oss.str().empty() ? std::string("none") : oss.str())
+                   << "- sent " << claimed << " claimed literal(s)";
+            if (!broken.empty()) {
+                detail << "; rejected:";
+                for (const auto& b : broken) detail << " " << b;
+            }
+            r.actual = detail.str();
+
+            if (claimed == 0) {
+                // Nothing claimed, nothing to hold the driver to.
+                r.status = TestStatus::INFORMATIONAL;
+                return;
+            }
+            if (!broken.empty()) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.suggestion =
+                    "SQL_DATETIME_LITERALS claims support for a literal the "
+                    "driver then rejects. Either accept the escape or clear "
+                    "the bit.";
+            }
         });
 }
 

@@ -16,6 +16,7 @@
 #endif
 #include <sql.h>
 #include <sqlext.h>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -214,7 +215,6 @@ TEST_F(WhereParserTest, MalformedStatementsAnswerInsteadOfCrashing) {
     EXPECT_EQ(TableSize(), 4);
 }
 
-}  // namespace
 
 // ── D42: LIKE is evaluated, and honours an ESCAPE clause ─────────────────
 //
@@ -254,3 +254,46 @@ TEST_F(WhereParserTest, LiteralLikeWithEscapeIsEvaluated) {
     EXPECT_EQ(CountRows("SELECT ID FROM W WHERE 'x_y' LIKE 'x!_y' ESCAPE '!'"), 4)
         << "the escaped underscore did not match a literal underscore";
 }
+
+// ── D44 / D43: a literal SELECT evaluates its WHERE ──────────────────────
+//
+// `SELECT 1 WHERE <predicate>` used to parse the whole tail as one select-list
+// expression, so the predicate was neither evaluated nor reported and the row
+// came back whatever it said. That is the portable no-table shape a literal
+// predicate probe needs.
+
+TEST_F(WhereParserTest, ALiteralSelectEvaluatesAConstantPredicate) {
+    EXPECT_EQ(CountRows("SELECT 1 WHERE 1 = 1"), 1);
+    EXPECT_EQ(CountRows("SELECT 1 WHERE 1 = 0"), 0)
+        << "the constant predicate was ignored";
+}
+
+TEST_F(WhereParserTest, ALiteralSelectEvaluatesALikeEscape) {
+    EXPECT_EQ(CountRows("SELECT 1 WHERE 'xzy' LIKE 'x!_y' ESCAPE '!'"), 0);
+    EXPECT_EQ(CountRows("SELECT 1 WHERE 'x_y' LIKE 'x!_y' ESCAPE '!'"), 1);
+}
+
+TEST_F(WhereParserTest, ALiteralSelectReportsAnUnreadablePredicate) {
+    EXPECT_FALSE(SQL_SUCCEEDED(Try("SELECT 1 WHERE 'a' BETWEEN 'a' AND 'b'")));
+    EXPECT_EQ(State(), "42000");
+}
+
+// D43, measured: a derived table really is unsupported, and the mock does not
+// advertise it. An honest 42S02 is the right answer, and this pins it so the
+// row's claim stays checkable.
+TEST_F(WhereParserTest, ADerivedTableIsAnHonestTableNotFound) {
+    EXPECT_FALSE(SQL_SUCCEEDED(Try("SELECT 1 FROM (SELECT 1 AS A) T1")));
+    EXPECT_EQ(State(), "42S02");
+}
+
+// ...but the {oj} escape does execute, which is what D43 assumed it could
+// not. The join is not evaluated - the parser takes the first table and
+// ignores the rest - so this pins execution, not join semantics.
+TEST_F(WhereParserTest, AnOuterJoinEscapeExecutes) {
+    EXPECT_TRUE(SQL_SUCCEEDED(Try(
+        "SELECT CUSTOMER_ID FROM {oj CUSTOMERS T1 LEFT OUTER JOIN CUSTOMERS T2"
+        " ON T1.CUSTOMER_ID = T2.CUSTOMER_ID}")));
+}
+
+
+}  // namespace

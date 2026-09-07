@@ -9,6 +9,7 @@
 // the .def file exports them under their ANSI name and the DM calls
 // them directly.
 
+#include "odbc/info_types.hpp"
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 #include "driver/config.hpp"
@@ -386,44 +387,13 @@ MOCK_ENTRY_TRY {
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
 
-    // Determine if this info type returns a string value.
-    // Use an explicit list — the heuristic based on length was fragile.
-    bool is_string = false;
-    switch (fInfoType) {
-        case SQL_DRIVER_NAME:
-        case SQL_DRIVER_VER:
-        case SQL_DRIVER_ODBC_VER:
-        case SQL_ODBC_VER:
-        case SQL_DBMS_NAME:
-        case SQL_DBMS_VER:
-        case SQL_SERVER_NAME:
-        case SQL_DATA_SOURCE_NAME:
-        case SQL_DATA_SOURCE_READ_ONLY:
-        case SQL_DATABASE_NAME:
-        case SQL_USER_NAME:
-        case SQL_IDENTIFIER_QUOTE_CHAR:
-        case SQL_CATALOG_NAME:
-        case SQL_CATALOG_NAME_SEPARATOR:
-        case SQL_CATALOG_TERM:
-        case SQL_SCHEMA_TERM:
-        case SQL_TABLE_TERM:
-        case SQL_PROCEDURE_TERM:
-        case SQL_DESCRIBE_PARAMETER:
-        case SQL_MULT_RESULT_SETS:
-        case SQL_MULTIPLE_ACTIVE_TXN:
-        case SQL_NEED_LONG_DATA_LEN:
-        case SQL_OUTER_JOINS:
-        case SQL_ORDER_BY_COLUMNS_IN_SELECT:
-        case SQL_PROCEDURES:
-        case SQL_ROW_UPDATES:
-        case SQL_SEARCH_PATTERN_ESCAPE:
-        case SQL_SPECIAL_CHARACTERS:
-            is_string = true;
-            break;
-        default:
-            is_string = false;
-            break;
-    }
+    // D49: this kept its own list of the string info types and the two
+    // drifted - nine were missing, so SQL_LIKE_ESCAPE_CLAUSE (and eight
+    // others) came back empty through the W path. On Windows that is
+    // every path: the driver manager converts an application's ANSI
+    // call into a W call before it reaches the driver. One list now,
+    // in the translation unit that owns the switch it describes.
+    const bool is_string = info_type_is_string(fInfoType);
 
     // Call ANSI version into a temp buffer
     SQLCHAR ansi_buf[1024] = {0};
