@@ -133,6 +133,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(mock-odbc-tests
     tests/test_main.cpp
     tests/test_handles.cpp
+    tests/test_connection.cpp
     tests/test_config.cpp
     tests/test_gettypeinfo.cpp
     tests/test_error_injection.cpp

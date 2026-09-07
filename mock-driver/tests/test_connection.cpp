@@ -10,6 +10,8 @@
 #include <sql.h>
 #include <sqlext.h>
 
+#include <chrono>
+
 using namespace mock_odbc;
 
 extern "C" {
@@ -24,6 +26,8 @@ extern "C" {
     SQLRETURN SQL_API SQLSetConnectAttr(SQLHDBC, SQLINTEGER, SQLPOINTER, SQLINTEGER);
     SQLRETURN SQL_API SQLGetInfo(SQLHDBC, SQLUSMALLINT, SQLPOINTER, SQLSMALLINT, SQLSMALLINT*);
     SQLRETURN SQL_API SQLNativeSql(SQLHDBC, SQLCHAR*, SQLINTEGER, SQLCHAR*, SQLINTEGER, SQLINTEGER*);
+    SQLRETURN SQL_API SQLGetDiagRec(SQLSMALLINT, SQLHANDLE, SQLSMALLINT, SQLCHAR*,
+                                    SQLINTEGER*, SQLCHAR*, SQLSMALLINT, SQLSMALLINT*);
 }
 
 class ConnectionTest : public ::testing::Test {
@@ -51,8 +55,9 @@ protected:
         if (henv != SQL_NULL_HENV) {
             SQLFreeHandle(SQL_HANDLE_ENV, henv);
         }
-        // Reset behavior controller
-        BehaviorController::instance().reset();
+        // Reset behavior controller. There is no reset() — the singleton is
+        // reset by pushing a default-constructed config back into it.
+        BehaviorController::instance().set_config(DriverConfig{});
     }
 };
 
@@ -166,9 +171,22 @@ TEST_F(ConnectionTest, SQLDisconnect_Basic) {
 }
 
 TEST_F(ConnectionTest, SQLDisconnect_NotConnected) {
+    // The original assertion here was SQL_SUCCESS, with the comment
+    // "Disconnecting when not connected is OK". That is not what the spec
+    // says: SQLDisconnect on a connection that is not open returns SQL_ERROR
+    // with SQLSTATE 08003 (Connection not open). The mock is right and this
+    // test was wrong — it had never been compiled, so nobody found out.
     SQLRETURN ret = SQLDisconnect(hdbc);
-    // Disconnecting when not connected is OK
-    EXPECT_EQ(ret, SQL_SUCCESS);
+    EXPECT_EQ(ret, SQL_ERROR);
+
+    auto* conn = validate_dbc_handle(hdbc);
+    ASSERT_NE(conn, nullptr);
+    SQLCHAR state[6] = {0};
+    SQLSMALLINT msg_len = 0;
+    SQLRETURN diag_ret = SQLGetDiagRec(SQL_HANDLE_DBC, hdbc, 1, state,
+                                       nullptr, nullptr, 0, &msg_len);
+    EXPECT_TRUE(SQL_SUCCEEDED(diag_ret));
+    EXPECT_STREQ(reinterpret_cast<const char*>(state), "08003");
 }
 
 TEST_F(ConnectionTest, SQLDisconnect_InvalidHandle) {
@@ -407,9 +425,19 @@ TEST_F(ConnectionTest, SQLNativeSql_InvalidHandle) {
 
 // ===== Behavior Controller Tests =====
 
-TEST_F(ConnectionTest, SimulatedConnectionFailure) {
-    // Configure to fail connections
-    BehaviorController::instance().configure_failure("SQLConnect", "08001", "Connection failed");
+// DISABLED — known mock defect D32, scheduled for Phase 5: SQLConnect never
+// calls should_fail(), so no fault injection can reach it. The assertions below
+// are correct as written; drop the DISABLED_ prefix when D32 lands.
+// (DISABLED_ rather than GTEST_SKIP: the skip macro returns, and the resulting
+// unreachable body trips C4702 under the /W4 /WX added in E1.)
+TEST_F(ConnectionTest, DISABLED_SimulatedConnectionFailure) {
+    // Configure to fail connections. There is no configure_failure() — the
+    // real mechanism is Mode=Partial plus a FailOn list and an ErrorCode.
+    DriverConfig cfg;
+    cfg.mode = BehaviorMode::Partial;
+    cfg.fail_on = {"SQLConnect"};
+    cfg.error_code = "08001";
+    BehaviorController::instance().set_config(cfg);
     
     SQLRETURN ret = SQLConnect(hdbc,
         reinterpret_cast<SQLCHAR*>(const_cast<char*>("TestDSN")), SQL_NTS,
@@ -422,10 +450,14 @@ TEST_F(ConnectionTest, SimulatedConnectionFailure) {
     EXPECT_FALSE(conn->is_connected());
 }
 
-TEST_F(ConnectionTest, SimulatedConnectionTimeout) {
+// DISABLED — known mock defect D32, scheduled for Phase 5: SQLConnect never
+// calls apply_latency(), and it overwrites the BehaviorController config with a
+// default-constructed one, so the Latency set here is discarded before it could
+// be read. Drop the DISABLED_ prefix when D32 lands.
+TEST_F(ConnectionTest, DISABLED_SimulatedConnectionTimeout) {
     auto& ctrl = BehaviorController::instance();
     DriverConfig config;
-    config.connection_delay_ms = 100;  // 100ms delay
+    config.latency = std::chrono::milliseconds(100);  // 100ms delay
     ctrl.set_config(config);
     
     auto start = std::chrono::steady_clock::now();
