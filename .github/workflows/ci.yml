@@ -319,6 +319,39 @@ jobs:
         sudo ./mock-driver-artifact/install/register.sh "$DRIVER_ABS"
         ctest --test-dir build -C Release --output-on-failure -L e2e
 
+    - name: Report the reference-run baseline
+      # IMPROVEMENT_PLAN Phase 6 is driven by this number: there is no
+      # Linux machine to measure on, so each experiment in orders 43-47
+      # pushes a change and reads the counts out of this step. ctest
+      # swallows a passing test's output, which is why this runs the
+      # tool directly rather than relying on the e2e harness's own
+      # print. Never fails the job - it is a measurement, not a gate;
+      # the gate is the e2e baseline assertion above.
+      if: matrix.build_type == 'Release'
+      continue-on-error: true
+      shell: bash
+      run: |
+        BIN=$(find build -name 'odbc-crusher' -type f | head -n1)
+        "$BIN" "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;" \
+            -o json -f baseline.json > /dev/null 2>&1 || true
+        python3 - <<'PY'
+        import json
+        with open('baseline.json', encoding='utf-8') as fh:
+            report = json.load(fh)
+        summary = report['summary']
+        keys = ('total_tests', 'passed', 'failed', 'skipped',
+                'informational', 'scored', 'errors', 'pass_rate')
+        print('[baseline]', {k: summary.get(k) for k in keys})
+        for bucket in ('FAIL', 'ERROR', 'SKIP_UNSUPPORTED',
+                       'SKIP_INCONCLUSIVE'):
+            names = [t['test_name']
+                     for c in report['categories']
+                     for t in c.get('tests', [])
+                     if t.get('status') == bucket]
+            if names:
+                print('[baseline]', bucket, len(names), sorted(names))
+        PY
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       if: matrix.build_type == 'Release'
