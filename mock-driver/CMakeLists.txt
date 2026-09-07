@@ -14,6 +14,25 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Export compile commands for IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Warning flags — IMPROVEMENT_PLAN.md D16/E1. The mock is built as its own
+# CMake project (`cmake -S mock-driver`), so it does not inherit the parent's
+# module path. Reuse the parent's CompilerWarnings.cmake rather than keeping a
+# second copy of the flag list in sync by hand; the guard keeps a standalone
+# copy of this directory configurable, just without /WX.
+if(NOT TARGET project_warnings)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/CompilerWarnings.cmake")
+        list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
+        include(CompilerWarnings)
+    else()
+        message(WARNING
+            "../cmake/CompilerWarnings.cmake not found — building mock-odbc-driver "
+            "without the project warning flags. This is only expected when the "
+            "mock-driver/ directory has been copied out of the repository.")
+        add_library(project_warnings INTERFACE)
+        add_library(project_options INTERFACE)
+    endif()
+endif()
+
 # Platform-specific defines (Windows-only — odbc.h needs these to behave)
 if(WIN32)
     add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX)
@@ -54,6 +73,11 @@ set(MOCK_DRIVER_CORE_SOURCES
 
 # Driver shared library
 add_library(mock-odbc-driver SHARED ${MOCK_DRIVER_CORE_SOURCES})
+
+target_link_libraries(mock-odbc-driver PRIVATE
+    project_warnings
+    project_options
+)
 
 target_include_directories(mock-odbc-driver PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -123,6 +147,8 @@ target_link_libraries(mock-odbc-tests PRIVATE
     GTest::gtest
     GTest::gtest_main
     ODBC::ODBC
+    project_warnings
+    project_options
 )
 
 target_include_directories(mock-odbc-tests PRIVATE

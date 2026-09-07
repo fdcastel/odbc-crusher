@@ -85,7 +85,7 @@ bool apply_silent_corruption(MockRow& row, const MockTable& table,
 std::string to_upper(const std::string& s) {
     std::string result = s;
     std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return std::toupper(c); });
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return result;
 }
 
@@ -763,7 +763,7 @@ CellValue evaluate_scalar_function(const std::string& func_name_upper, const std
     if (func_name_upper == "LCASE" || func_name_upper == "LOWER") {
         std::string r = unquote_sql_string(args_str);
         std::transform(r.begin(), r.end(), r.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return r;
     }
     if (func_name_upper == "LENGTH" || func_name_upper == "LEN" || func_name_upper == "CHAR_LENGTH") {
@@ -1230,7 +1230,7 @@ ParsedQuery parse_sql(const std::string& sql) {
             }
 
             result.is_valid = true;
-            result.affected_rows = static_cast<long long>(result.insert_row_count);
+            result.affected_rows = static_cast<int>(result.insert_row_count);
         } else {
             result.error_message = "INSERT without INTO clause";
         }

@@ -18,7 +18,7 @@ namespace {
 std::string str_to_upper(const std::string& s) {
     std::string result = s;
     std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return std::toupper(c); });
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return result;
 }
 
@@ -296,7 +296,15 @@ SQLRETURN SQL_API SQLGetInfo(
             RETURN_USHORT(128);
             
         case SQL_MAX_DRIVER_CONNECTIONS:
-            RETURN_USHORT(config.max_connections > 0 ? config.max_connections : 0);
+            // DriverConfig::max_connections is an int; this info type is a
+            // SQLUSMALLINT. Clamp rather than let the value wrap — a
+            // MaxConnections=70000 would otherwise be reported as 4464.
+            // 0 keeps its ODBC meaning of "no limit / unknown".
+            RETURN_USHORT(config.max_connections > 0
+                              ? static_cast<SQLUSMALLINT>(config.max_connections > 0xFFFF
+                                                              ? 0xFFFF
+                                                              : config.max_connections)
+                              : static_cast<SQLUSMALLINT>(0));
             
         case SQL_MAX_CONCURRENT_ACTIVITIES:
             RETURN_USHORT(0);  // No limit

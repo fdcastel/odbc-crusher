@@ -13,6 +13,8 @@ target_link_libraries(odbc-crusher PRIVATE
     odbc_crusher_tests_lib
     odbc_crusher_reporting
     CLI11::CLI11
+    project_warnings
+    project_options
 )
 
 target_include_directories(odbc-crusher PRIVATE

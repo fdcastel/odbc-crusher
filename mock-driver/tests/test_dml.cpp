@@ -144,10 +144,10 @@ TEST_F(DmlTest, MultiTupleInsertParameterisedPersistsAllRows) {
     SQLLEN val_ind[3] = {SQL_NTS, SQL_NTS, SQL_NTS};
 
     for (int i = 0; i < 3; ++i) {
-        ASSERT_EQ(SQLBindParameter(hstmt, 1 + 2 * i, SQL_PARAM_INPUT,
+        ASSERT_EQ(SQLBindParameter(hstmt, static_cast<SQLUSMALLINT>(1 + 2 * i), SQL_PARAM_INPUT,
                                    SQL_C_SLONG, SQL_INTEGER, 0, 0,
                                    &ids[i], 0, &id_ind[i]), SQL_SUCCESS);
-        ASSERT_EQ(SQLBindParameter(hstmt, 2 + 2 * i, SQL_PARAM_INPUT,
+        ASSERT_EQ(SQLBindParameter(hstmt, static_cast<SQLUSMALLINT>(2 + 2 * i), SQL_PARAM_INPUT,
                                    SQL_C_CHAR, SQL_VARCHAR, 64, 0,
                                    vals[i], sizeof(vals[i]), &val_ind[i]),
                   SQL_SUCCESS);

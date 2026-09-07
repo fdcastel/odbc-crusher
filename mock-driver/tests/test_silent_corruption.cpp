@@ -182,7 +182,9 @@ TEST_F(SilentCorruptionTest, MangleUnicodeReplacesNonAsciiBytesOnFetch) {
     Exec("CREATE TABLE T_UNICODE (ID INTEGER, V VARCHAR(64))");
     // 'café' in UTF-8: 'c','a','f',0xC3,0xA9.
     SQLPrepare(hstmt, (SQLCHAR*)"INSERT INTO T_UNICODE (ID, V) VALUES (1, ?)", SQL_NTS);
-    char param_value[] = {'c','a','f',(char)0xC3,(char)0xA9,0};
+    // unsigned char, not char: 0xC3 and 0xA9 do not fit a signed char, so
+    // the braced list narrows and /W4 /WX rejects every spelling of it.
+    unsigned char param_value[] = {'c', 'a', 'f', 0xC3, 0xA9, 0};
     SQLLEN param_len = 5;
     ASSERT_EQ(SQLBindParameter(hstmt, 1, SQL_PARAM_INPUT,
                                SQL_C_CHAR, SQL_VARCHAR, 64, 0,

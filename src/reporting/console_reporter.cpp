@@ -6,7 +6,11 @@
 
 namespace odbc_crusher::reporting {
 
-void ConsoleReporter::report_start(const std::string& connection_string) {
+// The connection string is deliberately unused here: it can carry a PWD=
+// value, and this banner goes to the console and to CI logs. Naming the
+// parameter trips /W4 C4100, so it stays unnamed until G5 decides what
+// (redacted) form of it the banner should show.
+void ConsoleReporter::report_start(const std::string& /*connection_string*/) {
     out_ << "ODBC Crusher v" << ODBC_CRUSHER_VERSION << " - Driver analysis report\n\n";
 }
 
@@ -41,13 +45,13 @@ void ConsoleReporter::report_category(const std::string& category_name,
         summary << errors << " errors";
     }
     
-    // Calculate padding for right-aligned summary
-    std::string summary_str = summary.str();
-    int name_len = category_name.length();
-    int summary_len = summary_str.length();
-    int total_width = 80;
-    int padding = total_width - name_len - summary_len - 2; // -2 for spaces
-    if (padding < 2) padding = 2;
+    // Calculate padding for right-aligned summary. This is size_t arithmetic
+    // throughout: narrowing the lengths to int tripped C4267 under /W4, and
+    // the subtraction has to be guarded rather than allowed to wrap.
+    const std::string summary_str = summary.str();
+    constexpr size_t kTotalWidth = 80;
+    const size_t consumed = category_name.size() + summary_str.size() + 2;  // +2 for spaces
+    const size_t padding = (kTotalWidth >= consumed + 2) ? (kTotalWidth - consumed) : 2;
     
     out_ << category_name << ":" << std::string(padding, ' ') << summary_str << "\n";
     

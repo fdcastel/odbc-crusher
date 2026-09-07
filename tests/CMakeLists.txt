@@ -31,6 +31,8 @@ target_link_libraries(odbc_crusher_tests PRIVATE
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
+    project_warnings
+    project_options
 )
 
 # Discover tests for CTest. Bump DISCOVERY_TIMEOUT past the 5s default —
@@ -59,6 +61,8 @@ add_executable(odbc_crusher_e2e_tests
 target_link_libraries(odbc_crusher_e2e_tests PRIVATE
     GTest::gtest
     nlohmann_json::nlohmann_json
+    project_warnings
+    project_options
 )
 
 target_compile_definitions(odbc_crusher_e2e_tests PRIVATE

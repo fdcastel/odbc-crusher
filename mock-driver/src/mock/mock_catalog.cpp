@@ -10,7 +10,7 @@ namespace {
 std::string to_upper(const std::string& s) {
     std::string result = s;
     std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return std::toupper(c); });
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return result;
 }
 
@@ -30,7 +30,7 @@ void MockCatalog::initialize(const std::string& preset) {
 
     std::string lower_preset = preset;
     std::transform(lower_preset.begin(), lower_preset.end(), lower_preset.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
     if (lower_preset == "empty") {
         create_empty_catalog();
