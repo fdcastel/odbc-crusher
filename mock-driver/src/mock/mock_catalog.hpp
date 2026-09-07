@@ -187,6 +187,15 @@ public:
     // caller can invoke the callback without holding the catalog lock —
     // callbacks call back into MockCatalog (insert_row etc.) and would
     // deadlock if the caller still held mu_.
+    // D13: has this table's row store been created yet? A table with an
+    // empty store has been emptied; a table with no store at all has
+    // never been materialised, and a stock table then still generates.
+    bool has_row_store(const std::string& table_name) const;
+    // Create the row store from `rows` unless it already exists.
+    // Returns true when it did the work.
+    bool materialize_rows(const std::string& table_name,
+                          std::vector<MockRow> rows);
+
     void register_procedure(MockProcedure procedure);
     std::optional<MockProcedure> find_procedure(const std::string& name) const;
     std::vector<MockProcedure> snapshot_procedures() const;

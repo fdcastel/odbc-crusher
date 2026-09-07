@@ -29,6 +29,10 @@ struct ParsedQuery {
     std::string table_name;
     std::vector<std::string> columns;  // For SELECT: requested columns (* = all)
     std::string where_clause;
+    // D13: ORDER BY used to ride along in the tail of `where_clause`,
+    // and `where_clause` was only set when the statement had a WHERE -
+    // so `SELECT ... ORDER BY x` with no WHERE came back unsorted.
+    std::string order_by;
     int affected_rows = 0;
     bool is_valid = false;
     bool is_literal_select = false;    // SELECT without FROM (literal values)
@@ -38,6 +42,11 @@ struct ParsedQuery {
     // For CALL <name>(arg1, arg2, ...)
     std::string proc_name;
     std::vector<CellValue> proc_args;
+    // D13: `{?=CALL fn(...)}` - the leading `?` is the function's return
+    // value and occupies parameter 1, so the first argument is parameter
+    // 2. Getting that offset wrong is the classic driver defect A17
+    // exists to detect, which is why the mock has to model it exactly.
+    bool has_return_value = false;
 
     // For literal SELECT: parsed expressions
     struct LiteralExpr {

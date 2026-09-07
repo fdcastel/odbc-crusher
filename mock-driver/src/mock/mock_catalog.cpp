@@ -187,6 +187,53 @@ void MockCatalog::initialize(const std::string& preset) {
             };
         procedures_.push_back(std::move(inout));
     }
+
+    // D13 — a callable *function*: `{?=CALL MOCK_FN(?, ?)}`.
+    //
+    // The mock had no function at all, only the MOCK_INOUT procedure, so the
+    // shape the README advertises as the port-3 canary had nothing to run
+    // against and A17/I7 stayed deferred. params[0] is the SQL_RETURN_VALUE
+    // slot, which means the caller's first *argument* is parameter 2 - and a
+    // driver that binds it as parameter 1 is the defect those probes look for.
+    {
+        MockProcedure fn;
+        fn.name = "MOCK_FN";
+        fn.params = {
+            {"RETURN_VALUE", SQL_RETURN_VALUE, SQL_INTEGER, 10, 0},
+            {"P_A",          SQL_PARAM_INPUT,  SQL_INTEGER, 10, 0},
+            {"P_B",          SQL_PARAM_INPUT,  SQL_INTEGER, 10, 0},
+        };
+        // Bound positions the caller supplies as *arguments*; the return value
+        // is bound too but is not an argument, hence 2 rather than 3.
+        fn.input_param_count = 2;
+        fn.remarks =
+            "MOCK_FN(a INTEGER, b INTEGER) RETURNS INTEGER - returns a*10 + b. "
+            "Drives the {?=CALL fn(...)} function-call escape: parameter 1 is "
+            "the return value, so a is parameter 2 and b is parameter 3.";
+        fn.callback =
+            [](MockCatalog&, const std::vector<CellValue>& args)
+                -> MockProcedureResult {
+                MockProcedureResult res;
+                res.affected_rows = -1;
+                auto as_int = [](const CellValue& v) -> long long {
+                    if (std::holds_alternative<long long>(v)) {
+                        return std::get<long long>(v);
+                    }
+                    if (std::holds_alternative<double>(v)) {
+                        return static_cast<long long>(std::get<double>(v));
+                    }
+                    return 0;
+                };
+                const long long a = args.size() > 0 ? as_int(args[0]) : 0;
+                const long long b = args.size() > 1 ? as_int(args[1]) : 0;
+                // a*10 + b, so an argument read into the wrong slot produces a
+                // visibly wrong answer rather than a coincidentally right one.
+                res.output_values.resize(3);
+                res.output_values[0] = a * 10 + b;
+                return res;
+            };
+        procedures_.push_back(std::move(fn));
+    }
 }
 
 void MockCatalog::create_default_catalog() {
@@ -486,6 +533,20 @@ std::vector<MockRow> MockCatalog::snapshot_inserted_rows(
     auto it = inserted_data_.find(to_upper(table_name));
     if (it == inserted_data_.end()) return {};
     return it->second;
+}
+
+bool MockCatalog::has_row_store(const std::string& table_name) const {
+    std::lock_guard<std::mutex> g(mu_);
+    return inserted_data_.find(to_upper(table_name)) != inserted_data_.end();
+}
+
+bool MockCatalog::materialize_rows(const std::string& table_name,
+                                   std::vector<MockRow> rows) {
+    std::lock_guard<std::mutex> g(mu_);
+    const std::string key = to_upper(table_name);
+    if (inserted_data_.find(key) != inserted_data_.end()) return false;
+    inserted_data_[key] = std::move(rows);
+    return true;
 }
 
 void MockCatalog::register_procedure(MockProcedure procedure) {

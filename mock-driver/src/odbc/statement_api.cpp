@@ -488,7 +488,11 @@ static void substitute_params(
 
     // CALL <proc>(args) — same shape as INSERT but populates `proc_args`.
     if (parsed.query_type == ParsedQuery::QueryType::Call) {
-        SQLUSMALLINT param_idx = 0;
+        // D13: `{?=CALL fn(?)}` binds the return value as parameter 1, so the
+        // first *argument* marker is parameter 2. Starting the count at 0 here
+        // is what makes a driver read the return-value binding as the first
+        // argument - the defect A17 is written to detect.
+        SQLUSMALLINT param_idx = parsed.has_return_value ? 1 : 0;
         for (size_t ai = 0; ai < parsed.proc_args.size(); ++ai) {
             bool is_marker = ai < parsed.insert_param_markers.size()
                              && parsed.insert_param_markers[ai];

@@ -1204,7 +1204,27 @@ std::string preprocess_escape_sequences(const std::string& sql) {
     std::string result;
     result.reserve(sql.length());
     
+    // D13: the outer scan used to treat every `{` as the start of an escape,
+    // including one inside a string literal - so `SELECT '{fn NOW()}'` had its
+    // *data* rewritten. find_close_brace already tracked quoting correctly;
+    // the loop that called it did not.
+    bool in_literal = false;
     for (size_t i = 0; i < sql.length(); ++i) {
+        if (sql[i] == '\'') {
+            // A doubled quote inside a literal is an escaped quote, not the end.
+            if (in_literal && i + 1 < sql.length() && sql[i + 1] == '\'') {
+                result += "''";
+                ++i;
+                continue;
+            }
+            in_literal = !in_literal;
+            result += sql[i];
+            continue;
+        }
+        if (in_literal) {
+            result += sql[i];
+            continue;
+        }
         if (sql[i] == '{') {
             size_t close = find_close_brace(sql, i);
             if (close == std::string::npos) {
@@ -1306,6 +1326,20 @@ std::string preprocess_escape_sequences(const std::string& sql) {
 
 } // anonymous namespace for escape sequence helpers
 
+// D13: `?=CALL fn(...)` / `? = CALL fn(...)`, the ODBC function-call form
+// once preprocess_escape_sequences has stripped the braces. Anything between
+// the `?` and `CALL` is whitespace or the `=`.
+static bool is_function_call(const std::string& upper) {
+    size_t i = 0;
+    if (i >= upper.size() || upper[i] != '?') return false;
+    ++i;
+    while (i < upper.size() && std::isspace(static_cast<unsigned char>(upper[i]))) ++i;
+    if (i >= upper.size() || upper[i] != '=') return false;
+    ++i;
+    while (i < upper.size() && std::isspace(static_cast<unsigned char>(upper[i]))) ++i;
+    return upper.compare(i, 5, "CALL ") == 0;
+}
+
 ParsedQuery parse_sql(const std::string& sql) {
     ParsedQuery result;
     result.is_valid = false;
@@ -1405,10 +1439,19 @@ ParsedQuery parse_sql(const std::string& sql) {
                 return result;
             }
             
-            // WHERE clause
+            // WHERE clause, then ORDER BY - D13. Both are extracted here
+            // so the executor never has to dig one out of the other.
+            const auto order_pos = upper.find("ORDER BY", table_end);
+            if (order_pos != std::string::npos) {
+                result.order_by = trim(trimmed.substr(order_pos + 8));
+            }
             auto where_pos = upper.find("WHERE", table_end);
             if (where_pos != std::string::npos) {
-                result.where_clause = trimmed.substr(where_pos + 5);
+                const size_t where_start = where_pos + 5;
+                result.where_clause =
+                    order_pos != std::string::npos && order_pos > where_start
+                        ? trimmed.substr(where_start, order_pos - where_start)
+                        : trimmed.substr(where_start);
             }
             
             // Parse column list
@@ -1538,13 +1581,25 @@ ParsedQuery parse_sql(const std::string& sql) {
         } else {
             result.error_message = "DELETE without FROM clause";
         }
-    } else if (upper.find("CALL ") == 0 || upper.find("EXECUTE PROCEDURE ") == 0) {
-        // Stored procedure invocation:
+    } else if (upper.find("CALL ") == 0 || upper.find("EXECUTE PROCEDURE ") == 0
+               || is_function_call(upper)) {
+        // Stored procedure or function invocation:
         //   CALL <name>(arg1, arg2, ...)
         //   EXECUTE PROCEDURE <name>(arg1, arg2, ...)   (Firebird-style)
+        //   ?=CALL <name>(arg1, ...)                    (function, D13)
         result.query_type = ParsedQuery::QueryType::Call;
-        const size_t skip = (upper.find("CALL ") == 0) ? 5 : 18;
-        std::string body = trim(trimmed.substr(skip));
+        std::string call_text = trimmed;
+        if (is_function_call(upper)) {
+            // D13: strip the return-value marker and remember it. Everything
+            // downstream then sees an ordinary CALL, except that parameter
+            // numbering starts at 2.
+            result.has_return_value = true;
+            const size_t call_at = to_upper(call_text).find("CALL ");
+            call_text = trim(call_text.substr(call_at));
+        }
+        const std::string call_upper = to_upper(call_text);
+        const size_t skip = (call_upper.find("CALL ") == 0) ? 5 : 18;
+        std::string body = trim(call_text.substr(skip));
         auto open = body.find('(');
         if (open == std::string::npos) {
             // Bare procedure name with no args
@@ -1651,6 +1706,9 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             result.error_sqlstate = "42000";
             return result;
         }
+        // D13: a function's params[0] is its SQL_RETURN_VALUE slot; the
+        // arguments the caller wrote line up from params[1]. The callback is
+        // handed the arguments only - the return value is what it produces.
         MockProcedureResult pr = proc->callback(catalog, query.proc_args);
         result.success = pr.success;
         result.error_message = pr.error_message;
@@ -1805,15 +1863,19 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 }
             }
             
-            // Return inserted data if available, otherwise generate mock data
-            auto rows = catalog.snapshot_inserted_rows(query.table_name);
-            if (!rows.empty()) {
-                result.data = std::move(rows);
-            } else if (table->remarks == "User-created table") {
-                // User-created table with no data — empty result
-            } else {
-                result.data = generate_mock_data(*table, result_set_size);
+            // D13: this used to ask "are there any inserted rows?" and
+            // generate a fresh set whenever the answer was no - so a stock
+            // table emptied by DELETE sprang back to life on the next SELECT,
+            // and UPDATE/DELETE (which only ever saw inserted_data_) reported
+            // 0 rows for a table SELECT said had ten. There is one row store
+            // now: a stock table materialises into it on first use, and every
+            // statement reads and writes the same rows.
+            if (!catalog.has_row_store(query.table_name)
+                && table->remarks != "User-created table") {
+                catalog.materialize_rows(query.table_name,
+                                         generate_mock_data(*table, result_set_size));
             }
+            result.data = catalog.snapshot_inserted_rows(query.table_name);
             
             // D13: this used to re-implement WHERE filtering rather than
             // call the shared predicate builder, and the copy was weaker in three
@@ -1846,15 +1908,8 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             // ── Basic ORDER BY ──
             // Supports: "ORDER BY column [ASC|DESC]"
             {
-                std::string wcu = to_upper(query.where_clause.empty()
-                    ? "" : query.where_clause);
-                // Also check original SQL for ORDER BY after WHERE
-                std::string full_upper = to_upper(query.table_name); // check sql later
-                // Parse ORDER BY from where_clause tail or from sql
-                auto order_pos = wcu.find("ORDER BY");
-                if (order_pos != std::string::npos) {
-                    std::string order_spec = trim(
-                        query.where_clause.substr(order_pos + 8));
+                if (!query.order_by.empty()) {
+                    const std::string order_spec = query.order_by;
                     bool desc = (to_upper(order_spec).find("DESC") != std::string::npos);
                     // Extract column name
                     auto space = order_spec.find(' ');
@@ -2032,6 +2087,12 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 result.error_message = filter.message;
                 break;
             }
+            // D13: same row store as SELECT - see the note there.
+            if (!catalog.has_row_store(query.table_name)
+                && table->remarks != "User-created table") {
+                catalog.materialize_rows(query.table_name,
+                                         generate_mock_data(*table, result_set_size));
+            }
             result.affected_rows = static_cast<long long>(
                 catalog.count_matching_rows(query.table_name, filter.match));
             break;
@@ -2045,6 +2106,12 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 result.error_sqlstate = filter.sqlstate;
                 result.error_message = filter.message;
                 break;
+            }
+            // D13: same row store as SELECT - see the note there.
+            if (!catalog.has_row_store(query.table_name)
+                && table->remarks != "User-created table") {
+                catalog.materialize_rows(query.table_name,
+                                         generate_mock_data(*table, result_set_size));
             }
             result.affected_rows = static_cast<long long>(
                 catalog.erase_matching_rows(query.table_name, filter.match));
