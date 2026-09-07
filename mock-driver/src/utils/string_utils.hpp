@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../driver/common.hpp"
+#include <optional>
 #include <string>
 
 namespace mock_odbc {
@@ -33,6 +34,13 @@ SQLRETURN copy_string_to_wbuffer(
 // cast on the way in - so a statement of 32 768 bytes or more wrapped
 // negative and came back as "Empty SQL statement".
 std::string sql_to_string(const SQLCHAR* sql_str, SQLINTEGER length);
+
+// D25: the catalog functions need to tell a null pointer ("no filter")
+// from an empty string ("the name that is empty"). sql_to_string maps
+// both to "", which is why SQLTables' enumeration modes could not be
+// implemented.
+std::optional<std::string> sql_to_optional(const SQLCHAR* sql_str,
+                                           SQLSMALLINT length);
 
 // Convert SQLWCHAR* (UTF-16) to std::string (UTF-8)
 std::string sqlw_to_string(const SQLWCHAR* sql_str, SQLSMALLINT length);

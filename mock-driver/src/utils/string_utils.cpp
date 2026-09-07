@@ -42,6 +42,12 @@ SQLRETURN copy_string_to_buffer(
     return res.rc;
 }
 
+std::optional<std::string> sql_to_optional(const SQLCHAR* sql_str,
+                                           SQLSMALLINT length) {
+    if (!sql_str) return std::nullopt;
+    return sql_to_string(sql_str, length);
+}
+
 std::string sql_to_string(const SQLCHAR* sql_str, SQLINTEGER length) {
     if (!sql_str) return "";
     

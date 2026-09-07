@@ -551,10 +551,10 @@ MOCK_ENTRY_TRY {
     std::string typ  = sqlw_to_string(szTableType,   cbTableType);
 
     return SQLTables(hstmt,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
-        typ.empty() ? nullptr : (SQLCHAR*)typ.c_str(), static_cast<SQLSMALLINT>(typ.length()));
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szTableName ? (SQLCHAR*)tab.c_str() : nullptr, static_cast<SQLSMALLINT>(tab.length()),
+        szTableType ? (SQLCHAR*)typ.c_str() : nullptr, static_cast<SQLSMALLINT>(typ.length()));
 }
 MOCK_ENTRY_CATCH(hstmt)
 
@@ -571,10 +571,10 @@ MOCK_ENTRY_TRY {
     std::string col = sqlw_to_string(szColumnName,  cbColumnName);
 
     return SQLColumns(hstmt,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
-        col.empty() ? nullptr : (SQLCHAR*)col.c_str(), static_cast<SQLSMALLINT>(col.length()));
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szTableName ? (SQLCHAR*)tab.c_str() : nullptr, static_cast<SQLSMALLINT>(tab.length()),
+        szColumnName ? (SQLCHAR*)col.c_str() : nullptr, static_cast<SQLSMALLINT>(col.length()));
 }
 MOCK_ENTRY_CATCH(hstmt)
 
@@ -589,9 +589,9 @@ MOCK_ENTRY_TRY {
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
 
     return SQLPrimaryKeys(hstmt,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()));
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szTableName ? (SQLCHAR*)tab.c_str() : nullptr, static_cast<SQLSMALLINT>(tab.length()));
 }
 MOCK_ENTRY_CATCH(hstmt)
 
@@ -612,12 +612,12 @@ MOCK_ENTRY_TRY {
     std::string fkTab = sqlw_to_string(szFkTableName,   cbFkTableName);
 
     return SQLForeignKeys(hstmt,
-        pkCat.empty() ? nullptr : (SQLCHAR*)pkCat.c_str(), static_cast<SQLSMALLINT>(pkCat.length()),
-        pkSch.empty() ? nullptr : (SQLCHAR*)pkSch.c_str(), static_cast<SQLSMALLINT>(pkSch.length()),
-        pkTab.empty() ? nullptr : (SQLCHAR*)pkTab.c_str(), static_cast<SQLSMALLINT>(pkTab.length()),
-        fkCat.empty() ? nullptr : (SQLCHAR*)fkCat.c_str(), static_cast<SQLSMALLINT>(fkCat.length()),
-        fkSch.empty() ? nullptr : (SQLCHAR*)fkSch.c_str(), static_cast<SQLSMALLINT>(fkSch.length()),
-        fkTab.empty() ? nullptr : (SQLCHAR*)fkTab.c_str(), static_cast<SQLSMALLINT>(fkTab.length()));
+        szPkCatalogName ? (SQLCHAR*)pkCat.c_str() : nullptr, static_cast<SQLSMALLINT>(pkCat.length()),
+        szPkSchemaName ? (SQLCHAR*)pkSch.c_str() : nullptr, static_cast<SQLSMALLINT>(pkSch.length()),
+        szPkTableName ? (SQLCHAR*)pkTab.c_str() : nullptr, static_cast<SQLSMALLINT>(pkTab.length()),
+        szFkCatalogName ? (SQLCHAR*)fkCat.c_str() : nullptr, static_cast<SQLSMALLINT>(fkCat.length()),
+        szFkSchemaName ? (SQLCHAR*)fkSch.c_str() : nullptr, static_cast<SQLSMALLINT>(fkSch.length()),
+        szFkTableName ? (SQLCHAR*)fkTab.c_str() : nullptr, static_cast<SQLSMALLINT>(fkTab.length()));
 }
 MOCK_ENTRY_CATCH(hstmt)
 
@@ -635,9 +635,9 @@ MOCK_ENTRY_TRY {
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
 
     return SQLSpecialColumns(hstmt, fColType,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szTableName ? (SQLCHAR*)tab.c_str() : nullptr, static_cast<SQLSMALLINT>(tab.length()),
         fScope, fNullable);
 }
 MOCK_ENTRY_CATCH(hstmt)
@@ -655,9 +655,9 @@ MOCK_ENTRY_TRY {
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
 
     return SQLStatistics(hstmt,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szTableName ? (SQLCHAR*)tab.c_str() : nullptr, static_cast<SQLSMALLINT>(tab.length()),
         fUnique, fAccuracy);
 }
 MOCK_ENTRY_CATCH(hstmt)
@@ -673,9 +673,9 @@ MOCK_ENTRY_TRY {
     std::string prc = sqlw_to_string(szProcName,    cbProcName);
 
     return SQLProcedures(hstmt,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        prc.empty() ? nullptr : (SQLCHAR*)prc.c_str(), static_cast<SQLSMALLINT>(prc.length()));
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szProcName ? (SQLCHAR*)prc.c_str() : nullptr, static_cast<SQLSMALLINT>(prc.length()));
 }
 MOCK_ENTRY_CATCH(hstmt)
 
@@ -692,10 +692,10 @@ MOCK_ENTRY_TRY {
     std::string col = sqlw_to_string(szColumnName,  cbColumnName);
 
     return SQLProcedureColumns(hstmt,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        prc.empty() ? nullptr : (SQLCHAR*)prc.c_str(), static_cast<SQLSMALLINT>(prc.length()),
-        col.empty() ? nullptr : (SQLCHAR*)col.c_str(), static_cast<SQLSMALLINT>(col.length()));
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szProcName ? (SQLCHAR*)prc.c_str() : nullptr, static_cast<SQLSMALLINT>(prc.length()),
+        szColumnName ? (SQLCHAR*)col.c_str() : nullptr, static_cast<SQLSMALLINT>(col.length()));
 }
 MOCK_ENTRY_CATCH(hstmt)
 
@@ -710,9 +710,9 @@ MOCK_ENTRY_TRY {
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
 
     return SQLTablePrivileges(hstmt,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()));
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szTableName ? (SQLCHAR*)tab.c_str() : nullptr, static_cast<SQLSMALLINT>(tab.length()));
 }
 MOCK_ENTRY_CATCH(hstmt)
 
@@ -729,10 +729,10 @@ MOCK_ENTRY_TRY {
     std::string col = sqlw_to_string(szColumnName,  cbColumnName);
 
     return SQLColumnPrivileges(hstmt,
-        cat.empty() ? nullptr : (SQLCHAR*)cat.c_str(), static_cast<SQLSMALLINT>(cat.length()),
-        sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
-        tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
-        col.empty() ? nullptr : (SQLCHAR*)col.c_str(), static_cast<SQLSMALLINT>(col.length()));
+        szCatalogName ? (SQLCHAR*)cat.c_str() : nullptr, static_cast<SQLSMALLINT>(cat.length()),
+        szSchemaName ? (SQLCHAR*)sch.c_str() : nullptr, static_cast<SQLSMALLINT>(sch.length()),
+        szTableName ? (SQLCHAR*)tab.c_str() : nullptr, static_cast<SQLSMALLINT>(tab.length()),
+        szColumnName ? (SQLCHAR*)col.c_str() : nullptr, static_cast<SQLSMALLINT>(col.length()));
 }
 MOCK_ENTRY_CATCH(hstmt)
 

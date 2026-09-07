@@ -169,6 +169,10 @@ public:
     // default branch that returned SQL_SUCCESS and left the caller's
     // buffer untouched. SQL_ATTR_CURSOR_SCROLLABLE had no field at all.
     SQLULEN cursor_scrollable_ = SQL_NONSCROLLABLE;
+    // D25: SQL_ATTR_METADATA_ID had no implementation anywhere - a
+    // client that set it still got pattern matching from every catalog
+    // function, which is the one thing the attribute exists to turn off.
+    SQLULEN metadata_id_ = SQL_FALSE;
     
     // Array parameter attributes (ODBC Arrays of Parameter Values)
     SQLUSMALLINT* param_status_ptr_ = nullptr;       // SQL_ATTR_PARAM_STATUS_PTR

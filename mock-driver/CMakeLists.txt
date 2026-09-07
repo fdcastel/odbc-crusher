@@ -150,6 +150,7 @@ add_executable(mock-odbc-tests
     tests/test_query_semantics.cpp
     tests/test_diag_header.cpp
     tests/test_stmt_contract.cpp
+    tests/test_catalog_semantics.cpp
     tests/test_literal_select.cpp
     tests/test_buffer_copy.cpp
     tests/test_c_types.cpp

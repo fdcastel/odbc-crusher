@@ -583,7 +583,16 @@ bool MockCatalog::matches_pattern(const std::string& value, const std::string& p
     size_t plen = upper_pattern.length();
     
     while (v < vlen && p < plen) {
-        if (upper_pattern[p] == '%') {
+        if (upper_pattern[p] == '\\' && p + 1 < plen) {
+            // D25: `\\` is the escape character this driver advertises
+            // through SQLGetInfo(SQL_SEARCH_PATTERN_ESCAPE), and the matcher
+            // ignored it - so a caller asking for a name containing a literal
+            // `%` or `_` was handed the wildcard meaning and got every name
+            // back. An escaped character matches itself and nothing else.
+            if (upper_value[v] != upper_pattern[p + 1]) return false;
+            ++v;
+            p += 2;
+        } else if (upper_pattern[p] == '%') {
             // Skip consecutive %
             while (p < plen && upper_pattern[p] == '%') ++p;
             if (p >= plen) return true;  // Trailing %

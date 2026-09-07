@@ -1,5 +1,8 @@
 // Catalog API - SQLTables, SQLColumns, SQLPrimaryKeys, etc.
 
+#include <cctype>
+#include <optional>
+#include <set>
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/mock_catalog.hpp"
@@ -10,6 +13,28 @@
 using namespace mock_odbc;
 
 namespace {
+
+// D25: when SQL_ATTR_METADATA_ID is SQL_TRUE the catalog arguments are
+// identifiers rather than patterns: `%` and `_` are ordinary characters and
+// the comparison is a case-insensitive equality. The attribute had no
+// implementation at all, so setting it changed nothing and a client asking
+// for the table literally named `A_B` was still handed `AxB` as well.
+std::string upper_ascii(std::string t) {
+    for (auto& c : t) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return t;
+}
+
+bool catalog_name_matches(StatementHandle* stmt,
+                          const std::string& value,
+                          const std::string& pattern) {
+    if (stmt && stmt->metadata_id_ == SQL_TRUE) {
+        if (pattern.empty()) return true;   // no filter supplied
+        return upper_ascii(value) == upper_ascii(pattern);
+    }
+    return MockCatalog::matches_pattern(value, pattern);
+}
 
 // Helper to create a catalog result set
 void setup_catalog_result(StatementHandle* stmt,
@@ -50,18 +75,64 @@ SQLRETURN SQL_API SQLTables(
         return SQL_ERROR;
     }
     
-    std::string table_pattern = sql_to_string(szTableName, cbTableName);
-    std::string type_pattern = sql_to_string(szTableType, cbTableType);
-    
-    (void)szCatalogName;
-    (void)cbCatalogName;
-    (void)szSchemaName;
-    (void)cbSchemaName;
-    
+    // D25: read all four as optionals. A null pointer means "no filter"; an
+    // empty string is a filter that matches only the empty name. The two used
+    // to be indistinguishable, which is why none of SQLTables' three
+    // enumeration modes existed.
+    const auto cat_arg    = sql_to_optional(szCatalogName, cbCatalogName);
+    const auto schema_arg = sql_to_optional(szSchemaName, cbSchemaName);
+    const auto table_arg  = sql_to_optional(szTableName, cbTableName);
+    const auto type_arg   = sql_to_optional(szTableType, cbTableType);
+
+    const std::string table_pattern = table_arg.value_or("");
+    const std::string type_pattern = type_arg.value_or("");
+
     // Set up result columns as per ODBC spec
     setup_catalog_result(stmt,
         {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS"},
         {SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR});
+
+    // D25: the three enumeration modes. Each is signalled by "%" in one
+    // argument and an *empty string* - not a null pointer - in the others,
+    // which is the whole reason the distinction has to survive the wrappers.
+    auto is_empty_arg = [](const std::optional<std::string>& a) {
+        return a.has_value() && a->empty();
+    };
+    auto is_percent = [](const std::optional<std::string>& a) {
+        return a.has_value() && *a == "%";
+    };
+    auto push_row = [&](std::vector<std::variant<std::monostate, long long,
+                                                 double, std::string>> row) {
+        stmt->result_data_.push_back(std::move(row));
+    };
+    const auto kNull = std::monostate{};
+
+    if (is_percent(cat_arg) && is_empty_arg(schema_arg) && is_empty_arg(table_arg)) {
+        // SQL_ALL_CATALOGS: catalog names only, everything else NULL. The mock
+        // exposes a single unnamed catalog, so one row with an empty name.
+        push_row({std::string(""), kNull, kNull, kNull, kNull});
+        stmt->row_count_ = static_cast<SQLLEN>(stmt->result_data_.size());
+        return SQL_SUCCESS;
+    }
+    if (is_empty_arg(cat_arg) && is_percent(schema_arg) && is_empty_arg(table_arg)) {
+        // SQL_ALL_SCHEMAS - one unnamed schema, same shape.
+        push_row({kNull, std::string(""), kNull, kNull, kNull});
+        stmt->row_count_ = static_cast<SQLLEN>(stmt->result_data_.size());
+        return SQL_SUCCESS;
+    }
+    if (is_empty_arg(cat_arg) && is_empty_arg(schema_arg)
+        && is_empty_arg(table_arg) && is_percent(type_arg)) {
+        // SQL_ALL_TABLE_TYPES - the distinct types the catalog holds.
+        std::set<std::string> types;
+        for (const auto& t : MockCatalog::instance().snapshot_tables()) {
+            types.insert(t.type);
+        }
+        for (const auto& t : types) {
+            push_row({kNull, kNull, kNull, t, kNull});
+        }
+        stmt->row_count_ = static_cast<SQLLEN>(stmt->result_data_.size());
+        return SQL_SUCCESS;
+    }
     
     // Get matching tables — snapshot under the catalog mutex so a concurrent
     // mutator doesn't invalidate references mid-iteration.
@@ -70,7 +141,7 @@ SQLRETURN SQL_API SQLTables(
     for (const auto& table : tables_snapshot) {
         // Filter by pattern
         if (!table_pattern.empty() && table_pattern != "%" &&
-            !MockCatalog::matches_pattern(table.name, table_pattern)) {
+            !catalog_name_matches(stmt, table.name, table_pattern)) {
             continue;
         }
 
@@ -143,13 +214,13 @@ SQLRETURN SQL_API SQLColumns(
 
     for (const auto& table : tables_snapshot) {
         if (!table_pattern.empty() && table_pattern != "%" &&
-            !MockCatalog::matches_pattern(table.name, table_pattern)) {
+            !catalog_name_matches(stmt, table.name, table_pattern)) {
             continue;
         }
 
         int ordinal = 1;
         for (const auto& col : table.columns) {
-            if (!MockCatalog::matches_pattern(col.name, column_pattern)) {
+            if (!catalog_name_matches(stmt, col.name, column_pattern)) {
                 continue;
             }
             
@@ -524,7 +595,7 @@ SQLRETURN SQL_API SQLProcedures(
 
     auto procedures = MockCatalog::instance().snapshot_procedures();
     for (const auto& p : procedures) {
-        if (!MockCatalog::matches_pattern(p.name, proc_pattern)) continue;
+        if (!catalog_name_matches(stmt, p.name, proc_pattern)) continue;
         // Prefer the new MockProcedure::params for accurate IN/OUT counts;
         // fall back to legacy input_param_count for procedures that haven't
         // been migrated to the typed-param model.
@@ -582,11 +653,22 @@ SQLRETURN SQL_API SQLProcedureColumns(
     (void)szSchemaName;
     (void)cbSchemaName;
 
+    // D25: this emitted the first 8 of the 19 columns the spec defines and
+    // stopped. Every other catalog shape in the mock is correct, so a client
+    // reading SQLProcedureColumns by ordinal - which is what the spec's
+    // column numbers are for - either read the wrong column or ran off the
+    // end of the result set.
     setup_catalog_result(stmt,
         {"PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "COLUMN_NAME",
-         "COLUMN_TYPE", "DATA_TYPE", "TYPE_NAME", "COLUMN_SIZE"},
+         "COLUMN_TYPE", "DATA_TYPE", "TYPE_NAME", "COLUMN_SIZE",
+         "BUFFER_LENGTH", "DECIMAL_DIGITS", "NUM_PREC_RADIX", "NULLABLE",
+         "REMARKS", "COLUMN_DEF", "SQL_DATA_TYPE", "SQL_DATETIME_SUB",
+         "CHAR_OCTET_LENGTH", "ORDINAL_POSITION", "IS_NULLABLE"},
         {SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR, SQL_WVARCHAR,
-         SQL_SMALLINT, SQL_SMALLINT, SQL_WVARCHAR, SQL_INTEGER});
+         SQL_SMALLINT, SQL_SMALLINT, SQL_WVARCHAR, SQL_INTEGER,
+         SQL_INTEGER, SQL_SMALLINT, SQL_SMALLINT, SQL_SMALLINT,
+         SQL_WVARCHAR, SQL_WVARCHAR, SQL_SMALLINT, SQL_SMALLINT,
+         SQL_INTEGER, SQL_INTEGER, SQL_WVARCHAR});
 
     // PORT plan §4.8 — enumerate one row per (procedure, parameter) for every
     // registered procedure with a typed `params` vector. Procedures using
@@ -610,11 +692,42 @@ SQLRETURN SQL_API SQLProcedureColumns(
         }
     };
 
+    // D25: the remaining eleven columns. Sizes follow the same rules the
+    // rest of the catalog uses: BUFFER_LENGTH is the transfer size in bytes,
+    // NUM_PREC_RADIX is 10 for exact numerics and NULL for everything else,
+    // and SQL_DATA_TYPE equals DATA_TYPE for every type the mock exposes
+    // (none is a datetime interval, which is the only case where they differ).
+    auto is_numeric = [](SQLSMALLINT t) {
+        return t == SQL_INTEGER || t == SQL_SMALLINT || t == SQL_DECIMAL
+            || t == SQL_NUMERIC || t == SQL_DOUBLE;
+    };
+    auto is_character = [](SQLSMALLINT t) {
+        return t == SQL_VARCHAR || t == SQL_WVARCHAR
+            || t == SQL_CHAR || t == SQL_WCHAR;
+    };
+    auto buffer_length_for = [&](SQLSMALLINT t, SQLULEN size) -> long long {
+        switch (t) {
+            case SQL_INTEGER:  return 4;
+            case SQL_SMALLINT: return 2;
+            case SQL_DOUBLE:   return 8;
+            case SQL_WVARCHAR:
+            case SQL_WCHAR:    return static_cast<long long>(size) * 2;
+            default:           return static_cast<long long>(size);
+        }
+    };
+
     auto procedures = MockCatalog::instance().snapshot_procedures();
     for (const auto& p : procedures) {
-        if (!MockCatalog::matches_pattern(p.name, proc_pattern)) continue;
+        if (!catalog_name_matches(stmt, p.name, proc_pattern)) continue;
+        long long ordinal = 0;
         for (const auto& pm : p.params) {
-            if (!MockCatalog::matches_pattern(pm.name, col_pattern)) continue;
+            // ORDINAL_POSITION counts every parameter, including ones the
+            // COLUMN_NAME filter excludes - it is the parameter's position in
+            // the procedure, not its position in this result set. A return
+            // value is position 0 by definition.
+            const bool is_return = (pm.direction == SQL_RETURN_VALUE);
+            if (!is_return) ++ordinal;
+            if (!catalog_name_matches(stmt, pm.name, col_pattern)) continue;
             std::vector<std::variant<std::monostate, long long, double, std::string>> row;
             row.push_back(std::monostate{});                    // PROCEDURE_CAT
             row.push_back(std::monostate{});                    // PROCEDURE_SCHEM
@@ -624,6 +737,28 @@ SQLRETURN SQL_API SQLProcedureColumns(
             row.push_back(static_cast<long long>(pm.sql_type)); // DATA_TYPE
             row.push_back(type_name_for(pm.sql_type));          // TYPE_NAME
             row.push_back(static_cast<long long>(pm.column_size)); // COLUMN_SIZE
+            row.push_back(buffer_length_for(pm.sql_type, pm.column_size)); // BUFFER_LENGTH
+            if (is_numeric(pm.sql_type)) {
+                row.push_back(static_cast<long long>(pm.scale));   // DECIMAL_DIGITS
+                row.push_back(static_cast<long long>(10));         // NUM_PREC_RADIX
+            } else {
+                row.push_back(std::monostate{});                   // DECIMAL_DIGITS
+                row.push_back(std::monostate{});                   // NUM_PREC_RADIX
+            }
+            // The mock's parameters are all nullable; a return value is not.
+            row.push_back(static_cast<long long>(
+                is_return ? SQL_NO_NULLS : SQL_NULLABLE));      // NULLABLE
+            row.push_back(std::monostate{});                    // REMARKS
+            row.push_back(std::monostate{});                    // COLUMN_DEF
+            row.push_back(static_cast<long long>(pm.sql_type)); // SQL_DATA_TYPE
+            row.push_back(std::monostate{});                    // SQL_DATETIME_SUB
+            if (is_character(pm.sql_type)) {
+                row.push_back(buffer_length_for(pm.sql_type, pm.column_size));
+            } else {
+                row.push_back(std::monostate{});                // CHAR_OCTET_LENGTH
+            }
+            row.push_back(is_return ? 0LL : ordinal);           // ORDINAL_POSITION
+            row.push_back(std::string(is_return ? "NO" : "YES"));  // IS_NULLABLE
             stmt->result_data_.push_back(std::move(row));
         }
     }

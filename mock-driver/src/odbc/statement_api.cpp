@@ -1856,6 +1856,11 @@ SQLRETURN SQL_API SQLGetStmtAttr(
             if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->cursor_scrollable_;
             if (pcbValue) *pcbValue = sizeof(SQLULEN);
             break;
+
+        case SQL_ATTR_METADATA_ID:   // D25
+            if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->metadata_id_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN);
+            break;
             
         case SQL_ATTR_MAX_ROWS:
             if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->max_rows_;
@@ -1983,6 +1988,10 @@ SQLRETURN SQL_API SQLSetStmtAttr(
 
         case SQL_ATTR_RETRIEVE_DATA:
             stmt->retrieve_data_ = value;
+            break;
+
+        case SQL_ATTR_METADATA_ID:   // D25
+            stmt->metadata_id_ = value;
             break;
 
         case SQL_ATTR_CURSOR_SCROLLABLE:
