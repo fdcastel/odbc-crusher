@@ -823,6 +823,31 @@ TestResult ParameterBindingTests::test_sqldescribeparam_varchar() {
                        << " scale=" << scale
                        << " nullable=" << nullable;
                 result.actual = actual.str();
+
+                // B1: the probe stopped here, printing expected beside actual
+                // and never comparing them - so it passed whatever came back,
+                // including a numeric type for a character column.
+                const bool is_char_type =
+                    param_type == SQL_VARCHAR  || param_type == SQL_WVARCHAR ||
+                    param_type == SQL_CHAR     || param_type == SQL_WCHAR    ||
+                    param_type == SQL_LONGVARCHAR ||
+                    param_type == SQL_WLONGVARCHAR;
+                if (!is_char_type) {
+                    result.status = TestStatus::FAIL;
+                    result.severity = Severity::ERR;
+                    result.suggestion =
+                        "The parameter is bound to a VARCHAR column, so "
+                        "SQLDescribeParam must report a character type. An "
+                        "application that sizes its buffer from this answer "
+                        "will get it wrong.";
+                } else if (col_size == 0) {
+                    result.status = TestStatus::FAIL;
+                    result.severity = Severity::WARNING;
+                    result.suggestion =
+                        "column_size must be the character length of the "
+                        "parameter. Zero tells an application to allocate "
+                        "nothing.";
+                }
             }
 
             drop_roundtrip_table();
@@ -910,6 +935,23 @@ TestResult ParameterBindingTests::test_sqldescribeparam_integer() {
                        << " scale=" << scale
                        << " nullable=" << nullable;
                 result.actual = actual.str();
+
+                // B1 - see test_sqldescribeparam_varchar. An exact-integer
+                // column may legitimately be described as INTEGER, BIGINT,
+                // SMALLINT or (on engines that model integers as scale-0
+                // decimals) DECIMAL/NUMERIC. A character or floating type is
+                // not a difference of opinion.
+                const bool is_exact_numeric =
+                    param_type == SQL_INTEGER  || param_type == SQL_BIGINT  ||
+                    param_type == SQL_SMALLINT || param_type == SQL_TINYINT ||
+                    param_type == SQL_DECIMAL  || param_type == SQL_NUMERIC;
+                if (!is_exact_numeric) {
+                    result.status = TestStatus::FAIL;
+                    result.severity = Severity::ERR;
+                    result.suggestion =
+                        "The parameter is bound to an INTEGER column, so "
+                        "SQLDescribeParam must report an exact numeric type.";
+                }
             }
 
             drop_roundtrip_table();
@@ -1121,6 +1163,19 @@ TestResult ParameterBindingTests::test_sqldescribeparam_decimal() {
                        << " scale=" << scale
                        << " nullable=" << nullable;
                 result.actual = actual.str();
+
+                // B1 - see test_sqldescribeparam_varchar. DECIMAL and NUMERIC
+                // are interchangeable in practice, and a driver that models
+                // the column as a float is wrong in a way that costs
+                // precision silently.
+                if (param_type != SQL_DECIMAL && param_type != SQL_NUMERIC) {
+                    result.status = TestStatus::FAIL;
+                    result.severity = Severity::ERR;
+                    result.suggestion =
+                        "The parameter is bound to a DECIMAL column. "
+                        "Reporting a floating type here is how exact values "
+                        "start losing digits without anything failing.";
+                }
             }
 
             drop_roundtrip_table(table_name);

@@ -149,3 +149,49 @@ TEST_F(LiteralSelectTest, ColumnPredicateStillFilters) {
     EXPECT_EQ(SelectText("SELECT V FROM T WHERE ID = 2"),
               (std::vector<std::string>{"b"}));
 }
+
+// ── SQLDescribeParam describes the column, not a default — D45 ────────────
+//
+// It used to answer VARCHAR(255) for every parameter of every statement, so
+// the three SQLDescribeParam probes could not tell a correct driver from one
+// with no idea what its own parameters are. That is why they printed
+// `expected` beside `actual` and never compared them (B1) — comparing would
+// have failed the reference driver.
+TEST_F(LiteralSelectTest, DescribeParamReportsTheTargetColumnsType) {
+    Exec("CREATE TABLE P (N INTEGER, S VARCHAR(64))");
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"INSERT INTO P (N, S) VALUES (?, ?)", SQL_NTS)));
+
+    SQLSMALLINT type = 0, scale = 0, nullable = 0;
+    SQLULEN size = 0;
+
+    ASSERT_TRUE(SQL_SUCCEEDED(
+        SQLDescribeParam(hstmt, 1, &type, &size, &scale, &nullable)));
+    EXPECT_EQ(type, SQL_INTEGER) << "parameter 1 is bound to an INTEGER column";
+
+    ASSERT_TRUE(SQL_SUCCEEDED(
+        SQLDescribeParam(hstmt, 2, &type, &size, &scale, &nullable)));
+    EXPECT_EQ(type, SQL_VARCHAR) << "parameter 2 is bound to a VARCHAR column";
+    EXPECT_EQ(size, 64u) << "column_size must be the column's length, not 255";
+
+    SQLCloseCursor(hstmt);
+    Exec("DROP TABLE P");
+}
+
+// A statement the narrow parse does not recognise keeps the old
+// VARCHAR(255) answer, which is a legal thing for a driver to say when it
+// cannot infer more. This pins that the fallback still exists rather than
+// the lookup failing outright.
+TEST_F(LiteralSelectTest, DescribeParamFallsBackForAnUnparsedStatement) {
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"SELECT ID FROM T WHERE ID = ?", SQL_NTS)));
+
+    SQLSMALLINT type = 0, scale = 0, nullable = 0;
+    SQLULEN size = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(
+        SQLDescribeParam(hstmt, 1, &type, &size, &scale, &nullable)));
+    EXPECT_EQ(type, SQL_VARCHAR);
+    EXPECT_EQ(size, 255u);
+    SQLCloseCursor(hstmt);
+}

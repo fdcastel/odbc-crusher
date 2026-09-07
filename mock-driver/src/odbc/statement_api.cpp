@@ -3,11 +3,13 @@
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/mock_data.hpp"
+#include "mock/mock_catalog.hpp"
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
 #include <cstdint>
 #include <cstring>
 #include <cmath>
+#include <cctype>
 #include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
@@ -1933,12 +1935,63 @@ SQLRETURN SQL_API SQLDescribeParam(
         return SQL_ERROR;
     }
     
-    // Default parameter description
-    if (pfSqlType) *pfSqlType = SQL_VARCHAR;
-    if (pcbParamDef) *pcbParamDef = 255;
-    if (pibScale) *pibScale = 0;
-    if (pfNullable) *pfNullable = SQL_NULLABLE;
-    
+    // D45: describe the parameter from the column it is bound to.
+    //
+    // This used to answer VARCHAR(255) for every parameter of every
+    // statement, so the three SQLDescribeParam probes could not tell a
+    // correct driver from one that has no idea what its own parameters are -
+    // which is why they printed `expected` beside `actual` and never
+    // compared them (B1). Describing an INTEGER parameter as VARCHAR(255) is
+    // exactly the defect those probes exist to find.
+    //
+    // The parse is deliberately narrow: `INSERT INTO <t> (<cols>) VALUES
+    // (?, ?, ...)`, which is the shape every probe in this suite uses. Any
+    // statement it does not recognise keeps the old VARCHAR(255) answer,
+    // which is a legal thing for a driver to say when it cannot infer more.
+    SQLSMALLINT sql_type = SQL_VARCHAR;
+    SQLULEN param_def = 255;
+    SQLSMALLINT scale = 0;
+    SQLSMALLINT nullable = SQL_NULLABLE;
+
+    {
+        ParsedQuery pq = parse_sql(stmt->sql_);
+        if (pq.query_type == ParsedQuery::QueryType::Insert &&
+            !pq.table_name.empty() &&
+            ipar <= static_cast<SQLUSMALLINT>(pq.insert_columns.size())) {
+            const MockTable* table =
+                MockCatalog::instance().find_table(pq.table_name);
+            if (table) {
+                // `to_upper` is file-local to two other translation units,
+                // so compare case-insensitively here rather than exporting it.
+                auto same_name = [](const std::string& a, const std::string& b) {
+                    if (a.size() != b.size()) return false;
+                    for (size_t i = 0; i < a.size(); ++i) {
+                        if (std::toupper(static_cast<unsigned char>(a[i])) !=
+                            std::toupper(static_cast<unsigned char>(b[i]))) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                const std::string& want = pq.insert_columns[ipar - 1];
+                for (const auto& col : table->columns) {
+                    if (same_name(col.name, want)) {
+                        sql_type  = col.data_type;
+                        param_def = col.column_size;
+                        scale     = static_cast<SQLSMALLINT>(col.decimal_digits);
+                        nullable  = col.nullable;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (pfSqlType) *pfSqlType = sql_type;
+    if (pcbParamDef) *pcbParamDef = param_def;
+    if (pibScale) *pibScale = scale;
+    if (pfNullable) *pfNullable = nullable;
+
     return SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hstmt)

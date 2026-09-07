@@ -66,9 +66,15 @@ TestResult AdvancedTests::test_cursor_types() {
                 r.actual = oss.str();
                 r.status = TestStatus::PASS;
             } else {
-                r.actual = "Cursor type query not supported";
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.suggestion = "Non-forward-only cursor types are a Level 2 feature";
+                // B1: the skip was justified by the wrong thing. *Supporting*
+                // a non-forward-only cursor is Level 2 and optional - but
+                // this call only reads SQL_ATTR_CURSOR_TYPE, which every
+                // statement has, defaulting to SQL_CURSOR_FORWARD_ONLY. A
+                // driver that cannot say which cursor type its own statement
+                // is using has failed a Core read, whatever cursor types it
+                // goes on to support.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLGetStmtAttr(SQL_ATTR_CURSOR_TYPE)");
             }
         });
 }
@@ -293,6 +299,7 @@ TestResult AdvancedTests::test_statement_attributes() {
 
             int attrs_checked = 0;
             int attrs_supported = 0;
+            std::string unreadable;   // B1: which ones, and with what state
 
             // Check multiple attributes
             std::vector<std::pair<SQLINTEGER, std::string>> attrs = {
@@ -316,6 +323,12 @@ TestResult AdvancedTests::test_statement_attributes() {
                 attrs_checked++;
                 if (SQL_SUCCEEDED(ret)) {
                     attrs_supported++;
+                } else {
+                    if (!unreadable.empty()) unreadable += ", ";
+                    unreadable += name + " (" +
+                                  first_sqlstate(SQL_HANDLE_STMT,
+                                                 stmt.get_handle(),
+                                                 "no diagnostic") + ")";
                 }
             }
 
@@ -323,7 +336,22 @@ TestResult AdvancedTests::test_statement_attributes() {
             oss << attrs_supported << "/" << attrs_checked << " statement attributes queryable";
 
             r.actual = oss.str();
-            r.status = TestStatus::PASS;
+
+            // B1: this counted how many attributes answered and then passed
+            // unconditionally - 0 of 5 was as good a result as 5 of 5. All
+            // five are Core statement attributes with a defined default, so
+            // every one of them must be readable on a fresh statement.
+            if (attrs_supported != attrs_checked) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual += "; unreadable: " + unreadable;
+                r.suggestion =
+                    "SQL_ATTR_QUERY_TIMEOUT, SQL_ATTR_MAX_ROWS, "
+                    "SQL_ATTR_MAX_LENGTH, SQL_ATTR_NOSCAN and "
+                    "SQL_ATTR_RETRIEVE_DATA are Core and each has a defined "
+                    "default, so SQLGetStmtAttr must answer for all of them "
+                    "on a freshly allocated statement.";
+            }
         });
 }
 

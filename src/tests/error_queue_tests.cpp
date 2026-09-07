@@ -20,16 +20,15 @@ std::vector<TestResult> ErrorQueueTests::run() {
 }
 
 TestResult ErrorQueueTests::test_single_error() {
-    // NOTE: original initial status is SKIP_INCONCLUSIVE; preserved here by setting r.status
     return run_test(
         "Single Error Test", "SQLGetDiagRec",
         "One diagnostic record retrieved",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetDiagRec",
         [&](TestResult& r) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Test requires error generation capability";
-            // Try to get diagnostic info without forcing an error
-            // Just check if SQLGetDiagRec works
+            // B1: an initial SKIP_INCONCLUSIVE used to be set here and then
+            // overwritten on every path below - dead code that made the probe
+            // look like it could skip.
+            // Ask a freshly connected handle for its first diagnostic record.
             SQLCHAR sqlstate[6] = {0};
             SQLINTEGER native_error = 0;
             SQLCHAR message[512] = {0};
@@ -55,8 +54,23 @@ TestResult ErrorQueueTests::test_single_error() {
                 r.status = TestStatus::PASS;
                 r.actual = "SQLGetDiagRec succeeded, SQLSTATE=" + state;
             } else {
-                r.status = TestStatus::PASS;
-                r.actual = "SQLGetDiagRec functional";
+                // B1: this branch reported "SQLGetDiagRec functional" and
+                // PASSed *because the call had failed*. SQLGetDiagRec is
+                // Core, the handle is valid, and record 1 is always a legal
+                // thing to ask for - SQL_NO_DATA is how a driver says there
+                // is nothing there. Returning SQL_ERROR instead means the
+                // application cannot read diagnostics at all, which is the
+                // one thing this whole category depends on.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.actual = "SQLGetDiagRec(record 1) on a valid connection "
+                           "handle returned " + std::to_string(diag_rc) +
+                           " instead of SQL_NO_DATA";
+                r.suggestion =
+                    "SQLGetDiagRec must return SQL_NO_DATA when the requested "
+                    "record does not exist. An application cannot distinguish "
+                    "'no diagnostics' from 'the diagnostic call is broken' "
+                    "otherwise.";
             }
         });
 }
