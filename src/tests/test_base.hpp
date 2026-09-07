@@ -380,12 +380,38 @@ public:
 
     RoundTripTableGuard(const RoundTripTableGuard&) = delete;
     RoundTripTableGuard& operator=(const RoundTripTableGuard&) = delete;
-    RoundTripTableGuard(RoundTripTableGuard&&) = delete;
+
+    // Movable — C10.
+    //
+    // It used to be non-movable, and two probes in unicode_tests.cpp
+    // duplicated their entire body as a result: the author's own comment read
+    // "the guard is non-movable, so we restructure: do the work inline
+    // instead". Moving transfers ownership of the DROP; the source is left
+    // not-ok so its destructor does nothing.
+    //
+    // Move-assignment stays deleted: the class holds a connection reference,
+    // which cannot be rebound.
+    RoundTripTableGuard(RoundTripTableGuard&& other) noexcept;
     RoundTripTableGuard& operator=(RoundTripTableGuard&&) = delete;
+
+    // Create the table using the first val-column DDL the engine accepts — C10.
+    //
+    // The recurring shape is "try NVARCHAR(64), fall back to VARCHAR(64)",
+    // which needed a second guard and therefore a second copy of the probe
+    // body. Returns a guard that is ok() when one of the variants worked, and
+    // carries the last error otherwise.
+    static RoundTripTableGuard create_first_working(
+        core::OdbcConnection& conn,
+        const std::string& table_name,
+        const std::vector<std::string>& val_ddl_variants,
+        const std::vector<std::string>& id_ddl_variants = default_id_ddl_variants());
 
     bool ok() const { return ok_; }
     const std::string& name() const { return table_name_; }
     const std::string& last_error() const { return last_error_; }
+    // Which val-column DDL was accepted — useful when create_first_working()
+    // picked a fallback and the report should say which (C10).
+    const std::string& val_ddl() const { return val_ddl_; }
 
 private:
     core::OdbcConnection& conn_;

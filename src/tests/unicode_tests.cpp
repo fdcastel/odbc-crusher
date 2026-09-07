@@ -571,78 +571,28 @@ TestResult UnicodeTests::test_wchar_roundtrip_non_ascii() {
         "ODBC 3.8 SQL_C_WCHAR — UTF-16; system codepage must not be involved",
         [&](TestResult& r) {
             const std::string table = "ODBC_TEST_NVARCHAR";
-            // Try NVARCHAR first; fall back to VARCHAR for engines where
-            // the regular VARCHAR is already Unicode-capable.
-            RoundTripTableGuard tbl(conn_, table, "NVARCHAR(64)");
+
+            // C10: one body, not two. NVARCHAR first, falling back to VARCHAR
+            // for engines whose plain VARCHAR is already Unicode-capable. This
+            // probe used to duplicate everything below for the fallback,
+            // because RoundTripTableGuard could not be moved - the comment
+            // here read "the guard is non-movable, so we restructure: do the
+            // work inline instead".
+            auto tbl = RoundTripTableGuard::create_first_working(
+                conn_, table, {"NVARCHAR(64)", "VARCHAR(64)"});
             if (!tbl.ok()) {
-                RoundTripTableGuard tbl2(conn_, table, "VARCHAR(64)");
-                if (!tbl2.ok()) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = "Could not create round-trip table "
-                               "(neither NVARCHAR nor VARCHAR DDL accepted): "
-                             + tbl2.last_error();
-                    return;
-                }
-                // Move ownership: drop guard 1 (no-op since !ok) keep guard 2
-                // by reusing this scope. RoundTripTableGuard is non-movable,
-                // so we restructure: do the work inline instead.
-                std::vector<SQLWCHAR> input = make_wchar_buf({
-                    'c','a','f',0x00E9,           // café
-                    ' ',
-                    0x20AC,                       // €
-                    ' ',
-                    0x6F22,0x5B57,                // 漢字
-                });
-                std::string err;
-                if (!insert_wchar_value(conn_, table, input, err)) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = "INSERT WCHAR via VARCHAR fallback: " + err;
-                    return;
-                }
-                core::OdbcStatement sel(conn_);
-                sel.execute("SELECT VAL FROM " + table);
-                SQLRETURN rc = SQLFetch(sel.get_handle());
-                if (!SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "SQLFetch failed";
-                    return;
-                }
-                SQLWCHAR out[128] = {0};
-                SQLLEN ind = 0;
-                rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
-                                out, sizeof(out), &ind);
-                if (!SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "SQLGetData(SQL_C_WCHAR) returned " + std::to_string(rc);
-                    return;
-                }
-                const size_t expected_chars = input.size() - 1;
-                size_t out_chars = 0;
-                while (out_chars < 127 && out[out_chars] != 0) ++out_chars;
-                if (out_chars != expected_chars ||
-                    std::memcmp(out, input.data(),
-                                expected_chars * sizeof(SQLWCHAR)) != 0) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "expected [" + wchars_to_hex(input.data(), expected_chars)
-                             + "] got [" + wchars_to_hex(out, out_chars) + "]";
-                    r.suggestion = "Driver appears to re-encode through a "
-                                   "narrow codepage. SQL_C_WCHAR data must "
-                                   "preserve every codepoint regardless of "
-                                   "system locale.";
-                    return;
-                }
-                r.actual = "VARCHAR fallback: round-trip preserved "
-                         + std::to_string(expected_chars) + " WCHARs ["
-                         + wchars_to_hex(input.data(), expected_chars) + "]";
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create round-trip table (neither NVARCHAR "
+                           "nor VARCHAR DDL accepted): " + tbl.last_error();
                 return;
             }
 
             std::vector<SQLWCHAR> input = make_wchar_buf({
-                'c','a','f',0x00E9,
+                'c','a','f',0x00E9,           // café
                 ' ',
-                0x20AC,
+                0x20AC,                       // €
                 ' ',
-                0x6F22,0x5B57,
+                0x6F22,0x5B57,                // 漢字
             });
             std::string err;
             if (!insert_wchar_value(conn_, table, input, err)) {
@@ -664,8 +614,9 @@ TestResult UnicodeTests::test_wchar_roundtrip_non_ascii() {
             rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
                             out, sizeof(out), &ind);
             if (!SQL_SUCCEEDED(rc)) {
-                r.status = TestStatus::FAIL;
-                r.actual = "SQLGetData(SQL_C_WCHAR) returned " + std::to_string(rc);
+                // B3
+                report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
+                               "SQLGetData(SQL_C_WCHAR)");
                 return;
             }
             const size_t expected_chars = input.size() - 1;
@@ -683,7 +634,8 @@ TestResult UnicodeTests::test_wchar_roundtrip_non_ascii() {
                 return;
             }
             r.actual = "round-trip preserved " + std::to_string(expected_chars)
-                     + " WCHARs [" + wchars_to_hex(input.data(), expected_chars) + "]";
+                     + " WCHARs [" + wchars_to_hex(input.data(), expected_chars)
+                     + "] in a " + tbl.val_ddl() + " column";
         });
 }
 
@@ -696,54 +648,13 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
         "ODBC 3.8 SQL_C_WCHAR — UTF-16 includes surrogate pairs for non-BMP",
         [&](TestResult& r) {
             const std::string table = "ODBC_TEST_NVARCHAR_SP";
-            RoundTripTableGuard tbl(conn_, table, "NVARCHAR(16)");
+
+            // C10: one body, not two — see test_wchar_roundtrip_non_ascii.
+            auto tbl = RoundTripTableGuard::create_first_working(
+                conn_, table, {"NVARCHAR(16)", "VARCHAR(16)"});
             if (!tbl.ok()) {
-                RoundTripTableGuard tbl2(conn_, table, "VARCHAR(16)");
-                if (!tbl2.ok()) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = "Could not create table: " + tbl2.last_error();
-                    return;
-                }
-                std::vector<SQLWCHAR> input = make_wchar_buf({0x1F600u});
-                std::string err;
-                if (!insert_wchar_value(conn_, table, input, err)) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = err;
-                    return;
-                }
-                core::OdbcStatement sel(conn_);
-                sel.execute("SELECT VAL FROM " + table);
-                SQLRETURN rc = SQLFetch(sel.get_handle());
-                if (!SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "SQLFetch failed";
-                    return;
-                }
-                SQLWCHAR out[8] = {0};
-                SQLLEN ind = 0;
-                rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
-                                out, sizeof(out), &ind);
-                if (!SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "SQLGetData returned " + std::to_string(rc);
-                    return;
-                }
-                size_t out_chars = 0;
-                while (out_chars < 7 && out[out_chars] != 0) ++out_chars;
-                const auto want = expected_emoji_units();
-                if (out_chars != want.size() ||
-                    !std::equal(want.begin(), want.end(), out)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "expected " + expected_emoji_description() + " got ["
-                             + wchars_to_hex(out, out_chars) + "]";
-                    r.suggestion = "Driver dropped or normalized the supplementary "
-                                   "codepoint. SQL_C_WCHAR must preserve every "
-                                   "codepoint in the platform's UTF-16 or UTF-32 "
-                                   "encoding.";
-                    return;
-                }
-                r.actual = "VARCHAR fallback: " + expected_emoji_description() +
-                           " preserved";
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create table: " + tbl.last_error();
                 return;
             }
 
@@ -754,6 +665,7 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
                 r.actual = err;
                 return;
             }
+
             core::OdbcStatement sel(conn_);
             sel.execute("SELECT VAL FROM " + table);
             SQLRETURN rc = SQLFetch(sel.get_handle());
@@ -767,8 +679,9 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
             rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
                             out, sizeof(out), &ind);
             if (!SQL_SUCCEEDED(rc)) {
-                r.status = TestStatus::FAIL;
-                r.actual = "SQLGetData returned " + std::to_string(rc);
+                // B3
+                report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
+                               "SQLGetData(SQL_C_WCHAR)");
                 return;
             }
             size_t out_chars = 0;
@@ -785,7 +698,8 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
                                "encoding.";
                 return;
             }
-            r.actual = expected_emoji_description() + " preserved (U+1F600)";
+            r.actual = expected_emoji_description() + " preserved (U+1F600) in a "
+                     + tbl.val_ddl() + " column";
         });
 }
 

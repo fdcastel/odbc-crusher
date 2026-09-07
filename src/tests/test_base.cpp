@@ -395,6 +395,37 @@ RoundTripTableGuard::RoundTripTableGuard(
     }
 }
 
+RoundTripTableGuard::RoundTripTableGuard(RoundTripTableGuard&& other) noexcept
+    : conn_(other.conn_),
+      table_name_(std::move(other.table_name_)),
+      val_ddl_(std::move(other.val_ddl_)),
+      ok_(other.ok_),
+      last_error_(std::move(other.last_error_)) {
+    // The moved-from guard must not drop the table the new one now owns.
+    other.ok_ = false;
+}
+
+RoundTripTableGuard RoundTripTableGuard::create_first_working(
+    core::OdbcConnection& conn,
+    const std::string& table_name,
+    const std::vector<std::string>& val_ddl_variants,
+    const std::vector<std::string>& id_ddl_variants) {
+    if (val_ddl_variants.empty()) {
+        return RoundTripTableGuard(conn, table_name, "VARCHAR(64)", id_ddl_variants);
+    }
+    // Try every variant but the last, returning as soon as one works.
+    for (size_t i = 0; i + 1 < val_ddl_variants.size(); ++i) {
+        RoundTripTableGuard guard(conn, table_name, val_ddl_variants[i],
+                                  id_ddl_variants);
+        if (guard.ok()) return guard;
+    }
+    // The last variant's guard is returned whether or not it worked, so a
+    // caller that finds !ok() sees a real last_error() rather than one
+    // synthesised from an extra attempt.
+    return RoundTripTableGuard(conn, table_name, val_ddl_variants.back(),
+                               id_ddl_variants);
+}
+
 RoundTripTableGuard::~RoundTripTableGuard() {
     if (!ok_) return;
     AutocommitForDdl ac(conn_.get_handle());
