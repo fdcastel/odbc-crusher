@@ -148,6 +148,7 @@ add_executable(mock-odbc-tests
     tests/test_where_parser.cpp
     tests/test_function_call.cpp
     tests/test_query_semantics.cpp
+    tests/test_diag_header.cpp
     tests/test_literal_select.cpp
     tests/test_buffer_copy.cpp
     tests/test_c_types.cpp

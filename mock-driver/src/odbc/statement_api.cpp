@@ -443,6 +443,61 @@ static void substitute_where_markers(
     fprintf(stderr, "[T] after='%s'\n", clause.c_str());
 }
 
+// D22: SQL_DIAG_DYNAMIC_FUNCTION / _CODE name the SQL statement the driver
+// just executed. Both fields were declared, read by SQLGetDiagField, and
+// written by nobody, so every executed statement reported an empty name and
+// code 0 (SQL_DIAG_UNKNOWN_STATEMENT) - which is what a driver reports when it
+// does not know, not what it reports for `SELECT`.
+//
+// SQL_DIAG_CURSOR_ROW_COUNT goes the same way: it is the number of rows in the
+// cursor, defined only after a cursor-opening statement, and it was always 0.
+static void record_dynamic_function(StatementHandle* stmt,
+                                    const ParsedQuery& parsed,
+                                    size_t result_rows)
+{
+    struct Entry { const char* name; SQLINTEGER code; };
+    Entry e{"", SQL_DIAG_UNKNOWN_STATEMENT};
+    switch (parsed.query_type) {
+        case ParsedQuery::QueryType::Select:
+            e = {"SELECT CURSOR", SQL_DIAG_SELECT_CURSOR};
+            break;
+        case ParsedQuery::QueryType::Insert:
+            e = {"INSERT", SQL_DIAG_INSERT};
+            break;
+        case ParsedQuery::QueryType::Update:
+            // The mock only ever produces the searched form; there is no
+            // positioned-update path to report SQL_DIAG_DYNAMIC_UPDATE for.
+            e = {"UPDATE WHERE", SQL_DIAG_UPDATE_WHERE};
+            break;
+        case ParsedQuery::QueryType::Delete:
+            e = {"DELETE WHERE", SQL_DIAG_DELETE_WHERE};
+            break;
+        case ParsedQuery::QueryType::CreateTable:
+            e = {"CREATE TABLE", SQL_DIAG_CREATE_TABLE};
+            break;
+        case ParsedQuery::QueryType::DropTable:
+            e = {"DROP TABLE", SQL_DIAG_DROP_TABLE};
+            break;
+        case ParsedQuery::QueryType::Call:
+            e = {"CALL", SQL_DIAG_CALL};
+            break;
+        case ParsedQuery::QueryType::Other:
+        default:
+            break;
+    }
+    stmt->dynamic_function_ = e.name;
+    stmt->dynamic_function_code_ = e.code;
+
+    // Only a cursor-opening statement has a cursor row count; for anything
+    // else the field stays 0, which is what the spec says to report.
+    const bool opens_cursor =
+        parsed.query_type == ParsedQuery::QueryType::Select ||
+        parsed.is_literal_select;
+    stmt->cursor_row_count_ = opens_cursor
+        ? static_cast<SQLLEN>(result_rows)
+        : 0;
+}
+
 // Substitute bound parameter values into a ParsedQuery for param-set 'row'.
 // Handles both INSERT (insert_values) and literal SELECT (literal_exprs).
 static void substitute_params(
@@ -612,6 +667,7 @@ SQLRETURN SQL_API SQLExecDirect(
     stmt->row_count_ = result.affected_rows != 0
                        ? result.affected_rows
                        : static_cast<SQLLEN>(result.data.size());
+    record_dynamic_function(stmt, parsed, result.data.size());
     
     stmt->column_names_ = std::move(result.column_names);
     stmt->column_types_.clear();
@@ -851,6 +907,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     stmt->row_count_ = result.affected_rows != 0
                        ? result.affected_rows
                        : static_cast<SQLLEN>(result.data.size());
+    record_dynamic_function(stmt, parsed, result.data.size());
 
     stmt->column_names_ = std::move(result.column_names);
     stmt->column_types_.clear();

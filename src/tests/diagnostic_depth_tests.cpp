@@ -177,6 +177,35 @@ TestResult DiagnosticDepthTests::test_diagfield_row_count() {
             if (!SQL_SUCCEEDED(diag_ret)) {
                 report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
                                "SQLGetDiagField(SQL_DIAG_ROW_COUNT)");
+                return;
+            }
+
+            // D22: the probe stopped there, so a driver that answered every
+            // read with a hard-coded 0 passed it — which is exactly what the
+            // mock did, because the statement's row count lived in a field
+            // that shadowed the one SQLGetDiagField read. The value itself is
+            // driver-defined for a SELECT, but SQL_DIAG_ROW_COUNT and
+            // SQLRowCount describe the *same* statement and must agree; that
+            // is checkable without knowing anything about the driver's data.
+            SQLLEN from_api = -12345;
+            const SQLRETURN rc_ret = SQLRowCount(stmt.get_handle(), &from_api);
+            if (!SQL_SUCCEEDED(rc_ret)) {
+                actual << "; SQLRowCount returned " << rc_ret;
+                r.actual = actual.str();
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLRowCount");
+                return;
+            }
+            actual << "; SQLRowCount = " << from_api;
+            r.actual = actual.str();
+            if (row_count != from_api) {
+                r.status = TestStatus::FAIL;
+                r.suggestion =
+                    "SQL_DIAG_ROW_COUNT and SQLRowCount report the row count "
+                    "of the same statement and must return the same value. "
+                    "Two different numbers usually means the diagnostic "
+                    "header field is not wired to the statement's row count "
+                    "at all.";
             }
         });
 }

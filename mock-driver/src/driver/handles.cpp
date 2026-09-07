@@ -10,11 +10,23 @@ OdbcHandle::OdbcHandle(HandleType type)
 
 void OdbcHandle::clear_diagnostics() {
     diagnostics_.clear();
+    // D22: an entry point clears the queue on the way in, which is also
+    // the moment the previous call's return code stops being current.
+    return_code_ = SQL_SUCCESS;
 }
 
 void OdbcHandle::add_diagnostic(const std::string& sqlstate, SQLINTEGER native_error,
                                  const std::string& message) {
     diagnostics_.push_back(make_diagnostic(sqlstate, native_error, message));
+    // D22: keep SQL_DIAG_RETURNCODE consistent with what was posted. A
+    // `01xxx` state is a warning; anything else is an error, and an
+    // error already recorded is never downgraded by a later warning.
+    const bool is_warning = sqlstate.compare(0, 2, "01") == 0;
+    if (!is_warning) {
+        return_code_ = SQL_ERROR;
+    } else if (return_code_ != SQL_ERROR) {
+        return_code_ = SQL_SUCCESS_WITH_INFO;
+    }
 }
 
 const DiagnosticRecord* OdbcHandle::get_diagnostic(SQLSMALLINT rec_number) const {

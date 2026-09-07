@@ -28,13 +28,38 @@ public:
     size_t diagnostic_count() const { return diagnostics_.size(); }
     const DiagnosticRecord* get_diagnostic(SQLSMALLINT rec_number) const;
     
-    // Header fields for all handles
-    SQLINTEGER cursor_row_count_ = 0;
+    // Header fields for all handles - SQLGetDiagField record 0.
+    //
+    // D22: all four of cursor_row_count_, dynamic_function_,
+    // dynamic_function_code_ and return_code_ were declared here and
+    // read by diagnostic_api.cpp but never written anywhere, so the
+    // header fields reported fiction. They are maintained now - see
+    // set_return_code() below and record_dynamic_function() in
+    // statement_api.cpp.
+    //
+    // D14: row_count_ is SQLLEN because that is what both SQLRowCount
+    // and SQL_DIAG_ROW_COUNT deal in. StatementHandle used to declare a
+    // second row_count_ of its own, which shadowed this one: SQLRowCount
+    // wrote the derived field and SQLGetDiagField read the base field,
+    // so the diagnostic header always said 0 and contradicted the
+    // statement's own answer.
+    SQLLEN cursor_row_count_ = 0;
     SQLINTEGER dynamic_function_code_ = 0;
     std::string dynamic_function_;
     SQLINTEGER number_ = 0;
     SQLRETURN return_code_ = SQL_SUCCESS;
-    SQLINTEGER row_count_ = 0;
+    SQLLEN row_count_ = 0;
+
+    // D22: SQL_DIAG_RETURNCODE is the return code of the last function
+    // called on this handle. Rather than touch all 96 entry points, the
+    // rule is derived from the diagnostics the call posts, which is the
+    // same information: clearing the queue (which every entry point does
+    // on the way in) resets it to SQL_SUCCESS, a posted `01xxx` state
+    // makes it SQL_SUCCESS_WITH_INFO, and any other state makes it
+    // SQL_ERROR, with an error never downgraded to a warning. The one
+    // case this does not see is a call that returns SQL_NO_DATA without
+    // posting anything; that reads back as SQL_SUCCESS.
+    void set_return_code(SQLRETURN rc) { return_code_ = rc; }
     
     // Per-handle mutex for thread safety
     std::mutex& mutex() { return mutex_; }
@@ -110,7 +135,8 @@ public:
     
     // Result set
     SQLSMALLINT num_result_cols_ = 0;
-    SQLLEN row_count_ = 0;
+    // D14: `SQLLEN row_count_` used to live here and shadow the base
+    // class's field of the same name. Use OdbcHandle::row_count_.
     SQLLEN current_row_ = -1;
 
     // SQLGetData continuation state - D37.
