@@ -6,8 +6,9 @@ build/
 cmake-build-*/
 out/
 
-# Generated files
-include/odbc_crusher/version.hpp
+# Generated files — version.hpp is generated into the build tree (E2), so
+# there is nothing to ignore in the source tree any more. Kept as a note so
+# nobody re-adds the entry along with a source-tree configure_file().
 
 # Temporary files
 tmp/

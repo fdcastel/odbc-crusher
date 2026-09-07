@@ -15,6 +15,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 # Include CMake modules
 include(CompilerWarnings)
+include(Dependencies)
 include(Platform)
 include(Version)
 
@@ -24,30 +25,22 @@ find_package(ODBC REQUIRED)
 # Enable testing
 enable_testing()
 
-# Fetch Google Test
-include(FetchContent)
-FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.17.0
-)
-# For Windows: Prevent overriding the parent project's compiler/linker settings
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+# Fetch Google Test — pin lives in cmake/Dependencies.cmake (E3)
+odbc_crusher_fetch_googletest()
 
 # Fetch CLI11 for command-line parsing
 FetchContent_Declare(
     cli11
-    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-    GIT_TAG v2.6.2
+    GIT_REPOSITORY ${ODBC_CRUSHER_CLI11_REPOSITORY}
+    GIT_TAG ${ODBC_CRUSHER_CLI11_TAG}
 )
 FetchContent_MakeAvailable(cli11)
 
 # Fetch nlohmann/json
 FetchContent_Declare(
     json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.12.0
+    GIT_REPOSITORY ${ODBC_CRUSHER_JSON_REPOSITORY}
+    GIT_TAG ${ODBC_CRUSHER_JSON_TAG}
 )
 FetchContent_MakeAvailable(json)
 

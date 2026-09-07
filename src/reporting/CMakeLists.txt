@@ -14,6 +14,7 @@ target_link_libraries(odbc_crusher_reporting
         odbc_crusher_discovery
         nlohmann_json::nlohmann_json
     PRIVATE
+        odbc_crusher_version
         project_warnings
         project_options
 )

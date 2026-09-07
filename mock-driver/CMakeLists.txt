@@ -14,23 +14,26 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Export compile commands for IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Warning flags — IMPROVEMENT_PLAN.md D16/E1. The mock is built as its own
-# CMake project (`cmake -S mock-driver`), so it does not inherit the parent's
-# module path. Reuse the parent's CompilerWarnings.cmake rather than keeping a
-# second copy of the flag list in sync by hand; the guard keeps a standalone
-# copy of this directory configurable, just without /WX.
+# Shared CMake modules — IMPROVEMENT_PLAN.md D16/E1 (warning flags) and E3
+# (the GoogleTest pin). The mock is built as its own CMake project
+# (`cmake -S mock-driver`, which is how CI, release.yml and the docs all
+# build it), so it does not inherit the parent's module path — point at
+# ../cmake explicitly.
+#
+# This is a hard requirement rather than a soft fallback on purpose: a
+# fallback would mean a second literal GoogleTest pin in the tree, which is
+# exactly the drift E3 exists to remove. This directory is not independently
+# distributable — it is always built from a checkout of the whole repo.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/CompilerWarnings.cmake")
+    message(FATAL_ERROR
+        "mock-driver requires the repository's shared cmake/ directory "
+        "(expected at ${CMAKE_CURRENT_SOURCE_DIR}/../cmake). Build it from a "
+        "full checkout: cmake -B mock-driver/build -S mock-driver")
+endif()
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
+
 if(NOT TARGET project_warnings)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/CompilerWarnings.cmake")
-        list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
-        include(CompilerWarnings)
-    else()
-        message(WARNING
-            "../cmake/CompilerWarnings.cmake not found — building mock-odbc-driver "
-            "without the project warning flags. This is only expected when the "
-            "mock-driver/ directory has been copied out of the repository.")
-        add_library(project_warnings INTERFACE)
-        add_library(project_options INTERFACE)
-    endif()
+    include(CompilerWarnings)
 endif()
 
 # Platform-specific defines (Windows-only — odbc.h needs these to behave)
@@ -119,15 +122,11 @@ install(TARGETS mock-odbc-driver
 # Testing
 enable_testing()
 
-# Add Google Test for unit testing
-include(FetchContent)
-FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.17.0
-)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+# Add Google Test for unit testing. The version pin lives in the shared
+# cmake/Dependencies.cmake (E3), so it is impossible for it to drift from
+# the root project's — there is exactly one pin in the tree.
+include(Dependencies)
+odbc_crusher_fetch_googletest()
 
 # Unit tests — compile core sources directly to access internal symbols
 add_executable(mock-odbc-tests

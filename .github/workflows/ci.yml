@@ -65,13 +65,13 @@ jobs:
       run: brew install unixodbc
 
     - name: Cache CMake FetchContent (_deps)
-      # Skip the GoogleTest re-clone on every CI run. Key is per-OS +
-      # the version pin in mock-driver/CMakeLists.txt — bumping the tag
-      # busts the cache automatically.
+      # Skip the GoogleTest re-clone on every CI run. Key is per-OS + the
+      # shared version pin in cmake/Dependencies.cmake (E3) plus the mock's
+      # own CMakeLists — bumping either busts the cache automatically.
       uses: actions/cache@v4
       with:
         path: mock-driver/build/_deps
-        key: cmake-deps-mock-${{ runner.os }}-${{ hashFiles('mock-driver/CMakeLists.txt') }}
+        key: cmake-deps-mock-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'mock-driver/CMakeLists.txt') }}
 
     - name: Configure Mock Driver
       run: cmake -B mock-driver/build -S mock-driver -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -167,18 +167,36 @@ jobs:
 
     - name: Cache CMake FetchContent (_deps)
       # Skip the GoogleTest + CLI11 + nlohmann/json re-clones on every CI
-      # run. Key on the root CMakeLists.txt — that's where the version
-      # tags are pinned, so a bump busts the cache automatically.
+      # run. Key on cmake/Dependencies.cmake — that's where the version tags
+      # are pinned since E3, so a bump busts the cache automatically.
       uses: actions/cache@v4
       with:
         path: build/_deps
-        key: cmake-deps-app-${{ runner.os }}-${{ matrix.build_type }}-${{ hashFiles('CMakeLists.txt') }}
+        key: cmake-deps-app-${{ runner.os }}-${{ matrix.build_type }}-${{ hashFiles('cmake/Dependencies.cmake', 'CMakeLists.txt') }}
 
     - name: Configure CMake
       run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
     - name: Build
       run: cmake --build build --config ${{ matrix.build_type }} -j 4
+
+    - name: Check the build did not write into the source tree
+      # IMPROVEMENT_PLAN.md E2. cmake/Version.cmake used to configure_file()
+      # version.hpp straight back into include/odbc_crusher/, which broke
+      # read-only checkouts and let two build directories on different tags
+      # fight over one file. It generates into build/generated/ now; this
+      # step is what stops that regressing. Any new generated artifact that
+      # lands in the source tree fails here rather than being papered over
+      # with another .gitignore line.
+      shell: bash
+      run: |
+        dirty="$(git status --porcelain --untracked-files=all)"
+        if [[ -n "$dirty" ]]; then
+          echo "::error::Configure/build modified the source tree:"
+          echo "$dirty"
+          exit 1
+        fi
+        echo "Source tree is clean after configure + build."
 
     - name: Run unit tests (without ODBC drivers)
       # `-L unit` selects every test tagged with the "unit" label in

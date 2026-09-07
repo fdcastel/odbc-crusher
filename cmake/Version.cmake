@@ -38,8 +38,21 @@ endif()
 set(ODBC_CRUSHER_VERSION "${ODBC_CRUSHER_VERSION_MAJOR}.${ODBC_CRUSHER_VERSION_MINOR}.${ODBC_CRUSHER_VERSION_PATCH}")
 message(STATUS "ODBC Crusher version: ${ODBC_CRUSHER_VERSION}")
 
+# E2: generate into the *build* tree, never the source tree. Writing it back
+# into include/ meant a read-only checkout could not configure, two build
+# directories on different tags fought over one file, and a stale header
+# survived until the next configure happened to rewrite it.
+set(ODBC_CRUSHER_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated")
+
 configure_file(
     "${CMAKE_SOURCE_DIR}/include/odbc_crusher/version.hpp.in"
-    "${CMAKE_SOURCE_DIR}/include/odbc_crusher/version.hpp"
+    "${ODBC_CRUSHER_GENERATED_INCLUDE_DIR}/odbc_crusher/version.hpp"
     @ONLY
+)
+
+# Carry the generated include directory as a target rather than a bare
+# include_directories() call, so only what needs version.hpp gets it.
+add_library(odbc_crusher_version INTERFACE)
+target_include_directories(odbc_crusher_version
+    INTERFACE ${ODBC_CRUSHER_GENERATED_INCLUDE_DIR}
 )
