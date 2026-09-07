@@ -1978,8 +1978,10 @@ SQLRETURN SQL_API SQLDescribeParam(
         if (pq.query_type == ParsedQuery::QueryType::Insert &&
             !pq.table_name.empty() &&
             ipar <= static_cast<SQLUSMALLINT>(pq.insert_columns.size())) {
-            const MockTable* table =
+            // D5: by value; see the note in execute_query.
+            const auto table_copy =
                 MockCatalog::instance().find_table(pq.table_name);
+            const MockTable* table = table_copy ? &*table_copy : nullptr;
             if (table) {
                 // `to_upper` is file-local to two other translation units,
                 // so compare case-insensitively here rather than exporting it.

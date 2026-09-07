@@ -1858,7 +1858,12 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
     }
     
     // ---- Table-based queries ----
-    const MockTable* table = catalog.find_table(query.table_name);
+    // D5: a copy, not a pointer into the catalog's vector. The executor
+    // below holds this across its whole body, and another connection's
+    // CREATE TABLE reallocates that vector - which made the old pointer a
+    // use-after-free rather than merely a race.
+    const auto table_copy = catalog.find_table(query.table_name);
+    const MockTable* table = table_copy ? &*table_copy : nullptr;
     if (!table) {
         result.success = false;
         result.error_message = "Table not found: " + query.table_name;

@@ -387,14 +387,24 @@ void MockCatalog::create_large_catalog() {
     }
 }
 
-const MockTable* MockCatalog::find_table(const std::string& name) const {
-    std::string upper_name = to_upper(name);
+// D5: copies under the mutex. The unlocked finder below is for the readers in
+// this file that already hold it - calling the public one from there would
+// deadlock on a non-recursive mutex.
+const MockTable* MockCatalog::find_table_locked(const std::string& name) const {
+    const std::string upper_name = to_upper(name);
     for (const auto& table : tables_) {
         if (to_upper(table.name) == upper_name) {
             return &table;
         }
     }
     return nullptr;
+}
+
+std::optional<MockTable> MockCatalog::find_table(const std::string& name) const {
+    std::lock_guard<std::mutex> g(mu_);
+    const MockTable* found = find_table_locked(name);
+    if (!found) return std::nullopt;
+    return *found;
 }
 
 void MockCatalog::add_table(const MockTable& table) {
@@ -463,8 +473,9 @@ size_t MockCatalog::erase_matching_rows(
 
 std::vector<MockColumn> MockCatalog::get_columns(const std::string& table_name,
                                                    const std::string& column_pattern) const {
+    std::lock_guard<std::mutex> g(mu_);      // D5
     std::vector<MockColumn> result;
-    const MockTable* table = find_table(table_name);
+    const MockTable* table = find_table_locked(table_name);
     if (!table) return result;
     
     for (const auto& col : table->columns) {
@@ -476,8 +487,9 @@ std::vector<MockColumn> MockCatalog::get_columns(const std::string& table_name,
 }
 
 std::vector<MockColumn> MockCatalog::get_primary_keys(const std::string& table_name) const {
+    std::lock_guard<std::mutex> g(mu_);      // D5
     std::vector<MockColumn> result;
-    const MockTable* table = find_table(table_name);
+    const MockTable* table = find_table_locked(table_name);
     if (!table) return result;
     
     for (const auto& col : table->columns) {
@@ -490,13 +502,14 @@ std::vector<MockColumn> MockCatalog::get_primary_keys(const std::string& table_n
 
 std::vector<std::pair<MockColumn, MockColumn>> MockCatalog::get_foreign_keys(
     const std::string& table_name) const {
+    std::lock_guard<std::mutex> g(mu_);      // D5
     std::vector<std::pair<MockColumn, MockColumn>> result;
-    const MockTable* table = find_table(table_name);
+    const MockTable* table = find_table_locked(table_name);
     if (!table) return result;
-    
+
     for (const auto& col : table->columns) {
         if (!col.fk_table.empty()) {
-            const MockTable* fk_table = find_table(col.fk_table);
+            const MockTable* fk_table = find_table_locked(col.fk_table);
             if (fk_table) {
                 for (const auto& fk_col : fk_table->columns) {
                     if (fk_col.name == col.fk_column) {

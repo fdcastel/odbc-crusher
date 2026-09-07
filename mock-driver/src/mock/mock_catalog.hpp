@@ -103,11 +103,13 @@ struct MockProcedure {
 
 // The mock catalog
 //
-// Thread-safety: all public methods serialize on `mu_`. The getters that
-// still hand out references (`tables()`, `inserted_data()`) are kept for
-// callers that already hold the driver's per-handle lock and run under the
-// single-connection assumption. New call sites should prefer the copying
-// `snapshot_*` accessors when crossing thread boundaries.
+// Thread-safety: all public methods serialize on `mu_`.
+//
+// D5: there are no reference-returning accessors left. `tables()` and
+// `inserted_data()` used to hand out references into vectors another
+// connection can reallocate, and `find_table()` a pointer into one; all
+// three now copy under the mutex, so a caller owns what it reads and no
+// pointer outlives the call.
 class MockCatalog {
 public:
     static MockCatalog& instance();
@@ -130,16 +132,18 @@ public:
     int live_connections() const { return live_connections_.load(); }
 
     // Table operations
-    //
-    // `tables()` and `inserted_data()` return references for backward-compat
-    // and are SAFE only when the caller holds the driver's per-handle lock
-    // and there is exactly one connection mutating the catalog. New code
-    // should prefer `snapshot_tables()` / `snapshot_inserted_rows()` which
-    // copy under the catalog mutex and are safe across concurrent
-    // connections.
-    const std::vector<MockTable>& tables() const { return tables_; }
+    // D5: `tables()` and `inserted_data()` used to hand out references into
+    // vectors another connection can reallocate, and the comment above them
+    // said so. They had no callers outside mock_catalog.cpp, so they are
+    // gone; `snapshot_tables()` and `snapshot_inserted_rows()` copy under the
+    // mutex and are what a caller should use.
     std::vector<MockTable> snapshot_tables() const;
-    const MockTable* find_table(const std::string& name) const;
+    // D5: this returned `const MockTable*` into `tables_`, and
+    // `execute_query` held it across the whole executor while another
+    // connection's CREATE TABLE reallocated the vector underneath it - a
+    // use-after-free, not merely a race. It copies under the mutex now, so
+    // the caller owns what it reads.
+    std::optional<MockTable> find_table(const std::string& name) const;
 
     // Mutable catalog operations (for CREATE TABLE / DROP TABLE)
     void add_table(const MockTable& table);
@@ -149,8 +153,6 @@ public:
     void insert_row(const std::string& table_name, MockRow row);
     void clear_inserted_data();
     void clear_inserted_data(const std::string& table_name);
-    std::unordered_map<std::string, std::vector<MockRow>>& inserted_data() { return inserted_data_; }
-    const std::unordered_map<std::string, std::vector<MockRow>>& inserted_data() const { return inserted_data_; }
     // Returns a copy of one table's rows under the catalog mutex. Empty
     // vector when the table has no inserted data.
     std::vector<MockRow> snapshot_inserted_rows(const std::string& table_name) const;
@@ -221,6 +223,10 @@ private:
 
     // D6: which preset is loaded, so re-initialising with the same one is a
     // no-op rather than a wipe.
+    // D5: the unlocked finder, for the readers in this file that already
+    // hold `mu_`. Never hand the pointer outside the lock.
+    const MockTable* find_table_locked(const std::string& name) const;
+
     bool initialized_ = false;
     std::string loaded_preset_;
     std::atomic<int> live_connections_{0};   // D47

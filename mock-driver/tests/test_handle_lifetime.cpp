@@ -232,3 +232,85 @@ TEST(CatalogSharing, ClosingTheLastConnectionResetsTheCatalog) {
 
     SQLFreeHandle(SQL_HANDLE_ENV, henv);
 }
+
+// ── D5: the catalog must not hand out pointers into its own vectors ──────
+//
+// find_table returned `const MockTable*` into `tables_`, and execute_query
+// held it across the whole executor while another connection's CREATE TABLE
+// pushed onto that vector and reallocated it. A use-after-free, not a race on
+// a value - and one the sanitiser job would catch only if something exercised
+// it, which nothing did.
+//
+// The shape below is that sequence: connection A starts a query against a
+// table, connection B creates enough tables to force the vector to grow, and A
+// keeps reading. It passes trivially now that find_table copies; under ASan,
+// against the pointer-returning version, it is the arrangement that trips.
+TEST(CatalogSharing, CreatingTablesWhileAnotherConnectionQueriesIsSafe) {
+    SQLHENV henv = SQL_NULL_HENV;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv), SQL_SUCCESS);
+    ASSERT_EQ(SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0), SQL_SUCCESS);
+
+    SQLHDBC a = SQL_NULL_HDBC, b = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &a), SQL_SUCCESS);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDriverConnect(
+        a, NULL, (SQLCHAR*)kConn, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT)));
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &b), SQL_SUCCESS);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDriverConnect(
+        b, NULL, (SQLCHAR*)kConn, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT)));
+
+    SQLHSTMT sa = SQL_NULL_HSTMT, sb = SQL_NULL_HSTMT;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_STMT, a, &sa), SQL_SUCCESS);
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_STMT, b, &sb), SQL_SUCCESS);
+
+    SQLExecDirect(sa, (SQLCHAR*)"DROP TABLE D5_BASE", SQL_NTS);
+    SQLCloseCursor(sa);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        sa, (SQLCHAR*)"CREATE TABLE D5_BASE (ID INTEGER, V VARCHAR(16))",
+        SQL_NTS)));
+    SQLCloseCursor(sa);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        sa, (SQLCHAR*)"INSERT INTO D5_BASE (ID, V) VALUES (1, 'a'), (2, 'b')",
+        SQL_NTS)));
+    SQLCloseCursor(sa);
+
+    // B grows the table vector well past any small-capacity reserve while A
+    // reads. Interleaved, so a query is in flight across several reallocations.
+    for (int i = 0; i < 32; ++i) {
+        const std::string ddl =
+            "CREATE TABLE D5_GROW_" + std::to_string(i) + " (ID INTEGER)";
+        SQLExecDirect(sb, (SQLCHAR*)ddl.c_str(), SQL_NTS);
+        SQLCloseCursor(sb);
+
+        ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+            sa, (SQLCHAR*)"SELECT ID, V FROM D5_BASE ORDER BY ID", SQL_NTS)))
+            << "iteration " << i;
+        int rows = 0;
+        while (SQL_SUCCEEDED(SQLFetch(sa))) {
+            char v[32] = {0};
+            SQLLEN ind = 0;
+            ASSERT_TRUE(SQL_SUCCEEDED(SQLGetData(sa, 2, SQL_C_CHAR, v,
+                                                 sizeof(v), &ind)))
+                << "iteration " << i;
+            ++rows;
+        }
+        SQLCloseCursor(sa);
+        ASSERT_EQ(rows, 2) << "iteration " << i;
+    }
+
+    for (int i = 0; i < 32; ++i) {
+        const std::string ddl = "DROP TABLE D5_GROW_" + std::to_string(i);
+        SQLExecDirect(sb, (SQLCHAR*)ddl.c_str(), SQL_NTS);
+        SQLCloseCursor(sb);
+    }
+    SQLExecDirect(sa, (SQLCHAR*)"DROP TABLE D5_BASE", SQL_NTS);
+    SQLCloseCursor(sa);
+
+    SQLFreeHandle(SQL_HANDLE_STMT, sb);
+    SQLFreeHandle(SQL_HANDLE_STMT, sa);
+    SQLDisconnect(b);
+    SQLFreeHandle(SQL_HANDLE_DBC, b);
+    SQLDisconnect(a);
+    SQLFreeHandle(SQL_HANDLE_DBC, a);
+    SQLFreeHandle(SQL_HANDLE_ENV, henv);
+}
