@@ -3,6 +3,7 @@
 
 #include "driver/entry_guard.hpp"
 #include "driver/handles.hpp"
+#include "utils/buffer_copy.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/mock_catalog.hpp"
 #include "mock/behaviors.hpp"
@@ -314,17 +315,23 @@ SQLRETURN SQL_API SQLGetCursorName(
     // Return a generated cursor name
     std::string cursor_name = "SQL_CUR" + std::to_string(reinterpret_cast<uintptr_t>(stmt));
     
-    if (szCursor && cbCursorMax > 0) {
-        size_t copy_len = std::min(cursor_name.length(), 
-                                   static_cast<size_t>(cbCursorMax - 1));
-        std::memcpy(szCursor, cursor_name.c_str(), copy_len);
-        szCursor[copy_len] = '\0';
-    }
-    
+    // D18/D24: a hand-rolled copy that signalled nothing on truncation.
+    // Returning plain SQL_SUCCESS also made any diagnostic invisible: a
+    // driver manager only surfaces the diagnostic stack when the call
+    // returns SQL_SUCCESS_WITH_INFO or an error, so posting 01004 beside a
+    // SQL_SUCCESS would have changed nothing an application could see.
+    const BufferCopyResult cursor_copy = copy_chars(
+        cursor_name, 0, szCursor, static_cast<SQLLEN>(cbCursorMax));
+
     if (pcbCursor) {
-        *pcbCursor = static_cast<SQLSMALLINT>(cursor_name.length());
+        *pcbCursor = static_cast<SQLSMALLINT>(cursor_copy.remaining);
     }
-    
+
+    if (cursor_copy.truncated) {
+        stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                             "String data, right truncated");
+        return SQL_SUCCESS_WITH_INFO;
+    }
     return SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hstmt)

@@ -1,4 +1,5 @@
 #include "string_utils.hpp"
+#include "buffer_copy.hpp"
 #include "../driver/common.hpp"
 #include <cstring>
 #include <algorithm>
@@ -18,27 +19,27 @@ SQLRETURN copy_string_to_buffer(
     SQLCHAR* target,
     SQLSMALLINT buffer_length,
     SQLSMALLINT* string_length) {
-    
-    SQLSMALLINT src_len = static_cast<SQLSMALLINT>(src.length());
-    
+
+    // D18: one implementation of the copy, in copy_chars.
+    //
+    // D23: this used to compute `SQLSMALLINT src_len = src.length()`. At
+    // 32768 bytes that wraps negative, `*string_length` reports a negative
+    // length, and the truncation test `src_len >= buffer_length` then
+    // answers *false* - so the one case the check exists for was the case it
+    // got wrong. The arithmetic is SQLLEN inside copy_chars; only the
+    // reported length is narrowed here, and only after being clamped.
+    const BufferCopyResult res =
+        copy_chars(src, /*offset=*/0, target, static_cast<SQLLEN>(buffer_length));
+
     if (string_length) {
-        *string_length = src_len;
+        // The ODBC signature is SQLSMALLINT, so a length beyond its range
+        // cannot be reported faithfully. Saturate rather than wrap, which at
+        // least keeps "there is more than you asked for" true.
+        constexpr SQLLEN kMaxSmallint = 32767;
+        *string_length = static_cast<SQLSMALLINT>(
+            res.remaining > kMaxSmallint ? kMaxSmallint : res.remaining);
     }
-    
-    if (!target || buffer_length <= 0) {
-        return SQL_SUCCESS;
-    }
-    
-    // Copy with truncation check
-    SQLSMALLINT copy_len = std::min(src_len, static_cast<SQLSMALLINT>(buffer_length - 1));
-    std::memcpy(target, src.c_str(), copy_len);
-    target[copy_len] = '\0';
-    
-    if (src_len >= buffer_length) {
-        return SQL_SUCCESS_WITH_INFO;  // Truncation
-    }
-    
-    return SQL_SUCCESS;
+    return res.rc;
 }
 
 std::string sql_to_string(const SQLCHAR* sql_str, SQLSMALLINT length) {

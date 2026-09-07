@@ -6,6 +6,7 @@
 #include "mock/mock_catalog.hpp"
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
+#include "utils/buffer_copy.hpp"
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -1305,18 +1306,22 @@ SQLRETURN SQL_API SQLGetData(
                 }
             }
         } else {
-            // SQL_C_CHAR or default — return ANSI.
+            // SQL_C_CHAR or default - return ANSI.
             //
-            // D37: this used to copy from the start of the value on every
-            // call and report the whole length as "still available", so a
-            // caller doing what the spec prescribes — call again while the
-            // driver keeps saying 01004 — got the same first bytes forever.
-            // Serve from the running offset instead.
+            // D18: the copy, the terminator, the "bytes still available"
+            // report and the 01004 all come from copy_chars now, so this
+            // branch is the *policy* (where the offset lives, when the
+            // sequence ends) and none of the mechanics.
+            //
+            // D37: the offset is why this is not a one-shot copy. A caller
+            // retrieving a long value calls repeatedly; each call continues
+            // where the last one stopped, and the sequence ends with
+            // SQL_NO_DATA rather than by repeating the first bytes forever.
             const size_t offset = std::min(stmt->getdata_offset_,
                                            value.length());
-            const size_t remaining = value.length() - offset;
+            const bool exhausted = offset >= value.length();
 
-            if (offset > 0 && remaining == 0) {
+            if (offset > 0 && exhausted) {
                 // The previous call returned the last of the value, and the
                 // spec is explicit that a further call yields SQL_NO_DATA.
                 stmt->getdata_col_ = 0;
@@ -1325,32 +1330,28 @@ SQLRETURN SQL_API SQLGetData(
                 return SQL_NO_DATA;
             }
 
-            if (rgbValue && cbValueMax > 0) {
-                size_t copy_len = std::min(remaining,
-                                           static_cast<size_t>(cbValueMax - 1));
-                std::memcpy(rgbValue, value.c_str() + offset, copy_len);
-                static_cast<char*>(rgbValue)[copy_len] = '\0';
-                stmt->getdata_offset_ = offset + copy_len;
-            }
+            const BufferCopyResult res =
+                copy_chars(value, offset, rgbValue, cbValueMax);
+
+            // Only advance when bytes were actually delivered. A zero-length
+            // ask reports the size and consumes nothing, so the next call
+            // starts from the same place.
+            stmt->getdata_offset_ = offset + res.copied;
+
             // Bytes still available *as of this call*, excluding the
-            // terminator — not the length of the whole column.
-            if (pcbValue) *pcbValue = static_cast<SQLLEN>(remaining);
+            // terminator - not the length of the whole column.
+            if (pcbValue) *pcbValue = res.remaining;
 
-            if (cbValueMax == 0) {
-                // Zero buffer: report the needed length and warn. Nothing was
-                // consumed, so the offset does not move.
+            if (res.truncated) {
+                // D24: posted here rather than at each call site, so an
+                // application can always tell truncation from any other
+                // warning by its SQLSTATE.
                 stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
-                                    "String data, right truncated");
-                return SQL_SUCCESS_WITH_INFO;
-            }
-
-            if (static_cast<SQLLEN>(remaining) >= cbValueMax) {
-                stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
-                                    "String data, right truncated");
+                                     "String data, right truncated");
                 return SQL_SUCCESS_WITH_INFO;
             }
             // The value is complete. A further call for this column takes the
-            // `remaining == 0` branch above and reports SQL_NO_DATA.
+            // `exhausted` branch above and reports SQL_NO_DATA.
         }
     }
     
@@ -1423,7 +1424,13 @@ SQLRETURN SQL_API SQLDescribeCol(
     SQLSMALLINT type = stmt->column_types_[icol - 1];
     
     if (szColName) {
-        copy_string_to_buffer(name, szColName, cbColNameMax, pcbColName);
+        // D24: the return code was discarded, so a column name that did not
+        // fit came back cut short with no diagnostic at all.
+        if (copy_string_to_buffer(name, szColName, cbColNameMax, pcbColName)
+                == SQL_SUCCESS_WITH_INFO) {
+            stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                 "String data, right truncated");
+        }
     } else if (pcbColName) {
         *pcbColName = static_cast<SQLSMALLINT>(name.length());
     }

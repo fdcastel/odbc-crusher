@@ -1,6 +1,7 @@
 // Info API - SQLGetInfo, SQLGetTypeInfo, SQLGetFunctions
 
 #include "driver/handles.hpp"
+#include "utils/buffer_copy.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/mock_types.hpp"
 #include "mock/behaviors.hpp"
@@ -771,12 +772,15 @@ SQLRETURN SQL_API SQLNativeSql(
         *pcbSqlStr = static_cast<SQLINTEGER>(translated.length());
     }
     
-    if (szSqlStr && cbSqlStrMax > 0) {
-        size_t copy_len = std::min(translated.length(), static_cast<size_t>(cbSqlStrMax - 1));
-        std::memcpy(szSqlStr, translated.c_str(), copy_len);
-        szSqlStr[copy_len] = '\0';
-        
-        if (static_cast<SQLINTEGER>(translated.length()) >= cbSqlStrMax) {
+    // D18/D24: returned SQL_SUCCESS_WITH_INFO on truncation but posted no
+    // diagnostic, so a caller saw a warning with an empty diagnostic stack
+    // and no way to tell truncation from anything else.
+    {
+        const BufferCopyResult res = copy_chars(
+            translated, 0, szSqlStr, static_cast<SQLLEN>(cbSqlStrMax));
+        if (res.truncated) {
+            conn->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                 "String data, right truncated");
             return SQL_SUCCESS_WITH_INFO;
         }
     }

@@ -1,6 +1,7 @@
 // Descriptor API - SQLGetDescField, SQLSetDescField, etc.
 
 #include "driver/handles.hpp"
+#include "utils/buffer_copy.hpp"
 #include "driver/diagnostics.hpp"
 
 #include <cstring>  // std::memcpy — Linux GCC is stricter than MSVC about transitives
@@ -197,13 +198,21 @@ SQLRETURN SQL_API SQLColAttribute(
     switch (iField) {
         case SQL_DESC_NAME:
         case SQL_COLUMN_NAME:
-            if (pCharAttr && cbCharAttrMax > 0) {
-                size_t copy_len = std::min(col_name.length(), 
-                                           static_cast<size_t>(cbCharAttrMax - 1));
-                std::memcpy(pCharAttr, col_name.c_str(), copy_len);
-                static_cast<char*>(pCharAttr)[copy_len] = '\0';
+            {
+                // D18/D24: was a hand-rolled memcpy with no truncation
+                // signal of any kind - not even the return code, which
+                // the caller could at least have inspected.
+                const BufferCopyResult res = copy_chars(
+                    col_name, 0, pCharAttr,
+                    static_cast<SQLLEN>(cbCharAttrMax));
+                if (pcbCharAttr) {
+                    *pcbCharAttr = static_cast<SQLSMALLINT>(res.remaining);
+                }
+                if (res.truncated) {
+                    stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                         "String data, right truncated");
+                }
             }
-            if (pcbCharAttr) *pcbCharAttr = static_cast<SQLSMALLINT>(col_name.length());
             break;
             
         case SQL_DESC_TYPE:

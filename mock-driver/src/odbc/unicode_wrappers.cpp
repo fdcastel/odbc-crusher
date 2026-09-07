@@ -469,8 +469,29 @@ MOCK_ENTRY_TRY {
         return str_ret;
     }
 
-    // Numeric — copy raw bytes
+    // Numeric — copy raw bytes.
+    //
+    // D23: this used to be a bare memcpy of `ansi_len` bytes that never
+    // consulted `cbInfoValueMax`. `SQLGetInfoW(dbc, SQL_GETDATA_EXTENSIONS,
+    // &two_byte_var, 2, &len)` wrote four bytes into a two-byte variable,
+    // and since the .def exports only SQLGetInfoW this is the path every
+    // Unicode driver manager takes on Windows - so the overrun was on the
+    // reachable path, not the dead one.
+    //
+    // A caller that supplies too small a buffer for a fixed-size numeric
+    // attribute has made a mistake, and the spec's answer is HY090 rather
+    // than a partial write: half of a SQLUINTEGER is not a smaller number,
+    // it is a different one.
     if (rgbInfoValue && ansi_len > 0) {
+        if (cbInfoValueMax > 0 &&
+            static_cast<SQLINTEGER>(ansi_len) > cbInfoValueMax) {
+            conn->add_diagnostic(sqlstate::INVALID_STRING_OR_BUFFER_LENGTH, 0,
+                                 "Buffer length " +
+                                 std::to_string(cbInfoValueMax) +
+                                 " is too small for this information type, "
+                                 "which needs " + std::to_string(ansi_len));
+            return SQL_ERROR;
+        }
         std::memcpy(rgbInfoValue, ansi_buf, ansi_len);
     }
     if (pcbInfoValue) *pcbInfoValue = ansi_len;

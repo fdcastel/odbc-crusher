@@ -116,8 +116,18 @@ SQLRETURN SQL_API SQLDriverConnect(
     
     // Output connection string
     if (szConnStrOut && cbConnStrOutMax > 0) {
-        copy_string_to_buffer(conn->connection_string_, szConnStrOut, 
-                              cbConnStrOutMax, pcbConnStrOut);
+        // D24: the return code was discarded, so an application whose
+        // OutConnectionString buffer was too small got a cut-short
+        // connection string and no way to learn that.
+        if (copy_string_to_buffer(conn->connection_string_, szConnStrOut,
+                                  cbConnStrOutMax, pcbConnStrOut)
+                == SQL_SUCCESS_WITH_INFO) {
+            conn->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                 "String data, right truncated");
+            // The connection is open; the *string* was truncated. The spec
+            // says SQL_SUCCESS_WITH_INFO, not failure.
+            return SQL_SUCCESS_WITH_INFO;
+        }
     } else if (pcbConnStrOut) {
         *pcbConnStrOut = static_cast<SQLSMALLINT>(conn->connection_string_.length());
     }
@@ -217,9 +227,14 @@ SQLRETURN SQL_API SQLGetConnectAttr(
             
         case SQL_ATTR_CURRENT_CATALOG:
             if (rgbValue && cbValueMax > 0) {
-                copy_string_to_buffer(conn->current_catalog_name_,
-                                      static_cast<SQLCHAR*>(rgbValue),
-                                      static_cast<SQLSMALLINT>(cbValueMax), nullptr);
+                // D24 - see SQLDriverConnect above.
+                if (copy_string_to_buffer(conn->current_catalog_name_,
+                                          static_cast<SQLCHAR*>(rgbValue),
+                                          static_cast<SQLSMALLINT>(cbValueMax),
+                                          nullptr) == SQL_SUCCESS_WITH_INFO) {
+                    conn->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                         "String data, right truncated");
+                }
             }
             if (pcbValue) *pcbValue = static_cast<SQLINTEGER>(conn->current_catalog_name_.length());
             break;
