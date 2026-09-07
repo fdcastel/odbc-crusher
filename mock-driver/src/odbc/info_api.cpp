@@ -134,6 +134,38 @@ std::string translate_escape_sequences(const std::string& sql) {
 
 } // anonymous namespace
 
+namespace {
+
+// D33. BufferValidation=Lenient was parsed into DriverConfig and then never
+// read by anything, so the knob README.md:211 documents did nothing at all.
+// It now does what its name says on the SQLGetInfo string path: the value is
+// returned without its NUL terminator, which is the classic careless-driver
+// behaviour and the one thing a "does this driver null-terminate its output?"
+// probe needs in order to be able to fail.
+//
+// Strict (the default) is unchanged, so no existing caller is affected.
+SQLRETURN info_return_string(const DriverConfig& config,
+                             const std::string& value,
+                             SQLCHAR* target,
+                             SQLSMALLINT buffer_length,
+                             SQLSMALLINT* string_length) {
+    const SQLRETURN ret = copy_string_to_buffer(value, target, buffer_length,
+                                                string_length);
+    if (config.buffer_validation != DriverConfig::BufferValidationMode::Lenient ||
+        !target || buffer_length <= 0) {
+        return ret;
+    }
+
+    // copy_string_to_buffer wrote the terminator at min(len, buffer_length-1);
+    // overwrite it with a filler byte, still inside the caller's buffer.
+    const size_t written =
+        std::min(value.size(), static_cast<size_t>(buffer_length - 1));
+    target[written] = static_cast<SQLCHAR>('X');
+    return ret;
+}
+
+}  // namespace
+
 extern "C" {
 
 SQLRETURN SQL_API SQLGetInfo(
@@ -152,8 +184,8 @@ SQLRETURN SQL_API SQLGetInfo(
     const auto& config = BehaviorController::instance().config();
     
     #define RETURN_STRING(s) \
-        return copy_string_to_buffer(s, static_cast<SQLCHAR*>(rgbInfoValue), \
-                                     cbInfoValueMax, pcbInfoValue)
+        return info_return_string(config, s, static_cast<SQLCHAR*>(rgbInfoValue), \
+                                  cbInfoValueMax, pcbInfoValue)
     
     #define RETURN_USHORT(v) \
         if (rgbInfoValue) *static_cast<SQLUSMALLINT*>(rgbInfoValue) = (v); \

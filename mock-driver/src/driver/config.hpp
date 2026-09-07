@@ -86,8 +86,18 @@ struct DriverConfig {
         TruncateNumeric,  // Round stored doubles to integer, lose precision
         NullAsEmpty,      // Fetch NULL char/wchar cells as empty string + ind=0
                           // (Oracle-style empty-vs-null conflation)
-        MangleUnicode     // Fetch char/wchar cells with non-ASCII codepoints
+        MangleUnicode,    // Fetch char/wchar cells with non-ASCII codepoints
                           // collapsed to '?' (codepage-bound driver pattern)
+
+        // D34. The modes above all target either stored rows or the character
+        // fetch path, so nothing could make a *numeric* value come back wrong
+        // — which is why probes asserting `SELECT 42` returns 42 had no mock
+        // configuration that could fail them.
+        SkewNumeric,      // Every numeric cell comes back +1, on both the
+                          // bound-column path and SQLGetData
+        SkewNumericBound  // Only the bound-column path is skewed; SQLGetData
+                          // returns the true value, so a probe that reads the
+                          // same column both ways sees them disagree
     };
     SilentCorruptionMode silent_corruption = SilentCorruptionMode::None;
 

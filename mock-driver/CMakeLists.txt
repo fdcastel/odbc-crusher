@@ -135,6 +135,7 @@ add_executable(mock-odbc-tests
     tests/test_handles.cpp
     tests/test_connection.cpp
     tests/test_entry_guard.cpp
+    tests/test_fault_injection.cpp
     tests/test_config.cpp
     tests/test_gettypeinfo.cpp
     tests/test_error_injection.cpp

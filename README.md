@@ -208,10 +208,10 @@ The mock driver supports these connection-string parameters:
 | `ErrorCode` | SQLSTATE | SQLSTATE returned for failures (default: HY000). |
 | `ErrorCount` | Number | Number of diagnostic records emitted per error (default: 1). |
 | `Latency` | e.g. `10ms` | Simulated per-call delay. |
-| `BufferValidation` | `Strict`, `Lenient` | Buffer-size enforcement on input parameters. |
+| `BufferValidation` | `Strict` (default), `Lenient` | `Lenient` returns `SQLGetInfo` strings **without** their NUL terminator, the classic careless-driver behaviour. |
 | `StateChecking` | `Strict`, `Lenient` | ODBC state-machine validation. |
 | `TransactionMode` | `ReadOnly`, `ReadWrite` | Transaction read/write capability. |
-| **`SilentCorruption`** | `None` (default), `DropInserts`, `MangleVarchar`, `TruncateNumeric`, `NullAsEmpty`, `MangleUnicode` | Silently tamper with stored data while keeping return codes successful — used to validate that round-trip / `verify_rows_persisted` checks actually catch a misbehaving driver. `NullAsEmpty` = NULL char/wchar cells fetch as empty + `ind=0` (Oracle-style). `MangleUnicode` = non-ASCII bytes replaced with `?` (codepage-bound driver pattern). |
+| **`SilentCorruption`** | `None` (default), `DropInserts`, `MangleVarchar`, `TruncateNumeric`, `NullAsEmpty`, `MangleUnicode`, `SkewNumeric`, `SkewNumericBound` | Silently tamper with stored data while keeping return codes successful — used to validate that round-trip / `verify_rows_persisted` checks actually catch a misbehaving driver. `NullAsEmpty` = NULL char/wchar cells fetch as empty + `ind=0` (Oracle-style). `MangleUnicode` = non-ASCII bytes replaced with `?` (codepage-bound driver pattern). `SkewNumeric` = every numeric cell comes back +1 on both the bound-column and `SQLGetData` paths. `SkewNumericBound` = only the bound-column path is skewed, so reading one column both ways disagrees. |
 | **`NativeSqlPassThrough`** | `true`, `false` (default) | When `true`, `SQLNativeSql` returns the input verbatim without translating any escape sequence. Drives the escape-translation probes' canary path. |
 | **`Procedures`** | (default) / `BrokenInout` | When `BrokenInout`, `MOCK_INOUT` runs but its callback returns no output values — mocks drivers that accept `{?=CALL …}` syntactically but never write back to OUT/INOUT bound buffers. |
 | **`ArrayBindRowFailsAt`** | Number (default 0) | When `> 0`, the Nth row (1-indexed) of any array-parameter execute is forced to fail with SQLSTATE `23000`; surrounding rows execute normally. |

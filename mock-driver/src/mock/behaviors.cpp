@@ -33,4 +33,28 @@ void BehaviorController::apply_latency() const {
     snapshot.apply_latency();
 }
 
+namespace {
+
+// True when the active mode should perturb a value delivered on `path`.
+bool skew_applies(FetchPath path) {
+    switch (BehaviorController::instance().config().silent_corruption) {
+        case DriverConfig::SilentCorruptionMode::SkewNumeric:
+            return true;
+        case DriverConfig::SilentCorruptionMode::SkewNumericBound:
+            return path == FetchPath::BoundColumn;
+        default:
+            return false;
+    }
+}
+
+}  // namespace
+
+long long apply_numeric_skew(long long value, FetchPath path) {
+    return skew_applies(path) ? value + 1 : value;
+}
+
+double apply_numeric_skew(double value, FetchPath path) {
+    return skew_applies(path) ? value + 1.0 : value;
+}
+
 } // namespace mock_odbc

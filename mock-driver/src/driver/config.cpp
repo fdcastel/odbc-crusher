@@ -254,6 +254,10 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::TruncateNumeric;
     } else if (corruption_str == "nullasempty") {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::NullAsEmpty;
+    } else if (corruption_str == "skewnumeric") {
+        config.silent_corruption = DriverConfig::SilentCorruptionMode::SkewNumeric;
+    } else if (corruption_str == "skewnumericbound") {
+        config.silent_corruption = DriverConfig::SilentCorruptionMode::SkewNumericBound;
     } else if (corruption_str == "mangleunicode") {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::MangleUnicode;
     } else {

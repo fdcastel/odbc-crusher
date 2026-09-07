@@ -414,7 +414,9 @@ SQLRETURN SQL_API SQLFetchScroll(
         
         // Convert and copy data based on target type
         if (std::holds_alternative<long long>(cell)) {
-            long long value = std::get<long long>(cell);
+            // D34
+            long long value = apply_numeric_skew(std::get<long long>(cell),
+                                                 FetchPath::BoundColumn);
             switch (binding.target_type) {
                 case SQL_C_SLONG:
                 case SQL_C_LONG:
@@ -444,7 +446,9 @@ SQLRETURN SQL_API SQLFetchScroll(
                 }
             }
         } else if (std::holds_alternative<double>(cell)) {
-            double value = std::get<double>(cell);
+            // D34
+            double value = apply_numeric_skew(std::get<double>(cell),
+                                              FetchPath::BoundColumn);
             switch (binding.target_type) {
                 case SQL_C_DOUBLE:
                     if (binding.target_value) *static_cast<SQLDOUBLE*>(binding.target_value) = value;

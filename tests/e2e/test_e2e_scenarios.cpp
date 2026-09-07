@@ -546,3 +546,86 @@ TEST_F(CrusherE2EFixture, ReportCarriesSchemaVersionAndIso8601Timestamp) {
         }
     }
 }
+
+// ── Phase 2: probe fixes, each with a configuration that makes it fail ──────
+//
+// The rule for this phase (IMPROVEMENT_PLAN.md Phase 2 exit criteria) is that
+// every repaired probe must have a mock configuration proving it can now fail.
+// Three of them had none, because nothing in the mock could make a numeric
+// value come back wrong or a string come back unterminated — which is exactly
+// why these probes could ship broken and nothing noticed. D33 and D34 added
+// those levers; these scenarios are what they were added for.
+
+// A5 — test_null_termination called std::strlen() on a buffer memset to 'X'
+// with no NUL: undefined behaviour in precisely the case it existed to detect,
+// and its FAIL branch (`buffer[strlen(buffer)] != '\0'`) was a tautology.
+TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
+    auto ok = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    auto baseline = find_test(ok.report, "Buffer Validation", "Null Termination Test");
+    ASSERT_TRUE(baseline.has_value())
+        << "probe missing — was it renamed? (B9 renames this category)";
+    EXPECT_EQ(baseline->value("status", std::string{}), "PASS")
+        << "must pass against a well-behaved driver";
+
+    auto bad = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
+        "BufferValidation=Lenient;");
+    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    auto t = find_test(bad.report, "Buffer Validation", "Null Termination Test");
+    ASSERT_TRUE(t.has_value());
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+        << "BufferValidation=Lenient returns SQL_DRIVER_NAME without its NUL; "
+           "the probe must notice.";
+    EXPECT_NE(t->value("actual", std::string{}).find("No NUL"), std::string::npos)
+        << "actual was: " << t->value("actual", std::string{});
+}
+
+// A6 — the value check was `value == 42 || indicator != SQL_NULL_DATA`. The
+// right operand is true for every non-NULL fetch, so the probe passed on any
+// value at all and its FAIL branch was unreachable.
+TEST_F(CrusherE2EFixture, BindColIntegerProbeCatchesAWrongValue) {
+    auto ok = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    auto baseline = find_test(ok.report, "Statement Tests", "test_bind_col_integer");
+    ASSERT_TRUE(baseline.has_value());
+    EXPECT_EQ(baseline->value("status", std::string{}), "PASS");
+
+    auto bad = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
+        "SilentCorruption=SkewNumeric;");
+    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    auto t = find_test(bad.report, "Statement Tests", "test_bind_col_integer");
+    ASSERT_TRUE(t.has_value());
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+        << "SELECT 42 came back as 43 through the bound column; with the old "
+           "`||` this still reported PASS.";
+    EXPECT_NE(t->value("actual", std::string{}).find("43"), std::string::npos)
+        << "actual was: " << t->value("actual", std::string{});
+}
+
+// A7 — the probe is named "values match" and never compared them: both
+// branches set PASS, and SQLBindCol's return code was discarded.
+TEST_F(CrusherE2EFixture, FetchBoundVsGetDataProbeCatchesADisagreement) {
+    auto ok = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    auto baseline = find_test(ok.report, "Statement Tests", "test_fetch_bound_vs_getdata");
+    ASSERT_TRUE(baseline.has_value());
+    EXPECT_EQ(baseline->value("status", std::string{}), "PASS");
+
+    // SkewNumericBound perturbs only the bound-column path, so the same column
+    // read two ways disagrees — the exact defect this probe is named for.
+    auto bad = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
+        "SilentCorruption=SkewNumericBound;");
+    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    auto t = find_test(bad.report, "Statement Tests", "test_fetch_bound_vs_getdata");
+    ASSERT_TRUE(t.has_value());
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+        << "bound and SQLGetData returned different values for one column";
+    EXPECT_EQ(t->value("severity", std::string{}), "CRITICAL")
+        << "two delivery paths disagreeing is data corruption, not a warning";
+}

@@ -436,10 +436,27 @@ MOCK_ENTRY_TRY {
         std::string val(reinterpret_cast<char*>(ansi_buf),
                         std::min(static_cast<int>(ansi_len),
                                  static_cast<int>(sizeof(ansi_buf) - 1)));
-        return copy_string_to_wbuffer(val,
+        const SQLRETURN str_ret = copy_string_to_wbuffer(val,
                     static_cast<SQLWCHAR*>(rgbInfoValue),
                     static_cast<SQLINTEGER>(cbInfoValueMax),
                     pcbInfoValue);
+
+        // D33: BufferValidation=Lenient drops the terminator here too. The
+        // .def exports only SQLGetInfoW, so on Windows this is the path the
+        // Driver Manager actually takes and the ANSI one is unreachable from
+        // an application.
+        if (BehaviorController::instance().config().buffer_validation ==
+                DriverConfig::BufferValidationMode::Lenient &&
+            rgbInfoValue && cbInfoValueMax > 0) {
+            const size_t capacity_units =
+                static_cast<size_t>(cbInfoValueMax) / sizeof(SQLWCHAR);
+            if (capacity_units > 0) {
+                const size_t written = std::min(val.size(), capacity_units - 1);
+                static_cast<SQLWCHAR*>(rgbInfoValue)[written] =
+                    static_cast<SQLWCHAR>('X');
+            }
+        }
+        return str_ret;
     }
 
     // Numeric — copy raw bytes
