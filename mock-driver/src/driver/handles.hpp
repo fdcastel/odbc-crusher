@@ -166,6 +166,17 @@ public:
     SQLULEN max_rows_ = 0;
     SQLULEN query_timeout_ = 0;
     SQLULEN row_array_size_ = 1;
+    // D11: the rest of the block-fetch attributes. row_array_size_ was stored
+    // and the others were not even that, so SQLFetch advanced one row and
+    // wrote element 0 whatever the array size said - and reported SQL_SUCCESS,
+    // with no fetched-rows count, so an application had no way to find out.
+    SQLULEN* rows_fetched_ptr_ = nullptr;      // SQL_ATTR_ROWS_FETCHED_PTR
+    SQLUSMALLINT* row_status_ptr_ = nullptr;   // SQL_ATTR_ROW_STATUS_PTR
+    SQLULEN row_bind_type_ = SQL_BIND_BY_COLUMN;  // SQL_ATTR_ROW_BIND_TYPE
+    SQLULEN* row_bind_offset_ptr_ = nullptr;   // SQL_ATTR_ROW_BIND_OFFSET_PTR
+    // Which element of each bound array the delivery loop is filling.
+    // Set by SQLFetch around each row of the set; 0 for a single-row fetch.
+    SQLULEN row_set_element_ = 0;
     SQLULEN paramset_size_ = 1;
     SQLULEN async_enable_ = SQL_ASYNC_ENABLE_OFF;
     SQLULEN noscan_ = SQL_NOSCAN_OFF;

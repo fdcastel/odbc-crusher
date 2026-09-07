@@ -66,6 +66,7 @@ set(MOCK_DRIVER_CORE_SOURCES
     src/mock/behaviors.cpp
     src/odbc/connection_api.cpp
     src/odbc/statement_api.cpp
+    src/odbc/param_binding.cpp
     src/odbc/catalog_api.cpp
     src/odbc/descriptor_api.cpp
     src/odbc/info_api.cpp
@@ -176,6 +177,7 @@ add_executable(mock-odbc-tests
     tests/test_catalog_shapes.cpp
     tests/test_unicode_wrappers.cpp
     tests/test_cursor_and_data.cpp
+    tests/test_block_fetch.cpp
     tests/test_literal_select.cpp
     tests/test_buffer_copy.cpp
     tests/test_c_types.cpp
