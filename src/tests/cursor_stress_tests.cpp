@@ -57,6 +57,8 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
                 select_one = attempt.query;
             }
 
+            std::string first_failure;   // B4
+
             for (int i = 0; i < iterations; ++i) {
                 auto iter_start = std::chrono::high_resolution_clock::now();
 
@@ -75,8 +77,19 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
                     SQLCloseCursor(stmt.get_handle());
 
                     ++successful;
-                } catch (...) {
-                    // Count failures but keep going
+                } catch (const core::OdbcError& e) {
+                    // B4: this used to be a bare `catch (...)` that swallowed
+                    // everything and recorded nothing, so a std::bad_alloc in
+                    // odbc-crusher was counted as a failed cycle and then
+                    // blamed on the driver by the `successful < 90%` FAIL
+                    // below. An OdbcError *is* the driver failing a cycle,
+                    // which is what this probe measures - keep going, but
+                    // keep the first one so the verdict can say why.
+                    if (first_failure.empty()) {
+                        first_failure = e.what();
+                        const auto diag = e.format_diagnostics();
+                        if (!diag.empty()) first_failure += " | " + diag;
+                    }
                 }
 
                 auto iter_end = std::chrono::high_resolution_clock::now();
@@ -106,6 +119,10 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
 
             r.actual = oss.str();
 
+            // B4: say which failure, not just how many.
+            if (!first_failure.empty()) {
+                oss << " | first failure: " << first_failure;
+            }
             if (successful < iterations * 9 / 10) {
                 r.status = TestStatus::FAIL;
                 r.severity = Severity::ERR;

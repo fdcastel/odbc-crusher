@@ -414,8 +414,10 @@ TestResult MetadataTests::test_special_columns() {
 }
 
 TestResult MetadataTests::test_foreign_keys() {
-    // NOTE: original catch downgraded any OdbcError to SKIP_UNSUPPORTED with
-    // a custom message. Preserved by adding inner try/catch in the lambda.
+    // B4: the inner catch used to downgrade *any* OdbcError to
+    // SKIP_UNSUPPORTED with a custom message - a failed SQLAllocHandle was
+    // reported as "Foreign keys not supported by driver". It now reads the
+    // exception's SQLSTATE and only HYC00 / IM001 earn the skip.
     return run_test(
         "test_foreign_keys", "SQLForeignKeys",
         "Retrieve foreign key relationships",
@@ -556,7 +558,7 @@ TestResult MetadataTests::test_foreign_keys() {
 }
 
 TestResult MetadataTests::test_table_privileges() {
-    // NOTE: original catch downgraded any OdbcError to SKIP_UNSUPPORTED.
+    // B4 - see test_foreign_keys. Same downgrade, same fix.
     return run_test(
         "test_table_privileges", "SQLTablePrivileges",
         "Query table access privileges",
@@ -665,12 +667,23 @@ TestResult MetadataTests::test_desc_unsigned_on_signed_integer() {
                 nullptr, 0, nullptr, &unsigned_attr);
 
             if (!SQL_SUCCEEDED(col_rc)) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "SQLColAttribute(SQL_DESC_UNSIGNED) returned " +
-                                std::to_string(col_rc);
-                r.suggestion = "Driver does not implement SQL_DESC_UNSIGNED — "
-                                    "callers can't rely on it; treat all numeric "
-                                    "columns as signed unless the driver says otherwise.";
+                // B4: "does not implement" was asserted from the call having
+                // failed. SQL_DESC_UNSIGNED is a descriptor field a driver may
+                // decline, so a skip can be right - but only when the driver
+                // says HYC00 or HY091, not for a broken statement handle.
+                const std::string state = first_sqlstate(
+                    SQL_HANDLE_STMT, stmt.get_handle(), "");
+                if (state == "HYC00" || state == "HY091" || state == "IM001") {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQLColAttribute(SQL_DESC_UNSIGNED) declined "
+                               "with " + state;
+                    r.suggestion = "Callers cannot rely on SQL_DESC_UNSIGNED "
+                                   "with this driver; treat numeric columns as "
+                                   "signed unless it says otherwise.";
+                } else {
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLColAttribute(SQL_DESC_UNSIGNED)");
+                }
                 return;
             }
 

@@ -104,9 +104,20 @@ TestResult StateMachineTests::test_invalid_operation() {
                     r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQLExecute correctly returned SQL_ERROR with HY010 (Function sequence error)";
                 } else {
-                    // A23 - see above.
-                    r.status = TestStatus::INFORMATIONAL;
-                    r.actual = "SQLExecute correctly returned SQL_ERROR, SQLSTATE=" + state;
+                    // B7: this branch and sqlstate_tests' test_execute_without
+                    // _prepare are the same probe, and they disagreed in the
+                    // same run - one called a non-HY010 error a pass, the
+                    // other a failure. The spec names HY010, so the failure is
+                    // the right verdict and this now matches its sibling.
+                    //
+                    // (A23 retagged the *correct*-answer branch above, where
+                    // the driver manager guarantees the pass. It over-applied
+                    // to this one, which is a real deviation and has to stay
+                    // gradeable. Caught by B7, which is what B7 is for.)
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::WARNING;
+                    r.actual = "SQL_ERROR but SQLSTATE=" + state +
+                               " (expected HY010)";
                     r.suggestion = "ODBC spec requires SQLSTATE HY010 for SQLExecute without SQLPrepare, got " + state;
                 }
             } else if (SQL_SUCCEEDED(rc)) {
@@ -115,9 +126,15 @@ TestResult StateMachineTests::test_invalid_operation() {
                 r.severity = Severity::ERR;
                 r.suggestion = "Driver must return SQL_ERROR/HY010 when SQLExecute is called without prior SQLPrepare";
             } else {
-                // A23 - see above.
-                r.status = TestStatus::INFORMATIONAL;
-                r.actual = "SQLExecute rejected without SQLPrepare (rc=" + std::to_string(rc) + ")";
+                // B7: neither SQL_ERROR nor success - SQL_INVALID_HANDLE or
+                // SQL_STILL_EXECUTING here is a deviation, not a pass.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLExecute without SQLPrepare returned rc=" +
+                           std::to_string(rc) +
+                           ", which is neither SQL_ERROR nor success";
+                r.suggestion = "The Appendix B transition table gives SQL_ERROR "
+                               "with HY010 for this call in state S1.";
             }
         });
 }

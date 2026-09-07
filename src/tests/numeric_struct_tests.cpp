@@ -455,7 +455,15 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                 { 18, 10, "123.4567890" },
             };
 
-            std::ostringstream summary;
+            // B6: per-variant outcomes. The loop used to `return` on the
+            // first problem, discarding every variant that had already
+            // byte-matched - so on Firebird 3, where DECIMAL precision is
+            // capped and one variant cannot be created, the two the driver
+            // got exactly right were never reported.
+            std::ostringstream summary;      // variants that byte-matched
+            std::string failures;            // variants that came back wrong
+            std::string unavailable;         // variants the engine declined
+            int ok_count = 0;
             int variant_idx = 0;
             for (const auto& shape : shapes) {
                 ++variant_idx;
@@ -466,11 +474,11 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
 
                 RoundTripTableGuard tbl(conn_, table_name, val_ddl.str());
                 if (!tbl.ok()) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = "Could not create round-trip table for variant "
-                             + std::to_string(variant_idx) + " (" + val_ddl.str()
-                             + "): " + tbl.last_error();
-                    return;
+                    // B6: an engine that cannot declare this precision has not
+                    // failed the probe - it has removed one variant from it.
+                    if (!unavailable.empty()) unavailable += "; ";
+                    unavailable += val_ddl.str() + " (" + tbl.last_error() + ")";
+                    continue;
                 }
 
                 // INSERT literal value.
@@ -482,7 +490,12 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                     r.status = TestStatus::SKIP_INCONCLUSIVE;
                     r.actual = "INSERT failed for variant " + std::to_string(variant_idx)
                              + " (" + val_ddl.str() + "): " + e.what();
-                    return;
+                    // B6: record and keep going; the verdict is assembled after the loop.
+                    if (!failures.empty()) failures += "; ";
+                    failures += r.actual;
+                    r.actual.clear();
+                    r.status = TestStatus::PASS;
+                    continue;
                 }
 
                 // SELECT back as SQL_C_NUMERIC.
@@ -493,7 +506,12 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                     r.status = TestStatus::FAIL;
                     r.actual = "SELECT/SQLFetch failed for variant "
                              + std::to_string(variant_idx);
-                    return;
+                    // B6: record and keep going; the verdict is assembled after the loop.
+                    if (!failures.empty()) failures += "; ";
+                    failures += r.actual;
+                    r.actual.clear();
+                    r.status = TestStatus::PASS;
+                    continue;
                 }
 
                 SQL_NUMERIC_STRUCT got;
@@ -506,7 +524,12 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                     // rejecting it is only "unsupported" if it says so.
                     report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
                                    "ARD descriptor configuration for SQL_C_NUMERIC");
-                    return;
+                    // B6: record and keep going; the verdict is assembled after the loop.
+                    if (!failures.empty()) failures += "; ";
+                    failures += r.actual;
+                    r.actual.clear();
+                    r.status = TestStatus::PASS;
+                    continue;
                 }
                 ret = SQLGetData(sel.get_handle(), 1, SQL_C_NUMERIC,
                                  &got, sizeof(got), &ind);
@@ -515,7 +538,12 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                     report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
                                    "SQLGetData(SQL_C_NUMERIC) for variant " +
                                        std::to_string(variant_idx));
-                    return;
+                    // B6: record and keep going; the verdict is assembled after the loop.
+                    if (!failures.empty()) failures += "; ";
+                    failures += r.actual;
+                    r.actual.clear();
+                    r.status = TestStatus::PASS;
+                    continue;
                 }
 
                 // Recompute the expected mantissa using the scale the driver
@@ -552,7 +580,12 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                             "digits loses data. A driver may do it, but must "
                             "return SQL_SUCCESS_WITH_INFO with SQLSTATE 01S07 "
                             "so the application knows.";
-                        return;
+                        // B6: record and keep going; the verdict is assembled after the loop.
+                        if (!failures.empty()) failures += "; ";
+                        failures += r.actual;
+                        r.actual.clear();
+                        r.status = TestStatus::PASS;
+                        continue;
                     }
                 }
                 const uint64_t expected_mantissa = expected.mantissa;
@@ -584,17 +617,49 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                     r.suggestion = "Verify SQL_NUMERIC_STRUCT.val is little-endian "
                                    "mantissa = round(value * 10^got.scale), and "
                                    "sign=1 positive / sign=0 negative.";
-                    return;
+                    // B6: record and keep going; the verdict is assembled after the loop.
+                    if (!failures.empty()) failures += "; ";
+                    failures += r.actual;
+                    r.actual.clear();
+                    r.status = TestStatus::PASS;
+                    continue;
                 }
 
-                if (variant_idx > 1) summary << "; ";
+                if (ok_count > 0) summary << "; ";
+                ++ok_count;
                 summary << "DECIMAL(" << static_cast<int>(shape.precision)
                         << "," << static_cast<int>(shape.scale)
                         << ") ok at scale=" << static_cast<int>(got.scale);
             }
 
-            r.actual = "All three (precision, scale) variants byte-match: "
-                     + summary.str();
+            // B6: one verdict from three outcomes. A variant that came back
+            // wrong is a failure however many others were right; a variant
+            // the engine cannot declare is not.
+            std::ostringstream final_actual;
+            final_actual << ok_count << "/" << (sizeof(shapes) / sizeof(shapes[0]))
+                         << " (precision, scale) variants byte-match";
+            if (ok_count > 0) final_actual << ": " << summary.str();
+            if (!unavailable.empty()) {
+                final_actual << " | not declarable on this engine: " << unavailable;
+            }
+            if (!failures.empty()) {
+                final_actual << " | wrong: " << failures;
+            }
+            r.actual = final_actual.str();
+
+            if (!failures.empty()) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.suggestion = "Verify SQL_NUMERIC_STRUCT.val is little-endian "
+                               "mantissa = round(value * 10^got.scale), and "
+                               "sign=1 positive / sign=0 negative.";
+            } else if (ok_count == 0) {
+                // Nothing ran, so nothing was learned.
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion = "No DECIMAL precision this probe tries could be "
+                               "declared. Firebird 3 caps precision at 18; "
+                               "check what this engine allows.";
+            }
         });
 }
 

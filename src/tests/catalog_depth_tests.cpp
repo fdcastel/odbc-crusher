@@ -107,7 +107,10 @@ TestResult CatalogDepthTests::test_statistics_result() {
     return run_test(
         "test_statistics_result", "SQLStatistics",
         "SQLStatistics returns valid index information",
-        Severity::INFO, ConformanceLevel::LEVEL_1,
+        // B7: was LEVEL_1. SQLStatistics is in the ODBC 3.x Core
+        // interface-conformance list, so tagging it optional reported a Core
+        // gap as an optional one in every report this tool has ever written.
+        Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLStatistics: Returns index and table statistics",
         [&](TestResult& r) {
             // A24: this used to be the literal "CUSTOMERS", which exists only
