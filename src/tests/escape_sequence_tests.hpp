@@ -86,6 +86,7 @@ private:
     // syntactically but only honour IN.
     TestResult test_call_escape_in_parameter();
     TestResult test_call_escape_out_parameter();
+    TestResult test_function_call_escape_return_value();
     TestResult test_call_escape_inout_parameter();
 
     // PORT plan §4.12 — close the loop on `SQLGetInfo(SQL_*_FUNCTIONS)`

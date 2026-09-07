@@ -40,6 +40,7 @@ std::vector<TestResult> EscapeSequenceTests::run() {
         test_call_escape_format_variants(),
         test_call_escape_in_parameter(),
         test_call_escape_out_parameter(),
+        test_function_call_escape_return_value(),
         test_call_escape_inout_parameter(),
 
         // PORT plan §4.12 — claim-vs-execute matrix
@@ -1066,9 +1067,9 @@ namespace {
 // may rename it to via env var) is visible via SQLProcedures. Returns the
 // procedure name on success, empty string when the catalog has no
 // matching entry.
-std::string find_mock_inout(core::OdbcConnection& conn) {
+std::string find_named_procedure(core::OdbcConnection& conn,
+                                 const char* name_filter) {
     core::OdbcStatement stmt(conn);
-    const char* name_filter = "MOCK_INOUT";
     SQLRETURN rc = SQLProcedures(stmt.get_handle(),
                                  nullptr, 0,
                                  nullptr, 0,
@@ -1086,6 +1087,10 @@ std::string find_mock_inout(core::OdbcConnection& conn) {
         }
     }
     return {};
+}
+
+std::string find_mock_inout(core::OdbcConnection& conn) {
+    return find_named_procedure(conn, "MOCK_INOUT");
 }
 
 struct CallProbeOutcome {
@@ -1253,6 +1258,164 @@ TestResult EscapeSequenceTests::test_call_escape_out_parameter() {
                 r.suggestion = "Driver wrote a value, but it doesn't match "
                                "the procedure contract m := n*2.";
             }
+        });
+}
+
+// ── A17 / I7 — the `{?=CALL fn(…)}` return-value form, executed ──────────
+//
+// `{?=CALL …}` appeared in this file only as *input to SQLNativeSql*: the
+// driver's translation was checked, its execution never was. The defect that
+// matters is the parameter numbering. In the function-call escape the leading
+// `?` is the return value and takes parameter 1, so the first argument is
+// parameter 2 — and a driver that binds the first argument as parameter 1
+// computes a wrong answer with no diagnostic at all.
+//
+// MOCK_FN(a, b) returns a*10 + b, chosen so an argument in the wrong slot is
+// visibly wrong rather than coincidentally right: with a=4, b=7 the answer is
+// 47, and the off-by-one reading (the return-value slot taken as `a`) gives
+// 0*10 + 4 = 4, which the probe names explicitly.
+TestResult EscapeSequenceTests::test_function_call_escape_return_value() {
+    return run_test(
+        "test_function_call_escape_return_value",
+        "SQLPrepare/SQLBindParameter/SQLExecute",
+        "{?=CALL fn(?, ?)} executes and writes the function's return value "
+        "to parameter 1, with the arguments numbered from 2",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 Procedure Call Escape — function return value",
+        [&](TestResult& r) {
+            const std::string fn = find_named_procedure(conn_, "MOCK_FN");
+            if (fn.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Test function MOCK_FN not visible via SQLProcedures";
+                r.suggestion =
+                    "Register a two-argument function named "
+                    "MOCK_FN(a INTEGER, b INTEGER) RETURNS INTEGER that "
+                    "returns a*10 + b, so this probe can check that your "
+                    "driver numbers a function's arguments from parameter 2.";
+                return;
+            }
+
+            // One call, parameterised by what the return-value buffer starts
+            // as. A sentinel start detects a driver that binds parameter 1 and
+            // never writes it; a zero start makes the off-by-one reading
+            // (arguments taken one slot early) come out as exactly 0*10 + a,
+            // which is a value the probe can name rather than guess at.
+            struct CallOutcome {
+                bool ok = false;
+                std::string error;
+                SQLINTEGER ret = 0;
+                SQLLEN ret_ind = 0;
+            };
+            auto run_call = [&](SQLINTEGER seed, SQLINTEGER a, SQLINTEGER b)
+                -> CallOutcome
+            {
+                CallOutcome oc;
+                core::OdbcStatement stmt(conn_);
+                const char* sql = "{?=CALL MOCK_FN(?, ?)}";
+                SQLRETURN rc = SQLPrepare(
+                    stmt.get_handle(),
+                    reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql)), SQL_NTS);
+                if (!SQL_SUCCEEDED(rc)) {
+                    oc.error = "SQLPrepare(\"" + std::string(sql)
+                             + "\") returned " + std::to_string(rc) + "; "
+                             + first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
+                    return oc;
+                }
+
+                oc.ret = seed;
+                oc.ret_ind = sizeof(SQLINTEGER);
+                SQLINTEGER arg_a = a, arg_b = b;
+                SQLLEN a_ind = 0, b_ind = 0;
+
+                struct Bind { SQLUSMALLINT n; SQLSMALLINT dir; SQLINTEGER* p; SQLLEN* ind; };
+                const Bind binds[] = {
+                    {1, SQL_PARAM_OUTPUT, &oc.ret, &oc.ret_ind},
+                    {2, SQL_PARAM_INPUT,  &arg_a,  &a_ind},
+                    {3, SQL_PARAM_INPUT,  &arg_b,  &b_ind},
+                };
+                for (const auto& bind : binds) {
+                    rc = SQLBindParameter(stmt.get_handle(), bind.n, bind.dir,
+                                          SQL_C_SLONG, SQL_INTEGER, 10, 0,
+                                          bind.p, sizeof(SQLINTEGER), bind.ind);
+                    if (!SQL_SUCCEEDED(rc)) {
+                        oc.error = "SQLBindParameter(" + std::to_string(bind.n)
+                                 + ") returned " + std::to_string(rc) + "; "
+                                 + first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
+                        return oc;
+                    }
+                }
+
+                rc = SQLExecute(stmt.get_handle());
+                if (!SQL_SUCCEEDED(rc)) {
+                    oc.error = "SQLExecute returned " + std::to_string(rc) + "; "
+                             + first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
+                    return oc;
+                }
+
+                // A16: a driver may defer writing the output buffers until
+                // every result set has been consumed.
+                int guard = 0;
+                while (SQLMoreResults(stmt.get_handle()) == SQL_SUCCESS) {
+                    if (++guard > 100) break;
+                }
+                oc.ok = true;
+                return oc;
+            };
+
+            const SQLINTEGER kSentinel = static_cast<SQLINTEGER>(0xDEADBEEFu);
+            const SQLINTEGER kA = 4, kB = 7;
+            const SQLINTEGER kExpected = 47;      // 4*10 + 7
+
+            const CallOutcome first = run_call(kSentinel, kA, kB);
+            if (!first.ok) {
+                r.status = TestStatus::FAIL;
+                r.actual = first.error;
+                r.suggestion =
+                    "The function-call escape is Core-level. A driver that "
+                    "translates {?=CALL ...} in SQLNativeSql but cannot "
+                    "prepare or execute it is translating text it will not run.";
+                return;
+            }
+
+            std::ostringstream oss;
+            oss << "return-value buffer post-execute: " << first.ret
+                << " (expected " << kExpected << " for a=" << kA
+                << ", b=" << kB << ", a*10+b contract); indicator="
+                << first.ret_ind;
+            r.actual = oss.str();
+
+            if (first.ret == kSentinel) {
+                r.status = TestStatus::FAIL;
+                r.suggestion =
+                    "Driver accepted the parameter-1 return-value binding but "
+                    "never wrote to it (the sentinel survived). In "
+                    "{?=CALL fn(...)} parameter 1 is the function's return "
+                    "value and must be written back.";
+                return;
+            }
+            if (first.ret == kExpected) return;   // PASS
+
+            r.status = TestStatus::FAIL;
+            // Confirm the classic cause before naming it: with the return
+            // buffer starting at 0, reading the arguments one slot early gives
+            // exactly 0*10 + a.
+            const CallOutcome confirm = run_call(0, kA, kB);
+            if (confirm.ok && confirm.ret == kA) {
+                oss << "; with the return buffer zeroed the answer was "
+                    << confirm.ret << ", which is 0*10+a";
+                r.actual = oss.str();
+                r.suggestion =
+                    "The answer is what you get by reading the arguments one "
+                    "parameter early: the driver bound the first argument as "
+                    "parameter 1 instead of 2. In {?=CALL fn(...)} parameter 1 "
+                    "is the return value and the arguments start at 2.";
+                return;
+            }
+            r.suggestion =
+                "Driver wrote a return value, but it does not match the "
+                "function contract a*10 + b. The usual cause is parameter "
+                "numbering: in {?=CALL fn(...)} parameter 1 is the return "
+                "value and the arguments start at 2.";
         });
 }
 
