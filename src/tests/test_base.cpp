@@ -228,6 +228,124 @@ TestResult TestBase::make_result(
     return result;
 }
 
+// A19 — read a character column in full, across as many SQLGetData calls as
+// the driver needs.
+bool TestBase::get_data_full(SQLHSTMT hstmt, SQLUSMALLINT col,
+                             std::string& out, bool& is_null,
+                             std::string& error) {
+    out.clear();
+    is_null = false;
+    error.clear();
+
+    // Deliberately small: a driver that gets the continuation protocol wrong
+    // is far more likely to be caught with a buffer that forces several
+    // round trips than with one that swallows every realistic value whole.
+    char buf[256];
+
+    // A19: a driver that returns 01004 but restarts the value from byte 0 on
+    // every call would keep this loop running forever. That is not
+    // hypothetical - the mock driver did exactly that until D37 - and this
+    // tool's stated contract is that it never wedges, whatever the driver
+    // does. Two independent guards: the driver's own "bytes still available"
+    // must strictly decrease, and an absolute round cap catches a driver that
+    // reports SQL_NO_TOTAL and so gives nothing to compare.
+    SQLLEN prev_available = -1;
+    size_t rounds = 0;
+    const size_t kMaxRounds = 4096;   // ~1 MB at 255 bytes a round
+
+    for (;;) {
+        SQLLEN ind = 0;
+        buf[0] = 0;
+        SQLRETURN rc = SQLGetData(hstmt, col, SQL_C_CHAR, buf, sizeof(buf),
+                                  &ind);
+        if (rc == SQL_NO_DATA) {
+            // No more data for this column — everything is already in `out`.
+            return true;
+        }
+        if (!SQL_SUCCEEDED(rc)) {
+            error = "SQLGetData rc=" + std::to_string(rc);
+            return false;
+        }
+        if (ind == SQL_NULL_DATA) {
+            is_null = true;
+            out.clear();
+            return true;
+        }
+
+        // `ind` is the bytes *still available*, not the bytes written, so it
+        // overshoots on truncation and can be SQL_NO_TOTAL. bounded_string
+        // already knows how to turn that pair into a safe length — A3.
+        BoundedString piece = bounded_string(buf, sizeof(buf), ind);
+        out += piece.value;
+
+        // Continue only on the truncation shape: SQL_SUCCESS_WITH_INFO with
+        // a reported length that overshoots the buffer, or SQL_NO_TOTAL.
+        // Testing the length rather than reading the diagnostics means an
+        // unrelated warning (a cursor message, say) cannot spin this loop.
+        const bool more = rc == SQL_SUCCESS_WITH_INFO &&
+                          (piece.truncated || piece.length_unknown);
+        if (!more) return true;
+
+        if (piece.value.empty()) {
+            // A driver that keeps signalling truncation without producing
+            // bytes would loop forever. Say so rather than hang the run —
+            // "never crash" includes never wedging.
+            error = "driver signalled truncation but returned no further data";
+            return false;
+        }
+        if (ind != SQL_NO_TOTAL) {
+            if (prev_available >= 0 && ind >= prev_available) {
+                error = "driver did not advance between SQLGetData calls "
+                        "(still reports " + std::to_string(ind) +
+                        " bytes available after " + std::to_string(out.size()) +
+                        " were read) — it is restarting the value rather than "
+                        "continuing it";
+                return false;
+            }
+            prev_available = ind;
+        }
+        if (++rounds > kMaxRounds) {
+            error = "gave up after " + std::to_string(kMaxRounds) +
+                    " SQLGetData continuations without reaching the end of "
+                    "the value";
+            return false;
+        }
+    }
+}
+
+// A19
+bool TestBase::is_bare_identifier(const std::string& ident) {
+    if (ident.empty()) return false;
+    auto is_alpha = [](unsigned char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    };
+    unsigned char first = static_cast<unsigned char>(ident[0]);
+    if (!is_alpha(first) && first != '_') return false;
+    for (unsigned char c : ident) {
+        if (!is_alpha(c) && !(c >= '0' && c <= '9') && c != '_') return false;
+    }
+    return true;
+}
+
+// A19 — quote an identifier, but only one that needs it. See the header for
+// why quoting every name is the wrong fix.
+std::string TestBase::quote_identifier(const std::string& ident) {
+    if (is_bare_identifier(ident)) return ident;
+
+    char quote[8] = {0};
+    SQLSMALLINT len = 0;
+    SQLRETURN rc = SQLGetInfo(conn_.get_handle(), SQL_IDENTIFIER_QUOTE_CHAR,
+                              quote, sizeof(quote), &len);
+    if (!SQL_SUCCEEDED(rc)) return ident;
+
+    BoundedString q = bounded_string(quote, sizeof(quote), len);
+    // The spec spells "this driver does not support quoting" as a single
+    // blank, so an empty or blank answer means: leave the name alone.
+    if (q.value.empty() || q.value == " ") return ident;
+    if (ident.find(q.value) != std::string::npos) return ident;
+    return q.value + ident + q.value;
+}
+
 RowVerification TestBase::verify_rows_persisted(
     const std::string& table,
     const std::string& pk_col,
@@ -236,10 +354,20 @@ RowVerification TestBase::verify_rows_persisted(
 {
     RowVerification v;
 
+    // A19: the three identifiers were interpolated bare, with nothing
+    // checking they *could* be. They still are when they are bare-safe —
+    // quoting a name whose CREATE TABLE was unquoted breaks PostgreSQL, which
+    // folds unquoted names down and not up; see quote_identifier's header
+    // comment. A name that is not bare-safe gets quoted, because such a name
+    // can only exist if it was created quoted.
+    const std::string q_table = quote_identifier(table);
+    const std::string q_pk = quote_identifier(pk_col);
+    const std::string q_value = quote_identifier(value_col);
+
     // Step 1: COUNT(*)
     try {
         core::OdbcStatement count_stmt(conn_);
-        count_stmt.execute("SELECT COUNT(*) FROM " + table);
+        count_stmt.execute("SELECT COUNT(*) FROM " + q_table);
         SQLRETURN rc = SQLFetch(count_stmt.get_handle());
         if (!SQL_SUCCEEDED(rc)) {
             v.diagnostic = "SELECT COUNT(*) produced no row (fetch rc=" +
@@ -263,8 +391,8 @@ RowVerification TestBase::verify_rows_persisted(
     // Step 2: ORDER BY pk, collect value column
     try {
         core::OdbcStatement fetch_stmt(conn_);
-        fetch_stmt.execute("SELECT " + value_col + " FROM " + table +
-                           " ORDER BY " + pk_col);
+        fetch_stmt.execute("SELECT " + q_value + " FROM " + q_table +
+                           " ORDER BY " + q_pk);
         while (true) {
             SQLRETURN rc = SQLFetch(fetch_stmt.get_handle());
             if (rc == SQL_NO_DATA) break;
@@ -272,18 +400,27 @@ RowVerification TestBase::verify_rows_persisted(
                 v.diagnostic = "SELECT value SQLFetch rc=" + std::to_string(rc);
                 return v;
             }
-            char buf[256] = {0};
-            SQLLEN ind = 0;
-            rc = SQLGetData(fetch_stmt.get_handle(), 1, SQL_C_CHAR, buf,
-                            sizeof(buf), &ind);
-            if (!SQL_SUCCEEDED(rc)) {
-                v.diagnostic = "SELECT value SQLGetData rc=" + std::to_string(rc);
+            // A19: this read into a bare `char buf[256]` and kept whatever
+            // fitted. `SQL_SUCCEEDED` accepts the 01004 that comes with
+            // truncation, so a value of 256 characters or more came back
+            // short and was then compared against what the probe inserted —
+            // reporting a correct driver as having corrupted the data, at
+            // CRITICAL. get_data_full keeps calling until the value is whole.
+            std::string value;
+            bool is_null = false;
+            std::string err;
+            if (!get_data_full(fetch_stmt.get_handle(), 1, value, is_null,
+                               err)) {
+                v.diagnostic = "SELECT value: " + err;
                 return v;
             }
-            if (ind == SQL_NULL_DATA) {
-                v.actual_values.emplace_back();
+            if (is_null) {
+                // A19: NULL used to arrive here as an empty std::string,
+                // indistinguishable from '' — in the one helper the header
+                // advertises for NULL-versus-empty work.
+                v.actual_values.emplace_back(std::nullopt);
             } else {
-                v.actual_values.emplace_back(buf);
+                v.actual_values.emplace_back(std::move(value));
             }
         }
     } catch (const core::OdbcError& e) {

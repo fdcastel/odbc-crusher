@@ -485,13 +485,22 @@ TestResult ParameterBindingTests::run_int_to_string_roundtrip(
         std::string mismatches;
         for (int i = 0; i < kRowCount; ++i) {
             std::string expected = std::to_string(i + 1);
-            std::string actual = right_trim_for_compare
-                ? rtrim_spaces(v.actual_values[i])
-                : v.actual_values[i];
+            // A19: a NULL is now distinguishable from '' and is a mismatch in
+            // its own right — the probe inserted a value, so a column that
+            // reads back NULL is the silent-drop shape this probe hunts.
+            if (!v.actual_values[i]) {
+                if (!mismatches.empty()) mismatches += ", ";
+                mismatches += "row " + std::to_string(i + 1) + ": expected '" +
+                              expected + "' got NULL";
+                continue;
+            }
+            const std::string& raw = *v.actual_values[i];
+            std::string actual = right_trim_for_compare ? rtrim_spaces(raw)
+                                                        : raw;
             if (actual != expected) {
                 if (!mismatches.empty()) mismatches += ", ";
                 mismatches += "row " + std::to_string(i + 1) + ": expected '" +
-                              expected + "' got '" + v.actual_values[i] + "'";
+                              expected + "' got '" + raw + "'";
             }
         }
         if (mismatches.empty()) {
@@ -658,10 +667,20 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
         std::string mismatches;
         const double kEpsilon = 1e-3;
         for (int i = 0; i < kRowCount; ++i) {
-            const std::string& s = v.actual_values[i];
+            double expected = static_cast<double>(i + 1) + value_offset;
+            // A19: NULL is no longer read as the empty string, which strtod
+            // parsed as a failure anyway — but now it is *reported* as NULL
+            // rather than as "got ''".
+            if (!v.actual_values[i]) {
+                if (!mismatches.empty()) mismatches += ", ";
+                mismatches += "row " + std::to_string(i + 1) +
+                              ": got NULL, expected ~" +
+                              std::to_string(expected);
+                continue;
+            }
+            const std::string& s = *v.actual_values[i];
             char* end = nullptr;
             double parsed = std::strtod(s.c_str(), &end);
-            double expected = static_cast<double>(i + 1) + value_offset;
             bool parsed_ok = (end != s.c_str());
             if (!parsed_ok || std::fabs(parsed - expected) > kEpsilon) {
                 if (!mismatches.empty()) mismatches += ", ";

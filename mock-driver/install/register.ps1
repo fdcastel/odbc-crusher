@@ -30,6 +30,16 @@ if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
     exit 1
 }
 
+# D39: an explicitly supplied -DriverPath used to be written to the registry
+# exactly as given, so `register.ps1 -DriverPath mock-driver/build/Debug/
+# mockodbc.dll` - the form this repo's own docs use - registered a *relative*
+# path. The Driver Manager then resolved it against each process's working
+# directory: odbc-crusher run from the repo root loaded the driver, while the
+# CTest suites, which run from build/tests, silently skipped every
+# mock-backed test. The auto-detect branches above already resolved; this
+# makes the explicit branch agree.
+$DriverPath = (Resolve-Path $DriverPath).Path
+
 Write-Host "Registering Mock ODBC Driver..."
 Write-Host "Driver path: $DriverPath"
 

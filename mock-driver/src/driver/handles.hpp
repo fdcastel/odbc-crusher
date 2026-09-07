@@ -112,6 +112,20 @@ public:
     SQLSMALLINT num_result_cols_ = 0;
     SQLLEN row_count_ = 0;
     SQLLEN current_row_ = -1;
+
+    // SQLGetData continuation state - D37.
+    //
+    // A character column longer than the caller's buffer is retrieved with
+    // repeated SQLGetData calls, each continuing where the last stopped. The
+    // mock used to restart from byte 0 every time, so a caller looping on
+    // 01004 (which is what the ODBC spec tells it to do) never terminated.
+    // The offset is keyed on (column, row) and checked inside SQLGetData, so
+    // that every path that moves the cursor - SQLFetch, SQLFetchScroll,
+    // re-execute, SQLFreeStmt(SQL_CLOSE), the catalog functions - restarts the
+    // value without having to remember to reset anything.
+    SQLUSMALLINT getdata_col_ = 0;
+    SQLLEN getdata_row_ = -1;
+    size_t getdata_offset_ = 0;
     
     // Attributes
     SQLULEN cursor_type_ = SQL_CURSOR_FORWARD_ONLY;

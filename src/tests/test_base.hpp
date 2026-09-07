@@ -57,8 +57,22 @@ struct TestResult {
 struct RowVerification {
     bool ok = false;
     long actual_count = -1;                  // SELECT COUNT(*), -1 on error
-    std::vector<std::string> actual_values;  // Per-row value column, PK-ordered
+
+    // Per-row value column, PK-ordered. `nullopt` means the column was SQL
+    // NULL — A19. It used to be a `vector<std::string>`, in which a NULL and
+    // an empty string were the same value; the header advertised this helper
+    // for NULL-versus-empty work, which it could not do.
+    std::vector<std::optional<std::string>> actual_values;
+
     std::string diagnostic;                  // Empty when ok
+
+    // The i-th value rendered for a message. A19: probes print these into
+    // `actual`, and "" for a NULL reads as a driver that stored an empty
+    // string. Renders NULL as the unquotable token <NULL> instead.
+    std::string display(size_t i) const {
+        if (i >= actual_values.size()) return "<missing>";
+        return actual_values[i] ? *actual_values[i] : std::string("<NULL>");
+    }
 };
 
 // Run DDL with autocommit ON, restoring the previous setting on scope exit
@@ -265,6 +279,58 @@ public:
     // the terminator, matching what a driver is allowed to write.
     static BoundedString bounded_string(const char* buf, size_t capacity,
                                         SQLLEN reported);
+
+    // Read one character column in full, however long it is — A19.
+    //
+    // A single `SQLGetData` into a fixed buffer returns SQL_SUCCESS_WITH_INFO
+    // with SQLSTATE 01004 when the value does not fit, and `SQL_SUCCEEDED`
+    // accepts that: a value longer than the buffer was silently cut short and
+    // then compared against what the probe inserted, so a *correct* driver was
+    // reported as having corrupted the data. Calling `SQLGetData` again on the
+    // same column continues where the last call stopped, which is what this
+    // does until the driver stops warning.
+    //
+    // Returns false only on a real error (rc not succeeded); `is_null` is set
+    // for SQL_NULL_DATA, in which case `out` is left empty.
+    static bool get_data_full(SQLHSTMT hstmt, SQLUSMALLINT col,
+                              std::string& out, bool& is_null,
+                              std::string& error);
+
+    // Render a table or column name for interpolation into SQL — A19.
+    //
+    // **Quotes only names that cannot be written bare.** A19 asked for every
+    // identifier to be quoted with `SQL_IDENTIFIER_QUOTE_CHAR`; that is wrong
+    // here, and quoting all three names in `verify_rows_persisted` broke 13
+    // probes against the mock before the reasoning was worked through:
+    //
+    //   * Every table this tool creates is created *unquoted*
+    //     (`CREATE TABLE ODBC_TEST_PARAM (...)`), and an unquoted name is
+    //     folded by the engine — up-cased by Firebird and Oracle,
+    //     **down**-cased by PostgreSQL. Quoting only the SELECT side asks for
+    //     `"ODBC_TEST_PARAM"` where PostgreSQL stored `odbc_test_param`, so
+    //     the quoting introduces a failure on an engine that had none.
+    //     Quoting is only safe when both ends agree, and the DDL side is
+    //     spread across `RoundTripTableGuard` and three `create_test_table`
+    //     implementations.
+    //   * The real hazard A19 names — a name needing quotes interpolated
+    //     without them — cannot arise for a bare-safe name, and a name that
+    //     is *not* bare-safe cannot have been created unquoted in the first
+    //     place. So the safe rule is: leave bare-safe names alone, quote the
+    //     rest.
+    //
+    // A driver that reports the quote character as a single space means "no
+    // quoting supported", so the name is returned unchanged rather than
+    // wrapped in spaces. A name already containing the quote character is
+    // returned unchanged too: there is no such name in this codebase, and
+    // inventing a per-engine escaping rule would be worse than leaving it.
+    std::string quote_identifier(const std::string& ident);
+
+    // True when `ident` can be interpolated into SQL without quoting: an
+    // ASCII letter or underscore followed by letters, digits or underscores.
+    // Deliberately stricter than any engine's rule — it decides whether to
+    // leave a name alone, so erring towards "needs quoting" is the safe way
+    // to be wrong. A19.
+    static bool is_bare_identifier(const std::string& ident);
 
 
 protected:

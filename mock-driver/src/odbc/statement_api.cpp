@@ -957,6 +957,15 @@ SQLRETURN SQL_API SQLGetData(
         return SQL_ERROR;
     }
     
+    // D37: a continuation belongs to one (column, row). Asking for a
+    // different column, or fetching, restarts the value - which is what the
+    // spec says and what a caller looping on 01004 depends on.
+    if (stmt->getdata_col_ != icol || stmt->getdata_row_ != stmt->current_row_) {
+        stmt->getdata_col_ = icol;
+        stmt->getdata_row_ = stmt->current_row_;
+        stmt->getdata_offset_ = 0;
+    }
+
     const auto& cell = stmt->result_data_[stmt->current_row_][icol - 1];
 
     // Handle NULL
@@ -1281,26 +1290,52 @@ SQLRETURN SQL_API SQLGetData(
                 }
             }
         } else {
-            // SQL_C_CHAR or default — return ANSI
+            // SQL_C_CHAR or default — return ANSI.
+            //
+            // D37: this used to copy from the start of the value on every
+            // call and report the whole length as "still available", so a
+            // caller doing what the spec prescribes — call again while the
+            // driver keeps saying 01004 — got the same first bytes forever.
+            // Serve from the running offset instead.
+            const size_t offset = std::min(stmt->getdata_offset_,
+                                           value.length());
+            const size_t remaining = value.length() - offset;
+
+            if (offset > 0 && remaining == 0) {
+                // The previous call returned the last of the value, and the
+                // spec is explicit that a further call yields SQL_NO_DATA.
+                stmt->getdata_col_ = 0;
+                stmt->getdata_row_ = -1;
+                stmt->getdata_offset_ = 0;
+                return SQL_NO_DATA;
+            }
+
             if (rgbValue && cbValueMax > 0) {
-                size_t copy_len = std::min(value.length(), static_cast<size_t>(cbValueMax - 1));
-                std::memcpy(rgbValue, value.c_str(), copy_len);
+                size_t copy_len = std::min(remaining,
+                                           static_cast<size_t>(cbValueMax - 1));
+                std::memcpy(rgbValue, value.c_str() + offset, copy_len);
                 static_cast<char*>(rgbValue)[copy_len] = '\0';
+                stmt->getdata_offset_ = offset + copy_len;
             }
-            if (pcbValue) *pcbValue = static_cast<SQLLEN>(value.length());
-            
+            // Bytes still available *as of this call*, excluding the
+            // terminator — not the length of the whole column.
+            if (pcbValue) *pcbValue = static_cast<SQLLEN>(remaining);
+
             if (cbValueMax == 0) {
-                // Zero buffer: report needed length, indicate truncation
+                // Zero buffer: report the needed length and warn. Nothing was
+                // consumed, so the offset does not move.
                 stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
                                     "String data, right truncated");
                 return SQL_SUCCESS_WITH_INFO;
             }
-            
-            if (static_cast<SQLLEN>(value.length()) >= cbValueMax) {
+
+            if (static_cast<SQLLEN>(remaining) >= cbValueMax) {
                 stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
                                     "String data, right truncated");
                 return SQL_SUCCESS_WITH_INFO;
             }
+            // The value is complete. A further call for this column takes the
+            // `remaining == 0` branch above and reports SQL_NO_DATA.
         }
     }
     
