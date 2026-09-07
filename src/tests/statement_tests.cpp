@@ -3,8 +3,28 @@
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
+#include <string>
 
 namespace odbc_crusher::tests {
+
+namespace {
+
+// First SQLSTATE on a statement handle, or `fallback` when the driver posted
+// nothing. A7 needs it to tell an optional-feature refusal (07009/HY109) from
+// a real failure.
+//
+// Local to this file for now: C5 extracts the six copies of this shape across
+// the tree into one helper, and B3 builds classify_failure() on top of it.
+std::string first_sqlstate_or(SQLHSTMT handle, const std::string& fallback) {
+    try {
+        auto err = core::OdbcError::from_handle(SQL_HANDLE_STMT, handle, "");
+        if (!err.diagnostics().empty()) return err.diagnostics()[0].sqlstate;
+    } catch (...) {
+    }
+    return fallback;
+}
+
+}  // namespace
 
 std::vector<TestResult> StatementTests::run() {
     return {
@@ -384,13 +404,23 @@ TestResult StatementTests::test_bind_col_integer() {
                                              &value, sizeof(value), &indicator);
 
                     if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
-                        if (value == 42 || indicator != SQL_NULL_DATA) {
+                        // A6: this was `||`. The right operand is true for
+                        // every non-NULL fetch, so the probe passed on any
+                        // value at all and its FAIL branch was unreachable.
+                        if (value == 42 && indicator != SQL_NULL_DATA) {
                             r.status = TestStatus::PASS;
                             r.actual = "Bound integer column, fetched value=" + std::to_string(value);
                             success = true;
+                        } else if (indicator == SQL_NULL_DATA) {
+                            r.status = TestStatus::FAIL;
+                            r.actual = "Bound column reported SQL_NULL_DATA for a "
+                                       "non-NULL literal";
+                            r.severity = Severity::ERR;
                         } else {
                             r.status = TestStatus::FAIL;
-                            r.actual = "Fetched unexpected value=" + std::to_string(value);
+                            r.actual = "Fetched unexpected value=" + std::to_string(value) +
+                                       " (expected 42)";
+                            r.severity = Severity::ERR;
                         }
                         break;
                     }
@@ -462,10 +492,24 @@ TestResult StatementTests::test_fetch_bound_vs_getdata() {
                 try {
                     stmt.execute(query);
 
-                    // Bind column 1
+                    // A7: the SQLBindCol return code used to be discarded.
+                    // SQLBindCol is Core, so a failure here is the driver's,
+                    // and continuing would have compared an unwritten buffer.
                     SQLINTEGER bound_value = 0;
                     SQLLEN indicator = 0;
-                    SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG, &bound_value, sizeof(bound_value), &indicator);
+                    SQLRETURN bind_rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG,
+                                                   &bound_value, sizeof(bound_value),
+                                                   &indicator);
+                    if (!SQL_SUCCEEDED(bind_rc)) {
+                        r.status = TestStatus::FAIL;
+                        r.actual = "SQLBindCol failed (" +
+                                   first_sqlstate_or(stmt.get_handle(), "no SQLSTATE") + ")";
+                        r.severity = Severity::ERR;
+                        r.suggestion = "SQLBindCol is a Core function; binding "
+                                       "SQL_C_SLONG to an integer column must succeed.";
+                        success = true;
+                        break;
+                    }
 
                     if (stmt.fetch()) {
                         // Also get via SQLGetData
@@ -474,14 +518,55 @@ TestResult StatementTests::test_fetch_bound_vs_getdata() {
                         SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
                                                 &getdata_value, sizeof(getdata_value), &getdata_ind);
 
+                        // A7: this probe is named for comparing the two values
+                        // and never compared them — both branches set PASS.
                         if (SQL_SUCCEEDED(rc)) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "Bound=" + std::to_string(bound_value) +
-                                           ", GetData=" + std::to_string(getdata_value);
+                            if (bound_value == getdata_value &&
+                                indicator == getdata_ind) {
+                                r.status = TestStatus::PASS;
+                                r.actual = "Bound=" + std::to_string(bound_value) +
+                                           ", GetData=" + std::to_string(getdata_value) +
+                                           " (match)";
+                            } else {
+                                r.status = TestStatus::FAIL;
+                                r.actual = "Bound=" + std::to_string(bound_value) +
+                                           " (ind=" + std::to_string(indicator) + ")" +
+                                           " but GetData=" + std::to_string(getdata_value) +
+                                           " (ind=" + std::to_string(getdata_ind) + ")";
+                                r.severity = Severity::CRITICAL;
+                                r.suggestion =
+                                    "The same column read two ways in the same row "
+                                    "must yield the same value. A mismatch means one "
+                                    "of the two delivery paths is corrupting data.";
+                            }
                         } else {
-                            r.status = TestStatus::PASS;
-                            r.actual = "Bound column fetched value=" + std::to_string(bound_value) +
-                                           " (SQLGetData on bound column may not be supported)";
+                            // SQLGetData on a *bound* column is optional: a
+                            // driver may decline it unless SQL_GETDATA_EXTENSIONS
+                            // advertises SQL_GD_BOUND. Only that specific
+                            // combination is a SKIP; anything else is a failure.
+                            const std::string state =
+                                first_sqlstate_or(stmt.get_handle(), "");
+                            SQLUINTEGER gd_ext = 0;
+                            SQLGetInfo(conn_.get_handle(), SQL_GETDATA_EXTENSIONS,
+                                       &gd_ext, sizeof(gd_ext), nullptr);
+                            const bool advertises_gd_bound =
+                                (gd_ext & SQL_GD_BOUND) != 0;
+                            if ((state == "07009" || state == "HY109") &&
+                                !advertises_gd_bound) {
+                                r.status = TestStatus::SKIP_UNSUPPORTED;
+                                r.actual = "SQLGetData on a bound column returned " +
+                                           state + "; SQL_GETDATA_EXTENSIONS does not "
+                                           "advertise SQL_GD_BOUND";
+                            } else {
+                                r.status = TestStatus::FAIL;
+                                r.actual = "SQLGetData on a bound column failed (" +
+                                           (state.empty() ? "no SQLSTATE" : state) + ")";
+                                r.severity = Severity::ERR;
+                                r.suggestion =
+                                    "A driver that advertises SQL_GD_BOUND must allow "
+                                    "SQLGetData on a bound column; otherwise it must "
+                                    "report 07009 or HY109.";
+                            }
                         }
                         success = true;
                         break;

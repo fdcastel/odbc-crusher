@@ -77,9 +77,33 @@ def check_file(path):
     n_catch = src.count('MOCK_ENTRY_CATCH(')
     if n_try != n_catch:
         problems.append('%d MOCK_ENTRY_TRY vs %d MOCK_ENTRY_CATCH' % (n_try, n_catch))
-    if checked and 'entry_guard.hpp' not in src:
-        problems.append('uses the barrier macros without including driver/entry_guard.hpp')
+    if checked:
+        problems.extend(check_include(src))
     return checked, problems
+
+
+def check_include(src):
+    """The barrier header must be included unconditionally.
+
+    The first mechanical pass put `#include "driver/entry_guard.hpp"` after the
+    *last* existing #include in each file, which in driver_main.cpp is
+    `<windows.h>` inside an `#ifdef _WIN32`. Windows built fine and Linux and
+    macOS did not, so a Windows-only local build could not see it. Cheap to
+    check here; expensive to discover from a CI log.
+    """
+    depth = 0
+    for line in src.split(chr(10)):
+        stripped = line.strip()
+        if stripped.startswith('#if'):
+            depth += 1
+        elif stripped.startswith('#endif'):
+            depth = max(0, depth - 1)
+        elif 'entry_guard.hpp' in stripped and stripped.startswith('#include'):
+            if depth != 0:
+                return ['includes driver/entry_guard.hpp inside a #if block; '
+                        'it must be unconditional or non-Windows builds break']
+            return []
+    return ['uses the barrier macros without including driver/entry_guard.hpp']
 
 
 def main():

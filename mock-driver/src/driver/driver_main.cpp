@@ -1,6 +1,7 @@
 // Mock ODBC Driver - Main Entry Point and Handle Management API
 // This file contains the DLL entry point and SQLAllocHandle/SQLFreeHandle implementations
 
+#include "driver/entry_guard.hpp"
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/mock_catalog.hpp"
@@ -11,7 +12,6 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#include "driver/entry_guard.hpp"
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     (void)lpvReserved;

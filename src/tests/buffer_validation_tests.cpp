@@ -57,22 +57,42 @@ TestResult BufferValidationTests::test_null_termination() {
                     } catch(...) {}
                     r.severity = Severity::ERR;
                 } else {
-                    // Verify the string is null-terminated
-                    size_t actual_length = std::strlen(buffer);
+                    // A5. This used to call std::strlen() on a buffer memset
+                    // to 'X' with no NUL - undefined behaviour in exactly the
+                    // case the probe exists to detect, reading off the end of
+                    // the stack when the driver fails to terminate. And the
+                    // follow-up check, buffer[strlen(buffer)] != NUL, is a
+                    // tautology, so the FAIL branch was unreachable: the probe
+                    // could not detect the thing it is named for.
+                    //
+                    // memchr is bounded, so a missing terminator comes back as
+                    // nullptr rather than as a fault.
+                    const void* nul = std::memchr(buffer, '\0', sizeof(buffer));
 
-                    if (buffer[actual_length] != '\0') {
+                    if (nul == nullptr) {
                         r.status = TestStatus::FAIL;
-                        r.actual = "String not null-terminated";
+                        r.actual = "No NUL within " + std::to_string(sizeof(buffer)) +
+                                   " bytes; driver reported length " +
+                                   std::to_string(buffer_length);
                         r.suggestion = "Driver must null-terminate string outputs";
                         r.severity = Severity::ERR;
-                    } else if (buffer_length != static_cast<SQLSMALLINT>(actual_length)) {
-                        r.status = TestStatus::FAIL;
-                        r.actual = std::to_string(buffer_length) + " bytes (expected " + std::to_string(actual_length) + ")";
-                        r.suggestion = "Buffer length indicator should match string length";
-                        r.severity = Severity::WARNING;
                     } else {
-                        r.status = TestStatus::PASS;
-                        r.actual = "Null-terminated with correct length (" + std::to_string(actual_length) + " bytes)";
+                        const size_t actual_length = static_cast<size_t>(
+                            static_cast<const char*>(nul) - buffer);
+
+                        if (buffer_length != static_cast<SQLSMALLINT>(actual_length)) {
+                            r.status = TestStatus::FAIL;
+                            r.actual = std::to_string(buffer_length) +
+                                       " bytes (expected " +
+                                       std::to_string(actual_length) + ")";
+                            r.suggestion =
+                                "Buffer length indicator should match string length";
+                            r.severity = Severity::WARNING;
+                        } else {
+                            r.status = TestStatus::PASS;
+                            r.actual = "Null-terminated with correct length (" +
+                                       std::to_string(actual_length) + " bytes)";
+                        }
                     }
                 }
             } catch (const std::exception& e) {
