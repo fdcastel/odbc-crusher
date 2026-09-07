@@ -810,6 +810,9 @@ TestResult ParameterBindingTests::test_sqldescribeparam_varchar() {
     SQLSMALLINT scale = 0;
     SQLSMALLINT nullable = 0;
     SQLRETURN describe_rc = SQL_ERROR;
+    // B3: the statement dies with the try block, so the SQLSTATE has to
+    // be read while its handle is still alive.
+    FailureClassification describe_failure;
 
     try {
         core::OdbcStatement stmt(conn_);
@@ -828,6 +831,10 @@ TestResult ParameterBindingTests::test_sqldescribeparam_varchar() {
         // Probe parameter 2 (the VARCHAR column).
         describe_rc = SQLDescribeParam(stmt.get_handle(), 2,
                                        &param_type, &col_size, &scale, &nullable);
+        if (!SQL_SUCCEEDED(describe_rc)) {
+            describe_failure =
+                classify_failure(SQL_HANDLE_STMT, stmt.get_handle());
+        }
     } catch (const core::OdbcError& e) {
         result.status = TestStatus::ERR;
         result.actual = e.what();
@@ -838,8 +845,17 @@ TestResult ParameterBindingTests::test_sqldescribeparam_varchar() {
     }
 
     if (!SQL_SUCCEEDED(describe_rc)) {
-        result.status = TestStatus::SKIP_UNSUPPORTED;
-        result.actual = "SQLDescribeParam returned " + std::to_string(describe_rc);
+        // B3: optional, so SKIP is usually right - but only when the
+        // driver says so, which is what the SQLSTATE decides.
+        result.status = describe_failure.status;
+        result.actual = "SQLDescribeParam reported " +
+            (describe_failure.sqlstate.empty() ? std::string("no SQLSTATE")
+                                               : describe_failure.sqlstate);
+        result.diagnostic = describe_failure.message;
+        if (result.status == TestStatus::FAIL &&
+            result.severity > Severity::ERR) {
+            result.severity = Severity::ERR;
+        }
         result.suggestion =
             "Driver does not implement SQLDescribeParam (Firebird ≤3.5.0 "
             "returns SQL_ERROR here). Scanner-style consumers must fall back "
@@ -895,6 +911,9 @@ TestResult ParameterBindingTests::test_sqldescribeparam_integer() {
     SQLSMALLINT scale = 0;
     SQLSMALLINT nullable = 0;
     SQLRETURN describe_rc = SQL_ERROR;
+    // B3: the statement dies with the try block, so the SQLSTATE has to
+    // be read while its handle is still alive.
+    FailureClassification describe_failure;
 
     try {
         core::OdbcStatement stmt(conn_);
@@ -913,6 +932,10 @@ TestResult ParameterBindingTests::test_sqldescribeparam_integer() {
         // Probe parameter 1 (the INTEGER column).
         describe_rc = SQLDescribeParam(stmt.get_handle(), 1,
                                        &param_type, &col_size, &scale, &nullable);
+        if (!SQL_SUCCEEDED(describe_rc)) {
+            describe_failure =
+                classify_failure(SQL_HANDLE_STMT, stmt.get_handle());
+        }
     } catch (const core::OdbcError& e) {
         result.status = TestStatus::ERR;
         result.actual = e.what();
@@ -923,8 +946,17 @@ TestResult ParameterBindingTests::test_sqldescribeparam_integer() {
     }
 
     if (!SQL_SUCCEEDED(describe_rc)) {
-        result.status = TestStatus::SKIP_UNSUPPORTED;
-        result.actual = "SQLDescribeParam returned " + std::to_string(describe_rc);
+        // B3: optional, so SKIP is usually right - but only when the
+        // driver says so, which is what the SQLSTATE decides.
+        result.status = describe_failure.status;
+        result.actual = "SQLDescribeParam reported " +
+            (describe_failure.sqlstate.empty() ? std::string("no SQLSTATE")
+                                               : describe_failure.sqlstate);
+        result.diagnostic = describe_failure.message;
+        if (result.status == TestStatus::FAIL &&
+            result.severity > Severity::ERR) {
+            result.severity = Severity::ERR;
+        }
         result.suggestion =
             "Driver does not implement SQLDescribeParam (Firebird ≤3.5.0 "
             "returns SQL_ERROR). Scanner-style consumers must fall back to "
@@ -1114,6 +1146,9 @@ TestResult ParameterBindingTests::test_sqldescribeparam_decimal() {
     SQLSMALLINT scale = 0;
     SQLSMALLINT nullable = 0;
     SQLRETURN describe_rc = SQL_ERROR;
+    // B3: the statement dies with the try block, so the SQLSTATE has to
+    // be read while its handle is still alive.
+    FailureClassification describe_failure;
 
     try {
         core::OdbcStatement stmt(conn_);
@@ -1133,6 +1168,10 @@ TestResult ParameterBindingTests::test_sqldescribeparam_decimal() {
         // Probe parameter 2 (the DECIMAL column).
         describe_rc = SQLDescribeParam(stmt.get_handle(), 2,
                                        &param_type, &col_size, &scale, &nullable);
+        if (!SQL_SUCCEEDED(describe_rc)) {
+            describe_failure =
+                classify_failure(SQL_HANDLE_STMT, stmt.get_handle());
+        }
     } catch (const core::OdbcError& e) {
         result.status = TestStatus::ERR;
         result.actual = e.what();
@@ -1143,8 +1182,17 @@ TestResult ParameterBindingTests::test_sqldescribeparam_decimal() {
     }
 
     if (!SQL_SUCCEEDED(describe_rc)) {
-        result.status = TestStatus::SKIP_UNSUPPORTED;
-        result.actual = "SQLDescribeParam returned " + std::to_string(describe_rc);
+        // B3: optional, so SKIP is usually right - but only when the
+        // driver says so, which is what the SQLSTATE decides.
+        result.status = describe_failure.status;
+        result.actual = "SQLDescribeParam reported " +
+            (describe_failure.sqlstate.empty() ? std::string("no SQLSTATE")
+                                               : describe_failure.sqlstate);
+        result.diagnostic = describe_failure.message;
+        if (result.status == TestStatus::FAIL &&
+            result.severity > Severity::ERR) {
+            result.severity = Severity::ERR;
+        }
         result.suggestion =
             "Driver does not implement SQLDescribeParam (Firebird ≤3.5.0 "
             "returns SQL_ERROR). Scanner-style consumers must fall back to "
@@ -1327,8 +1375,10 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_insert() {
         SQLLEN row_count = -2;
         SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
         if (!SQL_SUCCEEDED(rc)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "SQLRowCount returned " + std::to_string(rc);
+            // B3: SQLRowCount is Core. Only a driver that says
+            // "not implemented" earns a SKIP here.
+            report_failure(result, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLRowCount");
         } else if (row_count != 1) {
             record_rowcount_mismatch(result, "INSERT", 1, row_count);
         } else {
@@ -1385,8 +1435,10 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_update() {
         SQLLEN row_count = -2;
         SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
         if (!SQL_SUCCEEDED(rc)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "SQLRowCount returned " + std::to_string(rc);
+            // B3: SQLRowCount is Core. Only a driver that says
+            // "not implemented" earns a SKIP here.
+            report_failure(result, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLRowCount");
         } else if (row_count != 3) {
             record_rowcount_mismatch(result, "UPDATE", 3, row_count);
         } else {
@@ -1441,8 +1493,10 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_delete() {
         SQLLEN row_count = -2;
         SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
         if (!SQL_SUCCEEDED(rc)) {
-            result.status = TestStatus::SKIP_UNSUPPORTED;
-            result.actual = "SQLRowCount returned " + std::to_string(rc);
+            // B3: SQLRowCount is Core. Only a driver that says
+            // "not implemented" earns a SKIP here.
+            report_failure(result, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLRowCount");
         } else if (row_count != 2) {
             record_rowcount_mismatch(result, "DELETE", 2, row_count);
         } else {

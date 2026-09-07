@@ -235,8 +235,10 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
             reinterpret_cast<SQLPOINTER>(ARRAY_SIZE), 0);
         if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_UNSUPPORTED;
-            r.actual = "Driver does not support SQL_ATTR_PARAMSET_SIZE > 1";
+            // B3: optional attributes, so SKIP is usually right - but
+            // only when the driver actually says "not implemented".
+            report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLSetStmtAttr(SQL_ATTR_PARAMSET_SIZE > 1)");
             r.suggestion = "Implement SQL_ATTR_PARAMSET_SIZE support per ODBC 3.x spec §Arrays of Parameters";
             return;
         }
@@ -329,8 +331,10 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
             reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(sizeof(ParamRow))), 0);
         if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_UNSUPPORTED;
-            r.actual = "Driver does not support SQL_ATTR_PARAM_BIND_TYPE (row-wise binding)";
+            // B3: optional attributes, so SKIP is usually right - but
+            // only when the driver actually says "not implemented".
+            report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLSetStmtAttr(SQL_ATTR_PARAM_BIND_TYPE)");
             r.suggestion = "Implement SQL_ATTR_PARAM_BIND_TYPE per ODBC 3.x spec §Binding Arrays of Parameters";
             return;
         }
@@ -545,8 +549,10 @@ TestResult ArrayParamTests::test_param_status_array() {
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR,
             status_array, 0);
         if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_UNSUPPORTED;
-            r.actual = "Driver does not support SQL_ATTR_PARAM_STATUS_PTR";
+            // B3: optional attributes, so SKIP is usually right - but
+            // only when the driver actually says "not implemented".
+            report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLSetStmtAttr(SQL_ATTR_PARAM_STATUS_PTR)");
             r.suggestion = "Implement SQL_ATTR_PARAM_STATUS_PTR to report per-row status. "
                                "Per ODBC 3.x, the driver fills this array with SQL_PARAM_SUCCESS, "
                                "SQL_PARAM_ERROR, etc. after execution.";
@@ -633,8 +639,10 @@ TestResult ArrayParamTests::test_params_processed_count() {
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR,
             &params_processed, 0);
         if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_UNSUPPORTED;
-            r.actual = "Driver does not support SQL_ATTR_PARAMS_PROCESSED_PTR";
+            // B3: optional attributes, so SKIP is usually right - but
+            // only when the driver actually says "not implemented".
+            report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLSetStmtAttr(SQL_ATTR_PARAMS_PROCESSED_PTR)");
             r.suggestion = "Implement SQL_ATTR_PARAMS_PROCESSED_PTR per ODBC 3.x spec. "
                                "The driver must set this to the number of parameter sets processed.";
             return;
@@ -772,8 +780,10 @@ TestResult ArrayParamTests::test_param_operation_array() {
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_OPERATION_PTR,
             operation_array, 0);
         if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_UNSUPPORTED;
-            r.actual = "Driver does not support SQL_ATTR_PARAM_OPERATION_PTR";
+            // B3: optional attributes, so SKIP is usually right - but
+            // only when the driver actually says "not implemented".
+            report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLSetStmtAttr(SQL_ATTR_PARAM_OPERATION_PTR)");
             r.suggestion = "Implement SQL_ATTR_PARAM_OPERATION_PTR per ODBC 3.x spec. "
                                "This allows applications to skip specific parameter sets.";
             return;
@@ -1083,8 +1093,10 @@ TestResult ArrayParamTests::test_param_status_per_row_partial_failure() {
             ret = SQLSetStmtAttr(stmt.get_handle(),
                 SQL_ATTR_PARAM_STATUS_PTR, status, 0);
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver does not support SQL_ATTR_PARAM_STATUS_PTR";
+                // B3: optional attributes, so SKIP is usually right - but
+                // only when the driver actually says "not implemented".
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLSetStmtAttr(SQL_ATTR_PARAM_STATUS_PTR)");
                 return;
             }
 

@@ -358,3 +358,33 @@ TEST(LiteralSelectVariantsTest, EveryVariantIsDistinct) {
     v.erase(std::unique(v.begin(), v.end()), v.end());
     EXPECT_EQ(v.size(), before) << "a duplicated variant is a wasted round trip";
 }
+
+// ── classify_failure — IMPROVEMENT_PLAN.md B3 ──────────────────────────────
+//
+// A handle with no diagnostics classifies as FAIL with no state: "the driver
+// did not say why" is a failure, not a licence to skip. The states that do
+// mean "not implemented" are covered end to end by the e2e scenarios, which
+// need a real driver to post them.
+TEST_F(RunTestFixture, ClassifyFailureDefaultsToFailWhenNothingWasPosted) {
+    const auto c = tests::TestBase::classify_failure(SQL_HANDLE_DBC,
+                                                     conn_->get_handle());
+    EXPECT_EQ(c.status, tests::TestStatus::FAIL)
+        << "silence is not evidence that a feature is unimplemented";
+    EXPECT_TRUE(c.sqlstate.empty());
+}
+
+TEST_F(RunTestFixture, ReportFailureAlwaysRecordsAState) {
+    tests::TestResult r;
+    r.severity = tests::Severity::INFO;
+    tests::TestBase::report_failure(r, SQL_HANDLE_DBC, conn_->get_handle(),
+                                    "SQLSomething");
+
+    EXPECT_EQ(r.status, tests::TestStatus::FAIL);
+    EXPECT_NE(r.actual.find("SQLSomething"), std::string::npos) << r.actual;
+    EXPECT_NE(r.actual.find("no SQLSTATE"), std::string::npos) << r.actual;
+    ASSERT_TRUE(r.diagnostic.has_value());
+    EXPECT_FALSE(r.diagnostic->empty());
+    // A Core failure must not stay at INFO severity, or it sorts below
+    // warning noise in the severity-ranked summary.
+    EXPECT_EQ(r.severity, tests::Severity::ERR);
+}

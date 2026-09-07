@@ -44,8 +44,11 @@ TestResult CatalogDepthTests::test_tables_search_patterns() {
                 SqlWcharBuf("%").ptr(), SQL_NTS);  // All table types
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "SQLTables with table type pattern did not succeed";
+                // B3: SQLTables is a *Core* function. Reporting its failure as
+                // SKIP_INCONCLUSIVE without reading the SQLSTATE hid a Core
+                // gap from the exit code entirely.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLTables with a table-type pattern");
                 return;
             }
 
@@ -115,8 +118,10 @@ TestResult CatalogDepthTests::test_statistics_result() {
                 SQL_INDEX_ALL, SQL_QUICK);
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "SQLStatistics call did not succeed";
+                // B3: SQLStatistics is Core too — see the conformance tag fix
+                // in B7, which this row is tagged LEVEL_1 by mistake.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLStatistics");
                 return;
             }
 
@@ -246,8 +251,9 @@ TestResult CatalogDepthTests::test_catalog_null_parameters() {
                 nullptr, 0);   // NULL table type
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "SQLTables with all NULL parameters did not succeed";
+                // B3: Core again.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLTables with all-NULL arguments");
                 return;
             }
 

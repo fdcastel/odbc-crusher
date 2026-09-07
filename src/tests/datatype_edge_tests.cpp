@@ -571,9 +571,13 @@ TestResult DataTypeEdgeCaseTests::test_string_as_integer() {
                             success = true;
                             break;
                         } else if (rc == SQL_ERROR) {
-                            // Some drivers don't support this conversion
-                            r.status = TestStatus::SKIP_UNSUPPORTED;
-                            r.actual = "Driver does not support string->integer conversion in SQLGetData";
+                            // B3: SQL_CHAR to SQL_C_SLONG is a *required Core*
+                            // conversion, so "some drivers don't support this"
+                            // is only true when the driver says so. Anything
+                            // other than IM001/HYC00/HY092/HY106 is a Core
+                            // failure and must not be excused as a SKIP.
+                            report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                           "SQLGetData(SQL_C_SLONG) on a character column");
                             success = true;
                             break;
                         }
@@ -696,9 +700,9 @@ TestResult DataTypeEdgeCaseTests::test_varchar_raw_byte_integrity() {
             SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_BINARY,
                                       raw, sizeof(raw), &ind);
             if (!SQL_SUCCEEDED(rc)) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver rejected SQLGetData(SQL_C_BINARY) on VARCHAR; "
-                                "rc=" + std::to_string(rc);
+                // B3
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLGetData(SQL_C_BINARY) on a VARCHAR column");
                 return;
             }
 
@@ -941,8 +945,9 @@ TestResult DataTypeEdgeCaseTests::test_null_in_numeric_struct() {
             SQLLEN ind = 999;
             rc = SQLGetData(sel.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
             if (!SQL_SUCCEEDED(rc)) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "SQLGetData(SQL_C_NUMERIC) returned " + std::to_string(rc);
+                // B3: SQL_C_NUMERIC is a required Core target type.
+                report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
+                               "SQLGetData(SQL_C_NUMERIC)");
                 return;
             }
 

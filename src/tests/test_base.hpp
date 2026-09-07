@@ -96,6 +96,13 @@ struct DialectAttempt {
     std::string format_failures() const;
 };
 
+// How a failed ODBC call should be reported — B3.
+struct FailureClassification {
+    TestStatus  status = TestStatus::FAIL;
+    std::string sqlstate;   // the state that decided it; empty if none posted
+    std::string message;    // the driver's message for that record
+};
+
 // Base class for all ODBC tests
 class TestBase {
 public:
@@ -140,6 +147,31 @@ public:
     // before executing.
     DialectAttempt prepare_first_working(core::OdbcStatement& stmt,
                                          const std::vector<std::string>& queries);
+
+    // Decide SKIP_UNSUPPORTED vs FAIL from the diagnostics on `handle` — B3.
+    //
+    // Not one probe in this codebase read a SQLSTATE before choosing between
+    // the two, so a driver that failed a *Core* function and a driver that
+    // declined an optional one were reported identically — and SKIP does not
+    // affect the exit code, so the Core failure disappeared.
+    //
+    // The four states that mean "this driver does not implement an optional
+    // feature" map to SKIP_UNSUPPORTED; everything else is the driver failing
+    // something it was asked to do, which is a FAIL.
+    //
+    // Walks the whole diagnostic queue rather than reading record 1: a driver
+    // manager may prepend its own record — unixODBC's IM006 "driver does not
+    // support this function" is the one seen in practice — in front of the
+    // driver's own. The two probes that already got this right
+    // (`array_param_tests.cpp` and `metadata_tests.cpp`) both loop for exactly
+    // that reason, and this helper is extracted from them.
+    static FailureClassification classify_failure(SQLSMALLINT handle_type,
+                                                  SQLHANDLE handle);
+
+    // Apply that classification to a result, always recording the SQLSTATE.
+    // `what` names the call that failed, e.g. "SQLTables".
+    static void report_failure(TestResult& r, SQLSMALLINT handle_type,
+                               SQLHANDLE handle, const std::string& what);
 
     // Dialect variants of a literal SELECT — A2.
     //

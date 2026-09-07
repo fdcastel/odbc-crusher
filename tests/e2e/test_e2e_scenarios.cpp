@@ -867,3 +867,58 @@ TEST_F(CrusherE2EFixture, FailedDialectVariantsAreReportedNotSwallowed) {
                         "configuration; nothing to assert";
     }
 }
+
+// B3 — not one probe read a SQLSTATE before choosing between SKIP_UNSUPPORTED
+// and FAIL, so a driver that failed a *Core* function and one that declined an
+// optional feature were reported identically. SKIP does not affect the exit
+// code, so the Core failure disappeared.
+//
+// classify_failure() maps IM001/HYC00/HY092/HY106 to SKIP_UNSUPPORTED and
+// everything else to FAIL, and writes the state into the report either way.
+TEST_F(CrusherE2EFixture, DeclinedOptionalFeatureSkipsAndNamesItsSqlstate) {
+    // SupportsArrayBind=false makes the mock return HYC00 for the array
+    // parameter attributes — a genuine "not implemented".
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
+        "SupportsArrayBind=false;");
+    ASSERT_TRUE(run.report.contains("summary")) << run.raw_stderr;
+
+    auto t = find_test(run.report, "Array Parameter Tests", "test_param_status_array");
+    ASSERT_TRUE(t.has_value());
+    EXPECT_EQ(t->value("status", std::string{}), "SKIP_UNSUPPORTED")
+        << "HYC00 means the driver does not implement it; that is a skip";
+    // The state must reach the report, whichever way it was classified —
+    // without it a reader cannot tell a refusal from a failure.
+    const auto where = t->value("actual", std::string{}) + " " +
+                       t->value("diagnostic", std::string{});
+    EXPECT_NE(where.find("HYC00"), std::string::npos)
+        << "actual/diagnostic did not name the SQLSTATE: " << where;
+}
+
+// The other half: a driver that fails a Core function for some *other* reason
+// must be a FAIL, not excused as unsupported. Mode=Partial + FailOn makes the
+// mock fail SQLTables with its configured ErrorCode rather than HYC00.
+TEST_F(CrusherE2EFixture, CoreFunctionFailureIsNotExcusedAsUnsupported) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Partial;FailOn=SQLTables;ErrorCode=42000;"
+        "Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(run.launched);
+    if (!run.report.contains("categories")) {
+        GTEST_SKIP() << "driver refused the connection under this configuration";
+    }
+
+    auto t = find_test(run.report, "Catalog Function Depth",
+                       "test_tables_search_patterns");
+    if (!t.has_value()) {
+        GTEST_SKIP() << "probe not present in this build";
+    }
+    const auto status = t->value("status", std::string{});
+    if (status == "PASS") {
+        GTEST_SKIP() << "the driver did not fail SQLTables under this "
+                        "configuration, so there is nothing to classify";
+    }
+    EXPECT_EQ(status, "FAIL")
+        << "SQLTables is Core and 42000 is not an optional-feature state, so "
+           "this must not be excused as SKIP_UNSUPPORTED. actual: "
+        << t->value("actual", std::string{});
+}

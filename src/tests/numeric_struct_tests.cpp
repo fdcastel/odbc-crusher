@@ -110,9 +110,12 @@ TestResult NumericStructTests::test_numeric_struct_binding() {
             ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "SQLGetData with SQL_C_NUMERIC not supported";
-                r.suggestion = "Driver does not support SQL_C_NUMERIC target type";
+                // B3: SQL_C_NUMERIC is a *required Core* target type, so a
+                // failure here is only a SKIP if the driver actually says
+                // "not implemented". classify_failure reads the SQLSTATE and
+                // FAILs anything else, instead of excusing every failure.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLGetData(SQL_C_NUMERIC)");
             } else {
                 double val = numeric_struct_to_double(ns);
                 if (std::abs(val - 12345.0) < 0.01) {
@@ -152,8 +155,9 @@ TestResult NumericStructTests::test_numeric_struct_precision_scale() {
             ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "SQLGetData with SQL_C_NUMERIC not supported for decimal values";
+                // B3
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLGetData(SQL_C_NUMERIC) for a decimal");
             } else {
                 double val = numeric_struct_to_double(ns);
                 std::ostringstream oss;
@@ -194,8 +198,12 @@ TestResult NumericStructTests::test_numeric_positive_negative() {
                 set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
                 ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
                 if (!SQL_SUCCEEDED(ret)) {
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "SQL_C_NUMERIC not supported";
+                    // B3: SQL_C_NUMERIC is a *required Core* target type, so a
+                    // failure here is only a SKIP if the driver actually says
+                    // "not implemented". classify_failure reads the SQLSTATE and
+                    // FAILs anything else, instead of excusing every failure.
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLGetData(SQL_C_NUMERIC)");
                     return;
                 }
 
@@ -224,8 +232,9 @@ TestResult NumericStructTests::test_numeric_positive_negative() {
                 set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
                 ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
                 if (!SQL_SUCCEEDED(ret)) {
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "SQL_C_NUMERIC not supported for negative values";
+                    // B3
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLGetData(SQL_C_NUMERIC) for a negative");
                     return;
                 }
 
@@ -266,8 +275,12 @@ TestResult NumericStructTests::test_numeric_zero_and_extremes() {
                 set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
                 ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
                 if (!SQL_SUCCEEDED(ret)) {
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "SQL_C_NUMERIC not supported";
+                    // B3: SQL_C_NUMERIC is a *required Core* target type, so a
+                    // failure here is only a SKIP if the driver actually says
+                    // "not implemented". classify_failure reads the SQLSTATE and
+                    // FAILs anything else, instead of excusing every failure.
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLGetData(SQL_C_NUMERIC)");
                     return;
                 }
 
@@ -297,8 +310,9 @@ TestResult NumericStructTests::test_numeric_zero_and_extremes() {
                 set_numeric_descriptor(stmt.get_handle(), 1, 18, 0);
                 ret = SQLGetData(stmt.get_handle(), 1, SQL_C_NUMERIC, &ns, sizeof(ns), &ind);
                 if (!SQL_SUCCEEDED(ret)) {
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "SQL_C_NUMERIC not supported for large values";
+                    // B3
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLGetData(SQL_C_NUMERIC) for a large value");
                     return;
                 }
 
@@ -480,17 +494,20 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                 SQLLEN ind = 0;
                 if (!set_numeric_descriptor(sel.get_handle(), 1,
                                             shape.precision, shape.scale)) {
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "Driver rejects ARD descriptor configuration "
-                               "for SQL_C_NUMERIC";
+                    // B3: setting the ARD precision/scale is what the spec
+                    // requires before SQLGetData(SQL_C_NUMERIC), so a driver
+                    // rejecting it is only "unsupported" if it says so.
+                    report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
+                                   "ARD descriptor configuration for SQL_C_NUMERIC");
                     return;
                 }
                 ret = SQLGetData(sel.get_handle(), 1, SQL_C_NUMERIC,
                                  &got, sizeof(got), &ind);
                 if (!SQL_SUCCEEDED(ret)) {
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "SQLGetData(SQL_C_NUMERIC) returned " + std::to_string(ret)
-                             + " for variant " + std::to_string(variant_idx);
+                    // B3
+                    report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
+                                   "SQLGetData(SQL_C_NUMERIC) for variant " +
+                                       std::to_string(variant_idx));
                     return;
                 }
 
@@ -623,8 +640,9 @@ TestResult NumericStructTests::test_decimal_sum_loop_precision() {
             sel.execute("SELECT VAL FROM " + table);
 
             if (!set_numeric_descriptor(sel.get_handle(), 1, kPrec, kScale)) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver rejects ARD descriptor configuration";
+                // B3: see above.
+                report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
+                               "ARD descriptor configuration for SQL_C_NUMERIC");
                 return;
             }
 
@@ -644,8 +662,9 @@ TestResult NumericStructTests::test_decimal_sum_loop_precision() {
                 rc = SQLGetData(sel.get_handle(), 1, SQL_C_NUMERIC,
                                 &ns, sizeof(ns), &ind);
                 if (!SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "SQLGetData(SQL_C_NUMERIC) returned " + std::to_string(rc);
+                    // B3
+                    report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
+                                   "SQLGetData(SQL_C_NUMERIC)");
                     return;
                 }
                 // Reconstruct mantissa, normalising for the driver's reported

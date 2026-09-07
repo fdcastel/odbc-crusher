@@ -53,6 +53,60 @@ DialectFailure make_failure(const std::string& query, const core::OdbcError& e) 
 
 }  // namespace
 
+FailureClassification TestBase::classify_failure(SQLSMALLINT handle_type,
+                                                 SQLHANDLE handle) {
+    // The states that mean "not implemented", rather than "you asked for
+    // something valid and I could not do it".
+    //
+    //   IM001  Driver does not support this function
+    //   HYC00  Optional feature not implemented
+    //   HY092  Invalid attribute/option identifier - what a driver returns for
+    //          an attribute it does not know
+    //   HY106  Fetch type out of range - likewise for a cursor mode it lacks
+    static const char* const kUnsupported[] = {"IM001", "HYC00", "HY092", "HY106"};
+
+    FailureClassification out;
+    out.status = TestStatus::FAIL;
+    try {
+        auto err = core::OdbcError::from_handle(handle_type, handle, "");
+        const auto& diags = err.diagnostics();
+        for (const auto& d : diags) {
+            for (const char* state : kUnsupported) {
+                if (d.sqlstate == state) {
+                    out.status = TestStatus::SKIP_UNSUPPORTED;
+                    out.sqlstate = d.sqlstate;
+                    out.message = d.message;
+                    return out;
+                }
+            }
+        }
+        if (!diags.empty()) {
+            out.sqlstate = diags[0].sqlstate;
+            out.message = diags[0].message;
+        }
+    } catch (...) {
+        // Reading diagnostics must never be the thing that fails a probe.
+    }
+    return out;
+}
+
+void TestBase::report_failure(TestResult& r, SQLSMALLINT handle_type,
+                              SQLHANDLE handle, const std::string& what) {
+    const auto c = classify_failure(handle_type, handle);
+    r.status = c.status;
+
+    const std::string state = c.sqlstate.empty() ? "no SQLSTATE" : c.sqlstate;
+    if (c.status == TestStatus::SKIP_UNSUPPORTED) {
+        r.actual = what + " reported " + state + " (optional feature not "
+                   "implemented)";
+    } else {
+        r.actual = what + " failed with " + state;
+        if (r.severity > Severity::ERR) r.severity = Severity::ERR;
+    }
+    // B3: the state always reaches the report, whichever way it was classified.
+    r.diagnostic = state + (c.message.empty() ? "" : ": " + c.message);
+}
+
 std::vector<std::string> TestBase::literal_select_variants(const std::string& sql) {
     // Bare form first: it is what most engines want, and trying it first keeps
     // the common case a single round trip.

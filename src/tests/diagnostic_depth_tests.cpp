@@ -63,8 +63,16 @@ TestResult DiagnosticDepthTests::test_diagfield_sqlstate() {
                     r.suggestion = "SQLSTATE must be exactly 5 characters per ODBC spec";
                 }
             } else {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "SQLGetDiagField for SQLSTATE did not succeed";
+                // B3: not inconclusive. SQLExecDirectW returned SQL_ERROR just
+                // above, so the spec requires diagnostic record 1 to exist —
+                // a driver that cannot produce it has failed a Core
+                // requirement, and SKIP would keep that out of the exit code.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLGetDiagField(record 1, SQL_DIAG_SQLSTATE) returned " +
+                           std::to_string(diag_ret) + " after a SQL_ERROR";
+                r.suggestion = "Every SQL_ERROR must be accompanied by at least "
+                               "one diagnostic record, numbered from 1.";
             }
         });
 }
