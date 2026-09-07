@@ -201,13 +201,13 @@ The mock driver supports these connection-string parameters:
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
-| `Mode` | `Success`, `Failure`, `Random`, `Partial` | Overall behavior. `Success` = normal operation; `Failure` = all operations fail with `ErrorCode`; `Partial` works with `FailOn=`. |
+| `Mode` | `Success`, `Failure`, `Random`, `Partial` | Overall behavior. `Success` = normal operation; `Failure` = all operations fail with `ErrorCode`; `Random` fails a percentage of calls. `Partial` is the mode for "fail only what `FailOn` names", but since D26 `FailOn` is honoured in **every** mode — it names functions, so it is a per-function override rather than a property of a mode. |
 | `Catalog` | `Default`, `Empty`, `Large` | Mock schema preset. `Default` has USERS/ORDERS/PRODUCTS plus the `MOCK_INOUT(IN n INTEGER, OUT m INTEGER, INOUT s VARCHAR)` procedure used by the `{?=CALL …}` probes. |
 | `ResultSetSize` | Number | Rows to return in result sets (default: 100). |
-| `FailOn` | Function names | Comma-separated list of functions to fail (e.g., `FailOn=SQLExecute,SQLFetch`). |
+| `FailOn` | Function names | Comma-separated list of functions to fail (e.g., `FailOn=SQLExecute,SQLFetch`). Works with any `Mode`, including the default `Success`; naming a function also *narrows* `Failure` and `Random` to the named ones. |
 | `ErrorCode` | SQLSTATE | SQLSTATE returned for failures (default: HY000). |
 | `ErrorCount` | Number | Number of diagnostic records emitted per error (default: 1). |
-| `Latency` | e.g. `10ms` | Simulated per-call delay. |
+| `Latency` | e.g. `10ms`, `500us`, `2s` | Simulated per-call delay. A bare number is milliseconds. |
 | `FetchReturnsWarning` | `false` (default), `true` | Every `SQLFetch` that returns a row also posts `01004` and returns `SQL_SUCCESS_WITH_INFO`. Real drivers warn per row; an application must keep fetching until `SQL_NO_DATA`. |
 | `BufferValidation` | `Strict` (default), `Lenient` | `Lenient` returns `SQLGetInfo` strings **without** their NUL terminator, the classic careless-driver behaviour. |
 | `StateChecking` | `Strict`, `Lenient` | ODBC state-machine validation. |

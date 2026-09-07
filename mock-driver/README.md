@@ -23,12 +23,12 @@ Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=100;
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
-| `Mode` | Success, Failure, Random | Overall behavior mode |
+| `Mode` | Success, Failure, Random, Partial | Overall behavior mode. `Partial` fails only what `FailOn` names — but `FailOn` works in every mode, so `Partial` is now just the mode that does nothing else. |
 | `Catalog` | Default, Empty, Large | Mock schema preset |
 | `ResultSetSize` | Number | Rows to return |
-| `FailOn` | Function names | Inject failures |
+| `FailOn` | Function names | Comma-separated functions to fail, in any mode including the default `Success`. Naming a function also narrows `Failure`/`Random` to the named ones. |
 | `ErrorCode` | SQLSTATE | Error code to return |
-| `Latency` | e.g., 10ms | Simulated delay |
+| `Latency` | e.g., 10ms, 500us, 2s | Simulated per-call delay. A bare number is milliseconds; `us` and `s` are honoured rather than silently read as ms. |
 | `FetchReturnsWarning` | false (default) / true | Every `SQLFetch` that returns a row also posts SQLSTATE `01004` and returns `SQL_SUCCESS_WITH_INFO` instead of `SQL_SUCCESS`. Catches fetch loops written `SQLFetch(h) == SQL_SUCCESS`, which stop mid-result-set on any warned row. |
 | `BufferValidation` | Strict (default) / Lenient | When `Lenient`, `SQLGetInfo` returns string values **without** their NUL terminator — the classic careless-driver behaviour, and the lever a null-termination probe needs in order to be able to fail. |
 | `SilentCorruption` | None, DropInserts, MangleVarchar, TruncateNumeric, NullAsEmpty, MangleUnicode, SkewNumeric, SkewNumericBound | Silently tamper with stored data while keeping ODBC return codes successful — used to validate that round-trip / verify-rows-persisted tests detect a misbehaving driver. `NullAsEmpty` returns NULL char/wchar cells as empty string with indicator=0 (Oracle-style empty-vs-null conflation). `MangleUnicode` replaces every non-ASCII byte in a fetched char/wchar cell with `?` (codepage-bound driver pattern). `SkewNumeric` returns every numeric cell +1 on both the bound-column and `SQLGetData` paths; `SkewNumericBound` skews only the bound-column path, so an application reading one column both ways sees them disagree. |

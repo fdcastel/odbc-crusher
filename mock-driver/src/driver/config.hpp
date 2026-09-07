@@ -35,8 +35,11 @@ struct DriverConfig {
     // SQLSTATE to return on failure
     std::string error_code = "42000";
     
-    // Simulated latency
-    std::chrono::milliseconds latency{0};
+    // Simulated latency. D27: microseconds, because `Latency=500us`
+    // used to truncate to 0 - the value was stored in milliseconds and
+    // every suffix that was not `ms` or `us` was read as milliseconds,
+    // so `Latency=10s` meant 10 ms.
+    std::chrono::microseconds latency{0};
     
     // Max connections
     int max_connections = 0;  // 0 = unlimited

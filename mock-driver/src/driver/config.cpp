@@ -42,6 +42,22 @@ int clamp_int(int value, int lo, int hi) {
 } // anonymous namespace
 
 bool DriverConfig::should_fail(const std::string& function_name) const {
+    // D26: `FailOn` names specific functions, so it is a per-function
+    // override rather than a property of a mode - and it used to be read only
+    // in Mode=Partial. Mode=Success is the default, so
+    // `Driver={Mock ODBC Driver};FailOn=SQLTables` silently did nothing and a
+    // caller had no way to know. Checked first, whatever the mode.
+    if (!fail_on.empty()) {
+        const std::string lower_name = to_lower(function_name);
+        for (const auto& f : fail_on) {
+            if (to_lower(f) == lower_name) return true;
+        }
+        // A named list that does not name this function means "not this one",
+        // which is the whole point of naming it - so Partial says no here
+        // rather than falling through to its own loop.
+        if (mode == BehaviorMode::Partial) return false;
+    }
+
     switch (mode) {
         case BehaviorMode::Success:
             return false;
@@ -85,31 +101,87 @@ void DriverConfig::apply_latency() const {
     }
 }
 
+namespace {
+
+// Strip the quoting braces from a value and un-double any escaped `}` inside
+// it - D27. `{a}}b}` is the ODBC spelling of the value `a}b`.
+std::string unbrace_value(const std::string& raw) {
+    if (raw.size() < 2 || raw.front() != '{' || raw.back() != '}') return raw;
+    const std::string inner = raw.substr(1, raw.size() - 2);
+    std::string out;
+    out.reserve(inner.size());
+    for (size_t i = 0; i < inner.size(); ++i) {
+        out += inner[i];
+        if (inner[i] == '}' && i + 1 < inner.size() && inner[i + 1] == '}') ++i;
+    }
+    return out;
+}
+
+} // anonymous namespace
+
 std::unordered_map<std::string, std::string> parse_connection_string_pairs(
     const std::string& conn_str) {
     std::unordered_map<std::string, std::string> result;
     
+    // D27: `in_braces` used to be a bool set by a `{` *anywhere* in the value,
+    // so `Key=a{b;Mode=Failure` swallowed the separator and Mode was never
+    // parsed, and an unterminated `{` absorbed the whole rest of the string.
+    // ODBC braces only quote a value when the `{` is the first character of
+    // that value, and `}}` inside is an escaped `}`.
     std::string current;
     bool in_braces = false;
-    
-    for (char c : conn_str) {
-        if (c == '{') {
-            in_braces = true;
+    bool value_started = false;   // have we seen the `=` of this pair yet?
+
+    for (size_t i = 0; i < conn_str.size(); ++i) {
+        const char c = conn_str[i];
+        if (c == '=' && !in_braces && !value_started) {
+            value_started = true;
             current += c;
-        } else if (c == '}') {
+            continue;
+        }
+        if (c == '{' && !in_braces && value_started
+            && trim(current.substr(current.find('=') + 1)).empty()) {
+            // A `{` at the start of the value opens a quoted value - but
+            // only if it is ever closed. An unterminated one used to absorb
+            // the whole rest of the connection string, so every pair after it
+            // was lost; treating it as an ordinary character loses one
+            // malformed value instead of all of them.
+            bool closes = false;
+            for (size_t j = i + 1; j < conn_str.size(); ++j) {
+                if (conn_str[j] != '}') continue;
+                if (j + 1 < conn_str.size() && conn_str[j + 1] == '}') {
+                    ++j;          // an escaped `}` is not the closer
+                    continue;
+                }
+                closes = true;
+                break;
+            }
+            if (closes) {
+                in_braces = true;
+                current += c;
+                continue;
+            }
+        }
+        if (c == '}' && in_braces) {
+            if (i + 1 < conn_str.size() && conn_str[i + 1] == '}') {
+                // `}}` is an escaped `}` and does not close the value.
+                current += "}}";
+                ++i;
+                continue;
+            }
             in_braces = false;
             current += c;
-        } else if (c == ';' && !in_braces) {
+            continue;
+        }
+        if (c == ';' && !in_braces) {
+            value_started = false;
             // Parse key=value
             auto eq_pos = current.find('=');
             if (eq_pos != std::string::npos) {
                 std::string key = trim(current.substr(0, eq_pos));
                 std::string value = trim(current.substr(eq_pos + 1));
                 
-                // Remove braces from value
-                if (!value.empty() && value.front() == '{' && value.back() == '}') {
-                    value = value.substr(1, value.length() - 2);
-                }
+                value = unbrace_value(value);
                 
                 result[to_lower(key)] = value;
             }
@@ -126,8 +198,8 @@ std::unordered_map<std::string, std::string> parse_connection_string_pairs(
             std::string key = trim(current.substr(0, eq_pos));
             std::string value = trim(current.substr(eq_pos + 1));
             
-            if (!value.empty() && value.front() == '{' && value.back() == '}') {
-                value = value.substr(1, value.length() - 2);
+            value = unbrace_value(value);
+            if (false) {
             }
             
             result[to_lower(key)] = value;
@@ -211,12 +283,31 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
             value = std::stoi(latency_str);
         } catch (...) {}
         
-        if (latency_str.find("ms") != std::string::npos) {
-            config.latency = std::chrono::milliseconds(value);
-        } else if (latency_str.find("us") != std::string::npos) {
-            config.latency = std::chrono::milliseconds(value / 1000);
+        // D27: any suffix that was not `ms` or `us` fell through to
+        // milliseconds, so `Latency=10s` meant 10 ms - three orders of
+        // magnitude out - and `Latency=500us` truncated to 0. Units are
+        // matched at the end of the string, longest first, and the value is
+        // kept in microseconds so a sub-millisecond latency survives.
+        const std::string suffix = [&] {
+            std::string t = to_lower(latency_str);
+            while (!t.empty() && (std::isdigit(static_cast<unsigned char>(t.front()))
+                                  || t.front() == '-' || t.front() == '+'
+                                  || std::isspace(static_cast<unsigned char>(t.front())))) {
+                t.erase(t.begin());
+            }
+            return trim(t);
+        }();
+
+        if (suffix == "us") {
+            config.latency = std::chrono::microseconds(value);
+        } else if (suffix == "s") {
+            config.latency = std::chrono::microseconds(
+                static_cast<long long>(value) * 1000000);
         } else {
-            config.latency = std::chrono::milliseconds(value);
+            // "ms", empty, or anything unrecognised: milliseconds, which is
+            // what the README documents as the default unit.
+            config.latency = std::chrono::microseconds(
+                static_cast<long long>(value) * 1000);
         }
     }
     

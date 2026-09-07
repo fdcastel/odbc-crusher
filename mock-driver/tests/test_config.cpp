@@ -1,4 +1,5 @@
 // Tests for Connection String Configuration Parsing
+#include <chrono>
 #include <gtest/gtest.h>
 #include "driver/config.hpp"
 
@@ -60,8 +61,27 @@ TEST(ConfigTest, ParseErrorCode) {
 }
 
 TEST(ConfigTest, ParseLatency) {
+    // D27: `latency` is microseconds now, so this compares durations rather
+    // than a raw count in whichever unit the field happens to use.
     DriverConfig config = parse_connection_string("Latency=100ms;");
-    EXPECT_EQ(config.latency.count(), 100);
+    EXPECT_EQ(config.latency, std::chrono::milliseconds(100));
+}
+
+// D27: every suffix that was not `ms` or `us` fell through to milliseconds,
+// so `Latency=10s` meant 10 ms - three orders of magnitude out - and
+// `Latency=500us` truncated to 0 because the value was stored in ms.
+TEST(ConfigTest, ParseLatencyUnits) {
+    struct Case { const char* conn; std::chrono::microseconds expected; };
+    const Case cases[] = {
+        {"Latency=100ms;", std::chrono::milliseconds(100)},
+        {"Latency=500us;", std::chrono::microseconds(500)},
+        {"Latency=2s;",    std::chrono::seconds(2)},
+        {"Latency=7;",     std::chrono::milliseconds(7)},   // bare = ms
+    };
+    for (const auto& c : cases) {
+        DriverConfig config = parse_connection_string(c.conn);
+        EXPECT_EQ(config.latency, c.expected) << c.conn;
+    }
 }
 
 TEST(ConfigTest, ParseMaxConnections) {
@@ -350,4 +370,76 @@ TEST(ConfigTest, VeryLongValueDoesNotCrash) {
     std::string long_value(8192, 'x');
     auto pairs = parse_connection_string_pairs("Key=" + long_value + ";");
     EXPECT_EQ(pairs["key"].size(), 8192u);
+}
+
+// ── D26: FailOn is a per-function override, not a property of a mode ─────
+//
+// should_fail returned false unconditionally in Mode=Success - the default -
+// so `Driver={Mock ODBC Driver};FailOn=SQLTables` silently did nothing and a
+// caller had no way to find out.
+
+TEST(ConfigTest, FailOnIsHonouredInSuccessMode) {
+    DriverConfig config = parse_connection_string("Mode=Success;FailOn=SQLTables;");
+    EXPECT_TRUE(config.should_fail("SQLTables"));
+    EXPECT_FALSE(config.should_fail("SQLColumns"))
+        << "FailOn named one function and failed another";
+}
+
+TEST(ConfigTest, FailOnIsCaseInsensitive) {
+    DriverConfig config = parse_connection_string("FailOn=sqltables;");
+    EXPECT_TRUE(config.should_fail("SQLTables"));
+}
+
+TEST(ConfigTest, ModeFailureStillFailsEverythingWithoutFailOn) {
+    DriverConfig config = parse_connection_string("Mode=Failure;");
+    EXPECT_TRUE(config.should_fail("SQLTables"));
+    EXPECT_TRUE(config.should_fail("SQLColumns"));
+}
+
+// A named list narrows Mode=Failure too: naming a function means "this one".
+TEST(ConfigTest, FailOnNarrowsFailureMode) {
+    DriverConfig config = parse_connection_string("Mode=Partial;FailOn=SQLTables;");
+    EXPECT_TRUE(config.should_fail("SQLTables"));
+    EXPECT_FALSE(config.should_fail("SQLColumns"));
+}
+
+// ── D27: the connection-string parser ────────────────────────────────────
+//
+// `in_braces` was a bool set by a `{` anywhere in the value, not only at the
+// start of one, so a brace in the middle of a value swallowed the separator
+// that followed it.
+
+TEST(ConfigTest, ABraceInsideAValueDoesNotSwallowTheNextPair) {
+    DriverConfig config = parse_connection_string(
+        "Catalog=a{b;Mode=Failure;");
+    EXPECT_EQ(config.mode, BehaviorMode::Failure)
+        << "the `{` inside the first value swallowed the separator";
+}
+
+TEST(ConfigTest, AnUnterminatedBraceDoesNotEatTheRestOfTheString) {
+    DriverConfig config = parse_connection_string(
+        "Catalog={unterminated;Mode=Failure;");
+    // Whatever the first value ends up as, the pair after it must be parsed.
+    EXPECT_EQ(config.mode, BehaviorMode::Failure);
+}
+
+// `{a}}b}` is the ODBC spelling of the value `a}b`; the parser used to close
+// the value at the first `}`.
+TEST(ConfigTest, ADoubledBraceIsAnEscapedBrace) {
+    auto pairs = parse_connection_string_pairs("PWD={a}}b};Mode=Failure;");
+    ASSERT_EQ(pairs.count("pwd"), 1u);
+    EXPECT_EQ(pairs["pwd"], "a}b");
+    ASSERT_EQ(pairs.count("mode"), 1u)
+        << "the escaped brace closed the value early and ate the next pair";
+    EXPECT_EQ(pairs["mode"], "Failure");
+}
+
+// The ordinary quoted form must keep working - this is how every connection
+// string in the suite names the driver.
+TEST(ConfigTest, AQuotedValueStillLosesItsBraces) {
+    auto pairs = parse_connection_string_pairs(
+        "Driver={Mock ODBC Driver};Mode=Success;");
+    ASSERT_EQ(pairs.count("driver"), 1u);
+    EXPECT_EQ(pairs["driver"], "Mock ODBC Driver");
+    EXPECT_EQ(pairs["mode"], "Success");
 }
