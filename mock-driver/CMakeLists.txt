@@ -31,6 +31,7 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/CompilerWarnings.cmake")
         "full checkout: cmake -B mock-driver/build -S mock-driver")
 endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 if(NOT TARGET project_warnings)
     include(CompilerWarnings)
@@ -132,6 +133,36 @@ else()
         OUTPUT_NAME "mockodbc"
         PREFIX "lib"
     )
+
+    # D2: give the .so the same export surface as the Windows DLL. Without
+    # this it exported every ODBC entry point the driver defines - including
+    # the 38 ANSI ones the .def deliberately hides and the ODBC 2.x aliases -
+    # so unixODBC could reach a path the Windows DM cannot, and the two
+    # platforms were structurally different drivers built from one tree.
+    #
+    # The list is generated from src/mockodbc.def so there is one export set,
+    # not two that can drift.
+    include(GenerateVersionScript)
+    set(MOCK_EXPORT_LIST "${CMAKE_CURRENT_BINARY_DIR}/mockodbc.exports")
+    mock_generate_export_list(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/mockodbc.def" "${MOCK_EXPORT_LIST}")
+
+    set_target_properties(mock_core PROPERTIES
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+    )
+    set_target_properties(mock-odbc-driver PROPERTIES
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+        LINK_DEPENDS "${MOCK_EXPORT_LIST}"
+    )
+    if(APPLE)
+        target_link_options(mock-odbc-driver PRIVATE
+            "-Wl,-exported_symbols_list,${MOCK_EXPORT_LIST}")
+    else()
+        target_link_options(mock-odbc-driver PRIVATE
+            "-Wl,--version-script=${MOCK_EXPORT_LIST}")
+    endif()
 endif()
 
 # Install targets
