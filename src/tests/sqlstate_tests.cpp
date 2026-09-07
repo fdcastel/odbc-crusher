@@ -52,29 +52,24 @@ TestResult SqlstateTests::test_execute_without_prepare() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLExecute, Appendix B: State Transition Tables",
         [&](TestResult& r) {
-            try {
-                core::OdbcStatement stmt(conn_);
-                SQLRETURN rc = SQLExecute(stmt.get_handle());
+            core::OdbcStatement stmt(conn_);
+            SQLRETURN rc = SQLExecute(stmt.get_handle());
 
-                if (rc == SQL_ERROR) {
-                    std::string state = get_stmt_sqlstate(stmt.get_handle());
-                    if (state == "HY010") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with HY010 (Function sequence error)";
-                    } else {
-                        r.status = TestStatus::FAIL;
-                        r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected HY010)";
-                        r.severity = Severity::WARNING;
-                        r.suggestion = "ODBC spec requires HY010 for SQLExecute without SQLPrepare";
-                    }
+            if (rc == SQL_ERROR) {
+                std::string state = get_stmt_sqlstate(stmt.get_handle());
+                if (state == "HY010") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with HY010 (Function sequence error)";
                 } else {
                     r.status = TestStatus::FAIL;
-                    r.actual = "SQLExecute did not return SQL_ERROR (rc=" + std::to_string(rc) + ")";
-                    r.severity = Severity::ERR;
+                    r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected HY010)";
+                    r.severity = Severity::WARNING;
+                    r.suggestion = "ODBC spec requires HY010 for SQLExecute without SQLPrepare";
                 }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            } else {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLExecute did not return SQL_ERROR (rc=" + std::to_string(rc) + ")";
+                r.severity = Severity::ERR;
             }
         });
 }
@@ -86,48 +81,43 @@ TestResult SqlstateTests::test_fetch_no_cursor() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLFetch, Appendix B: Statement Transitions",
         [&](TestResult& r) {
-            try {
-                core::OdbcStatement stmt(conn_);
+            core::OdbcStatement stmt(conn_);
 
-                // SQLFetch without any prior execute - no cursor open
-                SQLRETURN rc = SQLFetch(stmt.get_handle());
+            // SQLFetch without any prior execute - no cursor open
+            SQLRETURN rc = SQLFetch(stmt.get_handle());
 
-                if (rc == SQL_ERROR) {
-                    std::string state = get_stmt_sqlstate(stmt.get_handle());
-                    // A26: this had the two states the wrong way round. The
-                    // statement here is freshly allocated with no prepare and
-                    // no execute, which is Appendix B state S1, and the
-                    // transition table gives HY010 (function sequence error)
-                    // for SQLFetch in S1. 24000 (invalid cursor state) is the
-                    // answer from S2/S3, where a statement exists but no cursor
-                    // is open. Many drivers return 24000 here anyway, so it
-                    // stays a PASS — but the suggestion no longer tells a
-                    // correct driver that it got it wrong.
-                    if (state == "HY010") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with HY010 (Function sequence error)";
-                    } else if (state == "24000") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with 24000 (Invalid cursor state) - "
-                                   "tolerated alternative";
-                        r.suggestion = "Appendix B gives HY010 for SQLFetch on a "
-                                       "statement that has never been prepared or "
-                                       "executed (state S1); 24000 is the state S2/S3 "
-                                       "answer. Both are widely returned.";
-                    } else {
-                        r.status = TestStatus::FAIL;
-                        r.actual = "SQL_ERROR but SQLSTATE=" + state +
-                                   " (expected HY010, or 24000)";
-                        r.severity = Severity::WARNING;
-                    }
+            if (rc == SQL_ERROR) {
+                std::string state = get_stmt_sqlstate(stmt.get_handle());
+                // A26: this had the two states the wrong way round. The
+                // statement here is freshly allocated with no prepare and
+                // no execute, which is Appendix B state S1, and the
+                // transition table gives HY010 (function sequence error)
+                // for SQLFetch in S1. 24000 (invalid cursor state) is the
+                // answer from S2/S3, where a statement exists but no cursor
+                // is open. Many drivers return 24000 here anyway, so it
+                // stays a PASS — but the suggestion no longer tells a
+                // correct driver that it got it wrong.
+                if (state == "HY010") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with HY010 (Function sequence error)";
+                } else if (state == "24000") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with 24000 (Invalid cursor state) - "
+                               "tolerated alternative";
+                    r.suggestion = "Appendix B gives HY010 for SQLFetch on a "
+                                   "statement that has never been prepared or "
+                                   "executed (state S1); 24000 is the state S2/S3 "
+                                   "answer. Both are widely returned.";
                 } else {
                     r.status = TestStatus::FAIL;
-                    r.actual = "SQLFetch did not return SQL_ERROR (rc=" + std::to_string(rc) + ")";
-                    r.severity = Severity::ERR;
+                    r.actual = "SQL_ERROR but SQLSTATE=" + state +
+                               " (expected HY010, or 24000)";
+                    r.severity = Severity::WARNING;
                 }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            } else {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLFetch did not return SQL_ERROR (rc=" + std::to_string(rc) + ")";
+                r.severity = Severity::ERR;
             }
         });
 }
@@ -139,56 +129,51 @@ TestResult SqlstateTests::test_getdata_col0_no_bookmark() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetData, Descriptor Index",
         [&](TestResult& r) {
-            try {
-                core::OdbcStatement stmt(conn_);
+            core::OdbcStatement stmt(conn_);
 
-                // Execute a query to get a result set
-                std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
-                bool success = false;
+            // Execute a query to get a result set
+            std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
+            bool success = false;
 
-                auto attempt = execute_first_working(stmt, queries);
-                if (!attempt) {
-                    // C2: nothing executed. Say what each variant failed with,
-                    // instead of leaving the report to shrug.
-                    r.diagnostic = attempt.format_failures();
-                } else do {
-                    // do/while(false): the body still uses `break` to mean
-                    // "stop here", which is what it meant when this was a
-                    // loop over dialect variants.
-                    if (stmt.fetch()) {
-                        // Now try SQLGetData with column 0 (bookmark) when bookmarks aren't enabled
-                        SQLINTEGER value = 0;
-                        SQLLEN indicator = 0;
-                        SQLRETURN rc = SQLGetData(stmt.get_handle(), 0, SQL_C_SLONG,
-                                                 &value, sizeof(value), &indicator);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
+                if (stmt.fetch()) {
+                    // Now try SQLGetData with column 0 (bookmark) when bookmarks aren't enabled
+                    SQLINTEGER value = 0;
+                    SQLLEN indicator = 0;
+                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 0, SQL_C_SLONG,
+                                             &value, sizeof(value), &indicator);
 
-                        if (rc == SQL_ERROR) {
-                            std::string state = get_stmt_sqlstate(stmt.get_handle());
-                            if (state == "07009") {
-                                r.status = TestStatus::PASS;
-                                r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 0";
-                            } else {
-                                r.status = TestStatus::FAIL;
-                                r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 07009)";
-                                r.severity = Severity::WARNING;
-                            }
+                    if (rc == SQL_ERROR) {
+                        std::string state = get_stmt_sqlstate(stmt.get_handle());
+                        if (state == "07009") {
+                            r.status = TestStatus::PASS;
+                            r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 0";
                         } else {
                             r.status = TestStatus::FAIL;
-                            r.actual = "SQLGetData(col=0) did not return SQL_ERROR (rc=" + std::to_string(rc) + ")";
+                            r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 07009)";
                             r.severity = Severity::WARNING;
-                            r.suggestion = "Driver should return 07009 for column 0 unless bookmarks are enabled";
                         }
-                        success = true;
-                        break;
-                    }                } while (false);
+                    } else {
+                        r.status = TestStatus::FAIL;
+                        r.actual = "SQLGetData(col=0) did not return SQL_ERROR (rc=" + std::to_string(rc) + ")";
+                        r.severity = Severity::WARNING;
+                        r.suggestion = "Driver should return 07009 for column 0 unless bookmarks are enabled";
+                    }
+                    success = true;
+                    break;
+                }                } while (false);
 
-                if (!success) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = "Could not execute query to test column 0 access";
-                }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            if (!success) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not execute query to test column 0 access";
             }
         });
 }
@@ -200,54 +185,49 @@ TestResult SqlstateTests::test_getdata_col_out_of_range() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetData, Descriptor Index",
         [&](TestResult& r) {
-            try {
-                core::OdbcStatement stmt(conn_);
+            core::OdbcStatement stmt(conn_);
 
-                std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
-                bool success = false;
+            std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
+            bool success = false;
 
-                auto attempt = execute_first_working(stmt, queries);
-                if (!attempt) {
-                    // C2: nothing executed. Say what each variant failed with,
-                    // instead of leaving the report to shrug.
-                    r.diagnostic = attempt.format_failures();
-                } else do {
-                    // do/while(false): the body still uses `break` to mean
-                    // "stop here", which is what it meant when this was a
-                    // loop over dialect variants.
-                    if (stmt.fetch()) {
-                        // Try a column way beyond what exists
-                        SQLINTEGER value = 0;
-                        SQLLEN indicator = 0;
-                        SQLRETURN rc = SQLGetData(stmt.get_handle(), 999, SQL_C_SLONG,
-                                                 &value, sizeof(value), &indicator);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
+                if (stmt.fetch()) {
+                    // Try a column way beyond what exists
+                    SQLINTEGER value = 0;
+                    SQLLEN indicator = 0;
+                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 999, SQL_C_SLONG,
+                                             &value, sizeof(value), &indicator);
 
-                        if (rc == SQL_ERROR) {
-                            std::string state = get_stmt_sqlstate(stmt.get_handle());
-                            if (state == "07009") {
-                                r.status = TestStatus::PASS;
-                                r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 999";
-                            } else {
-                                r.status = TestStatus::FAIL;
-                                r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 07009)";
-                                r.severity = Severity::WARNING;
-                            }
+                    if (rc == SQL_ERROR) {
+                        std::string state = get_stmt_sqlstate(stmt.get_handle());
+                        if (state == "07009") {
+                            r.status = TestStatus::PASS;
+                            r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 999";
                         } else {
                             r.status = TestStatus::FAIL;
-                            r.actual = "SQLGetData(col=999) did not return SQL_ERROR";
+                            r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 07009)";
                             r.severity = Severity::WARNING;
                         }
-                        success = true;
-                        break;
-                    }                } while (false);
+                    } else {
+                        r.status = TestStatus::FAIL;
+                        r.actual = "SQLGetData(col=999) did not return SQL_ERROR";
+                        r.severity = Severity::WARNING;
+                    }
+                    success = true;
+                    break;
+                }                } while (false);
 
-                if (!success) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = "Could not execute query to test out-of-range column";
-                }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            if (!success) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not execute query to test out-of-range column";
             }
         });
 }
@@ -258,37 +238,32 @@ TestResult SqlstateTests::test_execdirect_syntax_error() {
         "SQL_ERROR with SQLSTATE 42000 for syntax error",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLExecDirect",
         [&](TestResult& r) {
-            try {
-                core::OdbcStatement stmt(conn_);
+            core::OdbcStatement stmt(conn_);
 
-                SQLRETURN rc = SQLExecDirect(
-                    stmt.get_handle(),
-                    (SQLCHAR*)"THIS IS NOT VALID SQL !!! @#$%",
-                    SQL_NTS
-                );
+            SQLRETURN rc = SQLExecDirect(
+                stmt.get_handle(),
+                (SQLCHAR*)"THIS IS NOT VALID SQL !!! @#$%",
+                SQL_NTS
+            );
 
-                if (rc == SQL_ERROR) {
-                    std::string state = get_stmt_sqlstate(stmt.get_handle());
-                    if (state == "42000") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with 42000 (Syntax error or access violation)";
-                    } else if (state.substr(0, 2) == "42") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with SQLSTATE=" + state + " (42xxx class - syntax/access error)";
-                    } else {
-                        r.status = TestStatus::FAIL;
-                        r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 42000)";
-                        r.severity = Severity::WARNING;
-                        r.suggestion = "ODBC spec requires 42000 (Syntax error) for invalid SQL";
-                    }
-                } else if (SQL_SUCCEEDED(rc)) {
+            if (rc == SQL_ERROR) {
+                std::string state = get_stmt_sqlstate(stmt.get_handle());
+                if (state == "42000") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with 42000 (Syntax error or access violation)";
+                } else if (state.substr(0, 2) == "42") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with SQLSTATE=" + state + " (42xxx class - syntax/access error)";
+                } else {
                     r.status = TestStatus::FAIL;
-                    r.actual = "Driver accepted invalid SQL without error";
-                    r.severity = Severity::ERR;
+                    r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 42000)";
+                    r.severity = Severity::WARNING;
+                    r.suggestion = "ODBC spec requires 42000 (Syntax error) for invalid SQL";
                 }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            } else if (SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "Driver accepted invalid SQL without error";
+                r.severity = Severity::ERR;
             }
         });
 }
@@ -299,44 +274,39 @@ TestResult SqlstateTests::test_bindparam_invalid_ctype() {
         "SQL_ERROR with SQLSTATE HY003 for invalid C type",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLBindParameter",
         [&](TestResult& r) {
-            try {
-                core::OdbcStatement stmt(conn_);
+            core::OdbcStatement stmt(conn_);
 
-                SQLINTEGER value = 42;
-                SQLLEN indicator = sizeof(SQLINTEGER);
+            SQLINTEGER value = 42;
+            SQLLEN indicator = sizeof(SQLINTEGER);
 
-                // Use an invalid C type (9999)
-                SQLRETURN rc = SQLBindParameter(
-                    stmt.get_handle(),
-                    1,                      // parameter number
-                    SQL_PARAM_INPUT,        // input/output type
-                    9999,                   // INVALID C type
-                    SQL_INTEGER,            // SQL type
-                    0, 0,                   // column size, decimal digits
-                    &value,                 // value pointer
-                    sizeof(value),          // buffer length
-                    &indicator              // str_len_or_ind
-                );
+            // Use an invalid C type (9999)
+            SQLRETURN rc = SQLBindParameter(
+                stmt.get_handle(),
+                1,                      // parameter number
+                SQL_PARAM_INPUT,        // input/output type
+                9999,                   // INVALID C type
+                SQL_INTEGER,            // SQL type
+                0, 0,                   // column size, decimal digits
+                &value,                 // value pointer
+                sizeof(value),          // buffer length
+                &indicator              // str_len_or_ind
+            );
 
-                if (rc == SQL_ERROR) {
-                    std::string state = get_stmt_sqlstate(stmt.get_handle());
-                    if (state == "HY003") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with HY003 (Invalid application buffer type)";
-                    } else {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with SQLSTATE=" + state + " for invalid C type";
-                        r.suggestion = "ODBC spec requires HY003 for invalid application buffer type";
-                    }
-                } else if (SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "SQLBindParameter accepted invalid C type 9999";
-                    r.severity = Severity::WARNING;
-                    r.suggestion = "Driver should validate C type and return HY003 for invalid values";
+            if (rc == SQL_ERROR) {
+                std::string state = get_stmt_sqlstate(stmt.get_handle());
+                if (state == "HY003") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with HY003 (Invalid application buffer type)";
+                } else {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with SQLSTATE=" + state + " for invalid C type";
+                    r.suggestion = "ODBC spec requires HY003 for invalid application buffer type";
                 }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            } else if (SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLBindParameter accepted invalid C type 9999";
+                r.severity = Severity::WARNING;
+                r.suggestion = "Driver should validate C type and return HY003 for invalid values";
             }
         });
 }
@@ -347,36 +317,31 @@ TestResult SqlstateTests::test_getinfo_invalid_type() {
         "SQL_ERROR with SQLSTATE HY096 for invalid info type",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetInfo",
         [&](TestResult& r) {
-            try {
-                char buffer[256] = {0};
-                SQLSMALLINT len = 0;
+            char buffer[256] = {0};
+            SQLSMALLINT len = 0;
 
-                // Use an invalid info type (65535)
-                SQLRETURN rc = SQLGetInfo(
-                    conn_.get_handle(),
-                    65535,
-                    buffer, sizeof(buffer), &len
-                );
+            // Use an invalid info type (65535)
+            SQLRETURN rc = SQLGetInfo(
+                conn_.get_handle(),
+                65535,
+                buffer, sizeof(buffer), &len
+            );
 
-                if (rc == SQL_ERROR) {
-                    std::string state = get_conn_sqlstate(conn_.get_handle());
-                    if (state == "HY096") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with HY096 (Information type out of range)";
-                    } else {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with SQLSTATE=" + state + " for invalid info type";
-                        r.suggestion = "ODBC spec requires HY096 for invalid SQLGetInfo info type";
-                    }
-                } else if (SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "SQLGetInfo accepted invalid info type 65535";
-                    r.severity = Severity::WARNING;
-                    r.suggestion = "Driver should return HY096 for unrecognized information type";
+            if (rc == SQL_ERROR) {
+                std::string state = get_conn_sqlstate(conn_.get_handle());
+                if (state == "HY096") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with HY096 (Information type out of range)";
+                } else {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with SQLSTATE=" + state + " for invalid info type";
+                    r.suggestion = "ODBC spec requires HY096 for invalid SQLGetInfo info type";
                 }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            } else if (SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLGetInfo accepted invalid info type 65535";
+                r.severity = Severity::WARNING;
+                r.suggestion = "Driver should return HY096 for unrecognized information type";
             }
         });
 }
@@ -387,34 +352,29 @@ TestResult SqlstateTests::test_setconnattr_invalid_attr() {
         "SQL_ERROR with SQLSTATE HY092 for invalid attribute",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLSetConnectAttr",
         [&](TestResult& r) {
-            try {
-                // Use an invalid attribute ID (99999)
-                SQLRETURN rc = SQLSetConnectAttr(
-                    conn_.get_handle(),
-                    99999,
-                    (SQLPOINTER)0,
-                    0
-                );
+            // Use an invalid attribute ID (99999)
+            SQLRETURN rc = SQLSetConnectAttr(
+                conn_.get_handle(),
+                99999,
+                (SQLPOINTER)0,
+                0
+            );
 
-                if (rc == SQL_ERROR) {
-                    std::string state = get_conn_sqlstate(conn_.get_handle());
-                    if (state == "HY092") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with HY092 (Invalid attribute/option identifier)";
-                    } else {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with SQLSTATE=" + state + " for invalid attribute";
-                        r.suggestion = "ODBC spec requires HY092 for invalid connection attribute";
-                    }
-                } else if (SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "SQLSetConnectAttr accepted invalid attribute 99999";
-                    r.severity = Severity::WARNING;
-                    r.suggestion = "Driver should return HY092 for unrecognized attributes";
+            if (rc == SQL_ERROR) {
+                std::string state = get_conn_sqlstate(conn_.get_handle());
+                if (state == "HY092") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with HY092 (Invalid attribute/option identifier)";
+                } else {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with SQLSTATE=" + state + " for invalid attribute";
+                    r.suggestion = "ODBC spec requires HY092 for invalid connection attribute";
                 }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            } else if (SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLSetConnectAttr accepted invalid attribute 99999";
+                r.severity = Severity::WARNING;
+                r.suggestion = "Driver should return HY092 for unrecognized attributes";
             }
         });
 }
@@ -425,31 +385,26 @@ TestResult SqlstateTests::test_closecursor_no_cursor() {
         "SQL_ERROR with SQLSTATE 24000 when no cursor open",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLCloseCursor",
         [&](TestResult& r) {
-            try {
-                core::OdbcStatement stmt(conn_);
+            core::OdbcStatement stmt(conn_);
 
-                // Close cursor on freshly allocated statement - no cursor open
-                SQLRETURN rc = SQLCloseCursor(stmt.get_handle());
+            // Close cursor on freshly allocated statement - no cursor open
+            SQLRETURN rc = SQLCloseCursor(stmt.get_handle());
 
-                if (rc == SQL_ERROR) {
-                    std::string state = get_stmt_sqlstate(stmt.get_handle());
-                    if (state == "24000") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with 24000 (Invalid cursor state) - no cursor open";
-                    } else {
-                        r.status = TestStatus::FAIL;
-                        r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 24000)";
-                        r.severity = Severity::WARNING;
-                    }
-                } else if (SQL_SUCCEEDED(rc)) {
+            if (rc == SQL_ERROR) {
+                std::string state = get_stmt_sqlstate(stmt.get_handle());
+                if (state == "24000") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with 24000 (Invalid cursor state) - no cursor open";
+                } else {
                     r.status = TestStatus::FAIL;
-                    r.actual = "SQLCloseCursor succeeded with no open cursor";
+                    r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 24000)";
                     r.severity = Severity::WARNING;
-                    r.suggestion = "ODBC spec requires 24000 when closing a cursor that isn't open";
                 }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            } else if (SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLCloseCursor succeeded with no open cursor";
+                r.severity = Severity::WARNING;
+                r.suggestion = "ODBC spec requires 24000 when closing a cursor that isn't open";
             }
         });
 }
@@ -461,35 +416,30 @@ TestResult SqlstateTests::test_connect_already_connected() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLDriverConnect, Connection Transitions",
         [&](TestResult& r) {
-            try {
-                // The connection is already established - try to connect again
-                SQLRETURN rc = SQLDriverConnect(
-                    conn_.get_handle(),
-                    nullptr,
-                    (SQLCHAR*)"Driver={Mock};",
-                    SQL_NTS,
-                    nullptr, 0, nullptr,
-                    SQL_DRIVER_NOPROMPT
-                );
+            // The connection is already established - try to connect again
+            SQLRETURN rc = SQLDriverConnect(
+                conn_.get_handle(),
+                nullptr,
+                (SQLCHAR*)"Driver={Mock};",
+                SQL_NTS,
+                nullptr, 0, nullptr,
+                SQL_DRIVER_NOPROMPT
+            );
 
-                if (rc == SQL_ERROR) {
-                    std::string state = get_conn_sqlstate(conn_.get_handle());
-                    if (state == "08002" || state == "HY010") {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with " + state + " - correctly rejected double connect";
-                    } else {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with SQLSTATE=" + state + " - rejected double connect";
-                    }
-                } else if (SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::FAIL;
-                    r.actual = "SQLDriverConnect succeeded on already-connected handle";
-                    r.severity = Severity::ERR;
-                    r.suggestion = "Driver should reject connection on already-connected handle";
+            if (rc == SQL_ERROR) {
+                std::string state = get_conn_sqlstate(conn_.get_handle());
+                if (state == "08002" || state == "HY010") {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with " + state + " - correctly rejected double connect";
+                } else {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQL_ERROR with SQLSTATE=" + state + " - rejected double connect";
                 }
-            } catch (const std::exception& e) {
-                r.status = TestStatus::ERR;
-                r.actual = std::string("Exception: ") + e.what();
+            } else if (SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLDriverConnect succeeded on already-connected handle";
+                r.severity = Severity::ERR;
+                r.suggestion = "Driver should reject connection on already-connected handle";
             }
         });
 }

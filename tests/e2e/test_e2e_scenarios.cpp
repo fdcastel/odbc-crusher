@@ -1002,27 +1002,63 @@ TEST_F(CrusherE2EFixture, FailedEndTranNamesItsSqlstate) {
 }
 
 // A22's other half, on the probes that INSERT and then verify persistence.
-// Those run in autocommit, where the Driver Manager answers SQLEndTran
-// itself, so the commit cannot fail and the blame branch is unreachable
-// against the mock on Windows — what this pins instead is that they stay
-// green when SQLEndTran is gated, i.e. that the reporting change did not
-// turn a working autocommit round trip into a failure.
-TEST_F(CrusherE2EFixture, AutocommitRoundTripsAreUnaffectedByFailOnEndTran) {
+//
+// Whether their commit can fail at all is a driver-manager question, and the
+// two disagree. The Windows DM answers SQLEndTran itself while the connection
+// is in autocommit and never calls the driver, so the commit cannot fail and
+// these probes stay green. unixODBC forwards it, the injected failure lands,
+// and D40 makes the mock discard the rows a failed COMMIT did not commit - so
+// on Linux and macOS the probes correctly find nothing and fail.
+//
+// Both are acceptable. What is NOT acceptable, and what A22 fixed, is failing
+// with the bind path blamed: before A22 the report said "this is the Firebird
+// #161 silent-corruption shape - check the driver's numeric-C to
+// character-SQL conversion on the bind path" when the real fault was a
+// COMMIT that returned SQL_ERROR. So the assertion is on the *reason*, which
+// is the same on every platform that can reach it.
+TEST_F(CrusherE2EFixture, FailedCommitIsBlamedOnTheCommitNotTheBindPath) {
     auto run = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Partial;FailOn=SQLEndTran;"
         "ErrorCode=40001;Catalog=Default;ResultSetSize=10;");
     ASSERT_TRUE(run.launched);
     ASSERT_TRUE(run.report.contains("categories"));
 
+    int reached = 0;
     for (const char* probe : {"test_bindparam_int_to_varchar_roundtrip",
                               "test_param_rebind_per_row_row_count",
                               "test_param_batch_then_single_row_tail"}) {
         auto t = find_test(run.report, "Parameter Binding Tests", probe);
         ASSERT_TRUE(t.has_value()) << probe << " is missing from the report";
-        EXPECT_EQ(t->value("status", std::string{}), "PASS")
-            << probe << " under FailOn=SQLEndTran: "
-            << t->value("actual", std::string{});
+
+        const auto status = t->value("status", std::string{});
+        const auto actual = t->value("actual", std::string{});
+        const auto suggestion = t->value("suggestion", std::string{});
+
+        if (status == "PASS") {
+            // The driver manager did not forward the commit, so there was no
+            // failure to attribute. Nothing to assert here.
+            continue;
+        }
+        ++reached;
+        EXPECT_EQ(status, "FAIL") << probe << ": " << actual;
+
+        // The commit's outcome must be in the report at all - A22.
+        EXPECT_NE(actual.find("SQLEndTran(SQL_COMMIT) rc=-1"), std::string::npos)
+            << probe << " did not report the failed commit: " << actual;
+
+        // ...and the suggestion must not send a driver author to the bind
+        // path for a fault that happened at COMMIT.
+        EXPECT_NE(suggestion.find("COMMIT failed"), std::string::npos)
+            << probe << " blamed something other than the commit: "
+            << suggestion;
+        EXPECT_EQ(suggestion.find("#161"), std::string::npos)
+            << probe << " still blames the Firebird #161 bind-path shape for a "
+                        "commit failure: " << suggestion;
     }
+
+    std::cout << "[ info ] " << reached
+              << " of 3 persistence probes had their commit forwarded to the "
+                 "driver on this platform" << std::endl;
 }
 
 // ── A27: a discarded SQLGetData return code produced a false PASS ─────────
