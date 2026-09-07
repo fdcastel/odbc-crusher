@@ -13,6 +13,10 @@ out/
 # Temporary files
 tmp/
 
+# JSON reports written by the Appendix's own verification commands.
+report.json
+report-*.json
+
 # IDE files
 .vs/
 .vscode/
