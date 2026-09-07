@@ -18,11 +18,13 @@ std::vector<TestResult> TransactionTests::run() {
 
 bool TransactionTests::create_test_table() {
     try {
-        // DDL must run with autocommit ON so it commits immediately.
-        SQLUINTEGER old_ac = 0;
-        SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+        // A14: this hand-rolled the save/restore with `SQLUINTEGER old_ac = 0`
+        // and an ignored return code — and SQL_AUTOCOMMIT_OFF *is* 0, so a
+        // driver that declined the read got autocommit switched OFF for every
+        // later category. ScopedAutocommitOn treats a failed read as ON, and
+        // restores on every exit path rather than only the ones that
+        // remembered to.
+        ScopedAutocommitOn ac(conn_.get_handle());
 
         // Strategy 0: Check if the test table already exists from a prior run.
         // This avoids needing DDL privileges when the table is already there.
@@ -31,8 +33,6 @@ bool TransactionTests::create_test_table() {
                 core::OdbcStatement probe(conn_);
                 probe.execute("SELECT 1 FROM ODBC_TEST_TXN WHERE 1=0");
                 // Table exists — no DDL needed
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                  (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
             } catch (...) {
                 // Table doesn't exist — try to create it
@@ -53,8 +53,6 @@ bool TransactionTests::create_test_table() {
             try {
                 core::OdbcStatement create_stmt(conn_);
                 create_stmt.execute(query);
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                  (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
             } catch (const core::OdbcError& e) {
                 last_ddl_error_ = e.format_diagnostics();
@@ -76,8 +74,6 @@ bool TransactionTests::create_test_table() {
             try {
                 core::OdbcStatement create_stmt(conn_);
                 create_stmt.execute(query);
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                  (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
             } catch (const core::OdbcError& e) {
                 last_ddl_error_ = e.format_diagnostics();
@@ -86,8 +82,6 @@ bool TransactionTests::create_test_table() {
             }
         }
 
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)(intptr_t)old_ac, 0);
         return false;
     } catch (...) {
         return false;
@@ -254,6 +248,15 @@ TestResult TransactionTests::test_manual_commit() {
                         SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                                         (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
                     } else {
+                        // A14: say what this probe needs instead of trusting create_test_table()
+                        // to have put it back. That helper runs its DDL with autocommit ON and
+                        // restores whatever it read on the way out - and a driver that declines
+                        // the read has nothing to restore. Re-asserting is correct whichever way
+                        // the read goes. (The old code got this right by accident: its broken
+                        // save read a failed SQLGetConnectAttr as 0, which *is* AUTOCOMMIT_OFF,
+                        // which is exactly what these three probes want.)
+                        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                          reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
                         // Insert data
                         core::OdbcStatement stmt(conn_);
                         stmt.execute("INSERT INTO ODBC_TEST_TXN (ID, VAL) VALUES (1, 'test')");
@@ -357,6 +360,9 @@ TestResult TransactionTests::test_manual_rollback() {
                         SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
                                         (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
                     } else {
+                        // A14 - re-assert what we need; see test_manual_commit.
+                        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                                          reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
                         // Commit the CREATE TABLE
                         SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
 
@@ -501,6 +507,9 @@ TestResult TransactionTests::test_rollback_with_open_cursor() {
                 restore_autocommit();
                 return;
             }
+            // A14 - re-assert what we need; see test_manual_commit.
+            SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
+                              reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
             // CREATE TABLE itself opens a txn on some engines; commit it.
             SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
 

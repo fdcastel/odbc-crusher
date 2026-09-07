@@ -321,25 +321,6 @@ namespace {
 // Save / set / restore SQL_ATTR_AUTOCOMMIT around DDL so a failed CREATE/DROP
 // doesn't leave the connection in an inconsistent transaction state on
 // drivers (Firebird) where DDL failure poisons the open txn.
-class AutocommitForDdl {
-public:
-    explicit AutocommitForDdl(SQLHDBC hdbc) : hdbc_(hdbc) {
-        SQLGetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT, &saved_, 0, nullptr);
-        SQLSetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
-                          reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON), 0);
-    }
-    ~AutocommitForDdl() {
-        SQLSetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
-                          reinterpret_cast<SQLPOINTER>(
-                              static_cast<intptr_t>(saved_)), 0);
-    }
-    AutocommitForDdl(const AutocommitForDdl&) = delete;
-    AutocommitForDdl& operator=(const AutocommitForDdl&) = delete;
-private:
-    SQLHDBC hdbc_;
-    SQLUINTEGER saved_ = 0;
-};
-
 // Best-effort DROP: swallows errors, rolls back the connection-level txn on
 // failure so the caller's next statement isn't blocked by a poisoned state.
 void try_drop(core::OdbcConnection& conn, const std::string& table_name) {
@@ -362,7 +343,7 @@ RoundTripTableGuard::RoundTripTableGuard(
       table_name_(std::move(table_name)),
       val_ddl_(std::move(val_ddl))
 {
-    AutocommitForDdl ac(conn_.get_handle());
+    ScopedAutocommitOn ac(conn_.get_handle());
 
     auto try_create_all = [&]() -> bool {
         for (const auto& id_ddl : id_ddl_variants) {
@@ -428,7 +409,7 @@ RoundTripTableGuard RoundTripTableGuard::create_first_working(
 
 RoundTripTableGuard::~RoundTripTableGuard() {
     if (!ok_) return;
-    AutocommitForDdl ac(conn_.get_handle());
+    ScopedAutocommitOn ac(conn_.get_handle());
     try_drop(conn_, table_name_);
 }
 

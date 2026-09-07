@@ -167,7 +167,22 @@ SQLRETURN SQL_API SQLGetConnectAttr(
     HandleLock lock(conn);
     
     conn->clear_diagnostics();
-    
+
+    // D36 (down payment): fault injection reaches 18 of the driver's 65
+    // non-wrapper entry points, which is why so many probes have no
+    // configuration that could make them fail. This one is needed by A14 — a
+    // driver that declines to report
+    // its own SQL_ATTR_AUTOCOMMIT setting is exactly the case whose mishandling
+    // used to leave autocommit OFF for the rest of the run.
+    {
+        const auto& config = BehaviorController::instance().config();
+        if (config.should_fail("SQLGetConnectAttr")) {
+            conn->add_diagnostic(config.error_code, 0,
+                                 "Simulated SQLGetConnectAttr failure");
+            return SQL_ERROR;
+        }
+    }
+
     switch (fAttribute) {
         case SQL_ATTR_ACCESS_MODE:
             if (rgbValue) *static_cast<SQLUINTEGER*>(rgbValue) = conn->access_mode_;

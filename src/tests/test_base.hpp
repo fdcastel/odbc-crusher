@@ -61,6 +61,50 @@ struct RowVerification {
     std::string diagnostic;                  // Empty when ok
 };
 
+// Run DDL with autocommit ON, restoring the previous setting on scope exit
+// — A14.
+//
+// Promoted out of test_base.cpp so that transaction_tests,
+// array_param_tests and param_binding_tests stop hand-rolling the same
+// save/restore. Each of their copies had a defect this one does not:
+// treating a failed read as SQL_AUTOCOMMIT_OFF, forcing ON in a drop path
+// and never restoring, or restoring to a hard-coded ON.
+class ScopedAutocommitOn {
+public:
+    explicit ScopedAutocommitOn(SQLHDBC hdbc) : hdbc_(hdbc) {
+        // A14. `saved_` used to be initialised to 0 and the SQLGetConnectAttr
+        // return code ignored — and SQL_AUTOCOMMIT_OFF *is* 0. So a driver
+        // that declined the read got autocommit switched OFF by this
+        // destructor, and every later probe category ran inside an open
+        // transaction: exactly the state Firebird's DDL handling cannot
+        // survive. Default to ON and only restore what was actually read.
+        saved_ = SQL_AUTOCOMMIT_ON;
+        SQLUINTEGER value = 0;
+        if (SQL_SUCCEEDED(SQLGetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
+                                            &value, 0, nullptr))) {
+            saved_ = value;
+            have_saved_ = true;
+        }
+        SQLSetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
+                          reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON), 0);
+    }
+    ~ScopedAutocommitOn() {
+        // If the read failed there is nothing to restore *to*; leaving
+        // autocommit ON is the safe state and the one the connection almost
+        // certainly started in.
+        if (!have_saved_) return;
+        SQLSetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
+                          reinterpret_cast<SQLPOINTER>(
+                              static_cast<intptr_t>(saved_)), 0);
+    }
+    ScopedAutocommitOn(const ScopedAutocommitOn&) = delete;
+    ScopedAutocommitOn& operator=(const ScopedAutocommitOn&) = delete;
+private:
+    SQLHDBC hdbc_;
+    SQLUINTEGER saved_ = SQL_AUTOCOMMIT_ON;
+    bool have_saved_ = false;
+};
+
 // Result of turning a driver-filled character buffer into a std::string
 // without trusting the driver's reported length — A3.
 struct BoundedString {

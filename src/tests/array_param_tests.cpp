@@ -102,9 +102,11 @@ bool ArrayParamTests::create_test_table() {
 
 void ArrayParamTests::drop_test_table() {
     try {
-        // Ensure autocommit ON so DROP commits
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+        // A14: this used to set autocommit ON and never put it back, so every
+        // probe that ran afterwards inherited the change. The guard restores
+        // whatever was there — and treats a failed read as ON rather than as
+        // SQL_AUTOCOMMIT_OFF, which is 0.
+        ScopedAutocommitOn ac(conn_.get_handle());
         core::OdbcStatement stmt(conn_);
         stmt.execute("DROP TABLE ODBC_TEST_ARRAY");
     } catch (...) {

@@ -1017,6 +1017,12 @@ TestResult ParameterBindingTests::test_param_bind_once_execute_many_endtran() {
     std::string first_error;
 
     try {
+        // A14: this probe used to restore autocommit to a hard-coded ON in
+        // three separate places. The guard records whatever it actually was
+        // and puts that back however this block is left — including by the
+        // exception path below.
+        ScopedAutocommitOn ac(conn_.get_handle());
+
         // Switch to manual-commit so SQLEndTran has work to do — autocommit
         // would have already committed every row inside the loop.
         SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
@@ -1030,8 +1036,8 @@ TestResult ParameterBindingTests::test_param_bind_once_execute_many_endtran() {
         if (!SQL_SUCCEEDED(rc)) {
             result.status = TestStatus::SKIP_INCONCLUSIVE;
             result.actual = "SQLPrepare returned " + std::to_string(rc);
-            SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                              (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+            // A14: no manual restore — the guard above puts back the value
+            // the connection actually had, on this path too.
             drop_roundtrip_table();
             result.duration = elapsed();
             return result;
@@ -1061,16 +1067,11 @@ TestResult ParameterBindingTests::test_param_bind_once_execute_many_endtran() {
 
         // The probe under test — does COMMIT succeed?
         commit_rc = SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_COMMIT);
-
-        // Restore autocommit for the rest of the run.
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+        // A14: no manual restore — ScopedAutocommitOn above does it.
     } catch (const core::OdbcError& e) {
         result.status = TestStatus::ERR;
         result.actual = e.what();
         result.diagnostic = e.format_diagnostics();
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
         drop_roundtrip_table();
         result.duration = elapsed();
         return result;
