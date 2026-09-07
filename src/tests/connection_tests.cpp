@@ -29,8 +29,18 @@ TestResult ConnectionTests::test_connection_info() {
                                        dbname, sizeof(dbname), &dbname_len);
 
             if (SQL_SUCCEEDED(ret)) {
-                std::string db_name(reinterpret_cast<char*>(dbname), dbname_len);
-                r.actual = "Database name: " + db_name;
+                // A3: dbname_len is the total available length, and
+                // SQL_SUCCEEDED accepts the 01004 that comes with truncation.
+                // Firebird's SQL_DATABASE_NAME is a filesystem path, so >255
+                // is realistic rather than theoretical.
+                const auto db = bounded_string(reinterpret_cast<const char*>(dbname),
+                                               sizeof(dbname), dbname_len);
+                r.actual = "Database name: " + db.value;
+                if (db.truncated) {
+                    r.actual += " (truncated at " + std::to_string(sizeof(dbname) - 1) +
+                                " bytes; driver reported " +
+                                std::to_string(dbname_len) + ")";
+                }
             } else {
                 r.actual = "Could not retrieve database name";
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -53,8 +63,14 @@ TestResult ConnectionTests::test_connection_string_format() {
             core::check_odbc_result(ret, SQL_HANDLE_DBC, conn_.get_handle(),
                                     "SQLGetInfo(SQL_DRIVER_NAME)");
 
-            std::string name(reinterpret_cast<char*>(driver_name), driver_name_len);
-            r.actual = "Driver: " + name;
+            // A3: see test_connection_info above.
+            const auto name = bounded_string(reinterpret_cast<const char*>(driver_name),
+                                             sizeof(driver_name), driver_name_len);
+            r.actual = "Driver: " + name.value;
+            if (name.truncated) {
+                r.actual += " (truncated; driver reported " +
+                            std::to_string(driver_name_len) + " bytes)";
+            }
         },
         TestStatus::FAIL);
 }

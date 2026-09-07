@@ -59,6 +59,14 @@ struct RowVerification {
     std::string diagnostic;                  // Empty when ok
 };
 
+// Result of turning a driver-filled character buffer into a std::string
+// without trusting the driver's reported length — A3.
+struct BoundedString {
+    std::string value;
+    bool truncated = false;        // driver had more than the buffer could hold
+    bool length_unknown = false;   // driver returned SQL_NO_TOTAL, or a negative
+};
+
 // Base class for all ODBC tests
 class TestBase {
 public:
@@ -72,6 +80,24 @@ public:
 
     // Get test category name
     virtual std::string category_name() const = 0;
+
+    // Build a std::string from a buffer the driver filled, using the length
+    // the driver reported — safely. A3.
+    //
+    // The reported length is *total available* bytes, not bytes written, so on
+    // truncation it exceeds the buffer; `SQL_SUCCEEDED` accepts the 01004
+    // warning that accompanies it, so callers reached `std::string(buf, len)`
+    // with a length past the end of their own stack buffer. `SQL_NO_TOTAL`
+    // (-4) is worse: converted to size_t it becomes SIZE_MAX - 3.
+    //
+    // In a tool whose stated philosophy is "never crash" — and where main.cpp's
+    // crash guard would have reported the resulting fault as a *driver* crash.
+    //
+    // `capacity` is the full buffer size (use sizeof); one byte is reserved for
+    // the terminator, matching what a driver is allowed to write.
+    static BoundedString bounded_string(const char* buf, size_t capacity,
+                                        SQLLEN reported);
+
 
 protected:
     core::OdbcConnection& conn_;

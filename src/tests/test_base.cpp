@@ -8,9 +8,57 @@
 #include <sql.h>
 #include <sqlext.h>
 
+#include <algorithm>
+#include <cstring>
 #include <utility>
 
 namespace odbc_crusher::tests {
+
+BoundedString TestBase::bounded_string(const char* buf, size_t capacity,
+                                       SQLLEN reported) {
+    BoundedString out;
+    if (!buf || capacity == 0) {
+        out.length_unknown = true;
+        return out;
+    }
+
+    // A driver may use every byte but the last; the last is the terminator.
+    const size_t max_chars = capacity - 1;
+
+    // How much was actually written, bounded by the buffer. memchr rather than
+    // strlen so an unterminated buffer is not undefined behaviour.
+    const void* nul = std::memchr(buf, '\0', max_chars);
+    const size_t written =
+        nul ? static_cast<size_t>(static_cast<const char*>(nul) - buf) : max_chars;
+
+    if (reported == SQL_NO_TOTAL) {
+        // The driver cannot say how much there is. Take what is in the buffer.
+        out.length_unknown = true;
+        out.truncated = true;
+        out.value.assign(buf, written);
+        return out;
+    }
+
+    if (reported < 0) {
+        // SQL_NULL_DATA, or a driver returning nonsense. Either way there is
+        // no length to trust; report nothing rather than invent a string.
+        out.length_unknown = true;
+        return out;
+    }
+
+    const size_t reported_len = static_cast<size_t>(reported);
+    if (reported_len > max_chars) {
+        // The classic case: `reported` is the total available, not the amount
+        // written, and SQL_SUCCEEDED accepted the 01004 that came with it.
+        out.truncated = true;
+        out.value.assign(buf, written);
+        return out;
+    }
+
+    // Trust the driver's length, but never past what it can have written.
+    out.value.assign(buf, std::min(reported_len, written));
+    return out;
+}
 
 TestResult TestBase::make_result(
     const std::string& test_name,

@@ -63,7 +63,12 @@ std::optional<std::string> EscapeSequenceTests::call_native_sql(const std::strin
         static_cast<SQLINTEGER>(sql.length()),
         out, sizeof(out), &out_len);
     if (SQL_SUCCEEDED(ret)) {
-        return std::string(reinterpret_cast<char*>(out), out_len);
+        // A3: out_len is the *total available* length, not the amount written,
+        // and SQL_SUCCEEDED accepts the 01004 that accompanies truncation — so
+        // std::string(out, out_len) read past the end of this stack buffer.
+        // SQL_NO_TOTAL (-4) was worse: as a size_t it is SIZE_MAX - 3.
+        return bounded_string(reinterpret_cast<const char*>(out), sizeof(out),
+                              out_len).value;
     }
     return std::nullopt;
 }
@@ -78,7 +83,19 @@ std::optional<std::string> EscapeSequenceTests::exec_scalar(const std::string& s
         SQLLEN ind = 0;
         ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR, buf, sizeof(buf), &ind);
         if (SQL_SUCCEEDED(ret) && ind != SQL_NULL_DATA) {
-            return std::string(reinterpret_cast<char*>(buf), ind);
+            // A3: same shape as call_native_sql above — `ind` is the total
+            // available length, so an over-long value indexed off the end of
+            // this buffer.
+            const auto bounded =
+                bounded_string(reinterpret_cast<const char*>(buf), sizeof(buf), ind);
+            if (bounded.truncated) {
+                // A truncated value cannot be compared against an expected one,
+                // and this helper has no channel to say why — A4 replaces the
+                // optional with {value, sqlstate, diagnostic}, at which point
+                // truncation becomes a reportable outcome instead of silence.
+                return std::nullopt;
+            }
+            return bounded.value;
         }
         return std::nullopt;
     } catch (...) {

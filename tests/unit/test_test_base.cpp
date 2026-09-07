@@ -18,6 +18,7 @@
 #include "core/odbc_error.hpp"
 #include "tests/test_base.hpp"
 
+#include <cstring>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -171,4 +172,89 @@ TEST_F(RunTestFixture, DurationIsRecordedEvenWhenTheBodyThrows) {
     });
 
     EXPECT_GE(r.duration.count(), 0);
+}
+
+// ── TestBase::bounded_string — IMPROVEMENT_PLAN.md A3 ──────────────────────
+//
+// Driver-supplied lengths were being used directly as buffer lengths. The
+// reported length is the *total available* bytes, not the bytes written, and
+// SQL_SUCCEEDED accepts the 01004 warning that accompanies truncation — so
+// `std::string(buf, reported)` read past the end of the caller's stack buffer.
+// SQL_NO_TOTAL (-4) was worse: converted to size_t it is SIZE_MAX - 3.
+//
+// A pure function, so these are exhaustive rather than illustrative.
+
+TEST(BoundedStringTest, ExactLengthIsReturnedVerbatim) {
+    char buf[16] = "hello";
+    auto r = tests::TestBase::bounded_string(buf, sizeof(buf), 5);
+    EXPECT_EQ(r.value, "hello");
+    EXPECT_FALSE(r.truncated);
+    EXPECT_FALSE(r.length_unknown);
+}
+
+TEST(BoundedStringTest, EmptyValueIsNotAnError) {
+    char buf[16] = "";
+    auto r = tests::TestBase::bounded_string(buf, sizeof(buf), 0);
+    EXPECT_EQ(r.value, "");
+    EXPECT_FALSE(r.truncated);
+    EXPECT_FALSE(r.length_unknown);
+}
+
+// The core case: the driver says "there were 100 bytes" while handing back a
+// 16-byte buffer. Taking it at its word is an out-of-bounds read.
+TEST(BoundedStringTest, ReportedLengthPastTheBufferIsClampedAndFlagged) {
+    char buf[16];
+    std::memset(buf, 'A', sizeof(buf));   // deliberately not terminated
+    auto r = tests::TestBase::bounded_string(buf, sizeof(buf), 100);
+    EXPECT_TRUE(r.truncated);
+    EXPECT_EQ(r.value.size(), sizeof(buf) - 1)
+        << "must stop one short of the buffer, leaving room for a terminator";
+    EXPECT_EQ(r.value, std::string(sizeof(buf) - 1, 'A'));
+}
+
+// SQL_NO_TOTAL is -4. As a size_t that is SIZE_MAX - 3.
+TEST(BoundedStringTest, SqlNoTotalDoesNotBecomeAHugeLength) {
+    char buf[16] = "partial";
+    auto r = tests::TestBase::bounded_string(buf, sizeof(buf), SQL_NO_TOTAL);
+    EXPECT_EQ(r.value, "partial");
+    EXPECT_TRUE(r.length_unknown);
+    EXPECT_TRUE(r.truncated) << "if the driver cannot say how much there is, "
+                                "assume there is more";
+}
+
+TEST(BoundedStringTest, SqlNullDataYieldsNothingRatherThanAnInventedString) {
+    char buf[16] = "leftover";
+    auto r = tests::TestBase::bounded_string(buf, sizeof(buf), SQL_NULL_DATA);
+    EXPECT_EQ(r.value, "");
+    EXPECT_TRUE(r.length_unknown);
+}
+
+// An unterminated buffer with a reported length that fits must still not read
+// past what the driver can have written.
+TEST(BoundedStringTest, UnterminatedBufferIsBoundedByTheBuffer) {
+    char buf[8];
+    std::memset(buf, 'Z', sizeof(buf));
+    auto r = tests::TestBase::bounded_string(buf, sizeof(buf), 7);
+    EXPECT_EQ(r.value, "ZZZZZZZ");
+    EXPECT_FALSE(r.truncated);
+}
+
+// A driver that over-reports within the buffer must not make us return
+// uninitialised bytes past the terminator it did write.
+TEST(BoundedStringTest, ReportedLengthPastTheTerminatorIsClampedToIt) {
+    char buf[16] = {0};
+    std::memcpy(buf, "abc", 3);
+    auto r = tests::TestBase::bounded_string(buf, sizeof(buf), 10);
+    EXPECT_EQ(r.value, "abc");
+}
+
+TEST(BoundedStringTest, NullBufferAndZeroCapacityAreHandled) {
+    auto a = tests::TestBase::bounded_string(nullptr, 16, 5);
+    EXPECT_EQ(a.value, "");
+    EXPECT_TRUE(a.length_unknown);
+
+    char buf[4] = "abc";
+    auto b = tests::TestBase::bounded_string(buf, 0, 3);
+    EXPECT_EQ(b.value, "");
+    EXPECT_TRUE(b.length_unknown);
 }
