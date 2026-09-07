@@ -1,6 +1,7 @@
 #include "cursor_stress_tests.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
+#include <algorithm>
 #include <sstream>
 #include <vector>
 #include <memory>
@@ -68,9 +69,11 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
             auto total = std::chrono::duration_cast<std::chrono::microseconds>(overall_end - overall_start);
 
             std::ostringstream oss;
-            oss << successful << "/" << iterations << " cycles completed in "
-                << total.count() << " us ("
-                << (total.count() / iterations) << " us/iteration)";
+            // G6: the raw microsecond figures used to live here, which made
+            // two consecutive reports differ in this field every time. The
+            // per-probe timing is already reported as duration_us; `actual`
+            // carries the verdict-relevant fact.
+            oss << successful << "/" << iterations << " cycles completed";
 
             // Check for performance degradation (last 10 shouldn't be >10x first 10)
             if (first_10_duration.count() > 0 && last_10_duration.count() > first_10_duration.count() * 10) {
@@ -163,10 +166,18 @@ TestResult CursorStressTests::test_open_close_hammer_loop() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 — SQLCloseCursor must not re-fetch remaining rows",
         [&](TestResult& r) {
+            // A12. This used to compute `open_total_us / successful` in
+            // integer microseconds. On an in-process driver — the mock,
+            // DuckDB — that mean truncates to 0, and the `open_mean > 0` guard
+            // below then made the only FAIL condition unreachable: the probe
+            // degraded to an unconditional PASS exactly where a close-path
+            // regression would show. Timings are nanoseconds now and totals
+            // are compared directly, so there is no division to truncate.
             constexpr int kIterations = 500;
-            long long open_total_us = 0;
-            long long close_total_us = 0;
-            int successful = 0;
+            std::vector<long long> open_ns;
+            std::vector<long long> close_ns;
+            open_ns.reserve(kIterations);
+            close_ns.reserve(kIterations);
 
             for (int i = 0; i < kIterations; ++i) {
                 // OPEN phase
@@ -179,8 +190,6 @@ TestResult CursorStressTests::test_open_close_hammer_loop() {
                     reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT 1")),
                     SQL_NTS);
                 auto open_end = std::chrono::high_resolution_clock::now();
-                open_total_us += std::chrono::duration_cast<std::chrono::microseconds>(
-                    open_end - open_start).count();
 
                 if (!SQL_SUCCEEDED(rc)) {
                     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
@@ -192,30 +201,57 @@ TestResult CursorStressTests::test_open_close_hammer_loop() {
                 SQLCloseCursor(hstmt);
                 SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
                 auto close_end = std::chrono::high_resolution_clock::now();
-                close_total_us += std::chrono::duration_cast<std::chrono::microseconds>(
-                    close_end - close_start).count();
-                ++successful;
+
+                open_ns.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    open_end - open_start).count());
+                close_ns.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    close_end - close_start).count());
             }
 
+            const size_t successful = open_ns.size();
             if (successful == 0) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "Could not complete a single open/close cycle";
                 return;
             }
 
-            const long long open_mean  = open_total_us  / successful;
-            const long long close_mean = close_total_us / successful;
+            // A12: trim the slowest 5% of each phase before summing. A bare
+            // ratio over untrimmed totals trips on two scheduler preemptions
+            // across 500 iterations — a property of the runner, not the driver.
+            const auto trimmed_total = [](std::vector<long long> v) {
+                std::sort(v.begin(), v.end());
+                const size_t keep = v.size() - v.size() / 20;
+                long long sum = 0;
+                for (size_t i = 0; i < keep; ++i) sum += v[i];
+                return sum;
+            };
+            const long long open_total = trimmed_total(open_ns);
+            const long long close_total = trimmed_total(close_ns);
+
+            // A12: an absolute floor. Below this the two phases are too fast to
+            // compare and any ratio is measurement noise — which is the normal
+            // case for an in-process driver, and precisely where the old
+            // integer-division guard silently disabled the check instead of
+            // saying so.
+            constexpr long long kMinMeasurableNs = 1000000;   // 1 ms in total
 
             std::ostringstream oss;
-            oss << successful << "/" << kIterations
-                << " cycles | open_mean=" << open_mean << "us"
-                << " close_mean=" << close_mean << "us"
-                << " ratio=" << (open_mean > 0 ?
-                    static_cast<double>(close_mean) / static_cast<double>(open_mean) : 0.0);
-            r.actual = oss.str();
+            oss << successful << "/" << kIterations << " cycles";
 
-            // Threshold: close > 10× open mean is the documented red flag.
-            if (open_mean > 0 && close_mean > open_mean * 10) {
+            if (open_total < kMinMeasurableNs) {
+                oss << " | open phase under 1ms in total, too fast to compare";
+                r.actual = oss.str();
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                return;
+            }
+
+            // Threshold: close > 10x open is the documented red flag, compared
+            // as trimmed totals so there is no per-iteration division.
+            if (close_total > open_total * 10) {
+                oss << " | close/open ratio "
+                    << (static_cast<double>(close_total) /
+                        static_cast<double>(open_total))
+                    << " exceeds the 10x threshold";
                 r.status = TestStatus::FAIL;
                 r.severity = Severity::WARNING;
                 r.suggestion = "SQLCloseCursor is dramatically slower than the "
@@ -223,7 +259,14 @@ TestResult CursorStressTests::test_open_close_hammer_loop() {
                                "rows or holds a server-side resource until "
                                "close. Spec: close should be a near-no-op when "
                                "the cursor has been fully consumed.";
+            } else {
+                // G6: the measured ratio is deliberately omitted on the PASS
+                // path. It changes every run, and a report diff should show a
+                // changed verdict rather than changed noise. On the FAIL path
+                // the number is the evidence, so it stays.
+                oss << " | close/open ratio within the 10x threshold";
             }
+            r.actual = oss.str();
         });
 }
 
@@ -243,21 +286,30 @@ TestResult CursorStressTests::test_handle_reuse_no_leak() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 — diagnostic state is per-statement, cleared on next call",
         [&](TestResult& r) {
+            // A12. Two problems here, both of which made the probe say
+            // something other than what it is named for.
+            //
+            // The queue was sampled *after* SQLCloseCursor, so it counted the
+            // records that one call had just posted. Accumulation across
+            // cycles was undetectable by construction, because the next
+            // SQLExecDirect clears the queue before anything could build up.
+            // The sample now happens at the top of the iteration, before the
+            // execute that would clear it — so what is counted is genuinely
+            // what survived the previous cycle.
+            //
+            // And the verdict was `max_diag_records > 1`, which FAILs a driver
+            // that legitimately posts two warnings on one statement. What
+            // matters is whether the count *grows*, so the early and late
+            // iterations are compared instead of testing an absolute number.
             constexpr int kIterations = 500;
+            constexpr int kWindow = kIterations / 10;   // first/last 10%
             core::OdbcStatement stmt(conn_);
             int successful = 0;
-            int max_diag_records = 0;
+            int early_max = 0;
+            int late_max = 0;
+            int overall_max = 0;
 
-            for (int i = 0; i < kIterations; ++i) {
-                SQLRETURN rc = SQLExecDirect(stmt.get_handle(),
-                    reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT 1")),
-                    SQL_NTS);
-                if (!SQL_SUCCEEDED(rc)) continue;
-                SQLCloseCursor(stmt.get_handle());
-
-                // Count diagnostic records still present after close. Spec:
-                // SQLExecDirect clears the queue at entry; if records linger
-                // across cycles the count grows.
+            const auto count_diag_records = [&]() {
                 int rec = 0;
                 for (SQLSMALLINT j = 1; j <= 32; ++j) {
                     char state[6] = {0};
@@ -271,16 +323,33 @@ TestResult CursorStressTests::test_handle_reuse_no_leak() {
                     if (dr == SQL_NO_DATA || !SQL_SUCCEEDED(dr)) break;
                     ++rec;
                 }
-                if (rec > max_diag_records) max_diag_records = rec;
+                return rec;
+            };
+
+            for (int i = 0; i < kIterations; ++i) {
+                // Sample what the previous cycle left behind, before this
+                // iteration's SQLExecDirect clears it.
+                const int carried = count_diag_records();
+                if (carried > overall_max) overall_max = carried;
+                if (i < kWindow && carried > early_max) early_max = carried;
+                if (i >= kIterations - kWindow && carried > late_max) {
+                    late_max = carried;
+                }
+
+                SQLRETURN rc = SQLExecDirect(stmt.get_handle(),
+                    reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT 1")),
+                    SQL_NTS);
+                if (!SQL_SUCCEEDED(rc)) continue;
+                SQLCloseCursor(stmt.get_handle());
                 ++successful;
             }
 
             std::ostringstream oss;
-            oss << successful << "/" << kIterations
-                << " reuse cycles | max_diag_records_observed=" << max_diag_records;
-            r.actual = oss.str();
+            oss << successful << "/" << kIterations << " reuse cycles";
 
             if (successful < kIterations * 9 / 10) {
+                oss << " | only " << successful << " completed";
+                r.actual = oss.str();
                 r.status = TestStatus::FAIL;
                 r.severity = Severity::ERR;
                 r.suggestion = "Driver couldn't survive " +
@@ -288,13 +357,28 @@ TestResult CursorStressTests::test_handle_reuse_no_leak() {
                     "the same handle — likely cursor state corruption.";
                 return;
             }
-            if (max_diag_records > 1) {
+
+            // Growth, not an absolute count: a driver posting a steady two
+            // warnings per statement is fine; one whose carried-over count
+            // climbs from the first 10% of cycles to the last is leaking.
+            if (late_max > early_max) {
+                oss << " | records carried between cycles rose from "
+                    << early_max << " to " << late_max;
+                r.actual = oss.str();
                 r.status = TestStatus::FAIL;
                 r.severity = Severity::WARNING;
-                r.suggestion = "Diagnostic queue grew past one record across "
-                               "reuse cycles — SQLExecDirect should clear the "
-                               "queue at entry per spec.";
+                r.suggestion = "The diagnostic queue carried more records "
+                               "between cycles at the end of the run than at "
+                               "the start — records are accumulating instead "
+                               "of being cleared by SQLExecDirect at entry.";
+                return;
             }
+
+            // G6: a stable count is the verdict-relevant fact; it does not
+            // vary between runs the way a raw timing does, so it can stay.
+            oss << " | diagnostic records carried between cycles stable at "
+                << overall_max;
+            r.actual = oss.str();
         });
 }
 

@@ -5,9 +5,12 @@
 // Tests SKIP gracefully when the mock driver isn't loadable on the host
 // — an environment problem, not a regression to flag.
 #include <gtest/gtest.h>
+#include <functional>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <string>
+#include <vector>
 #include "e2e_harness.hpp"
 
 using namespace odbc_crusher::e2e;
@@ -716,4 +719,71 @@ TEST_F(CrusherE2EFixture, PerRowWarningsDoNotTruncateFetchLoops) {
     ASSERT_TRUE(t.has_value());
     EXPECT_NE(t->value("status", std::string{}), "FAIL")
         << "actual: " << t->value("actual", std::string{});
+}
+
+// G6 — two runs of the same binary against the same driver must differ only in
+// their timings, so that diffing a before/after report shows changed verdicts
+// rather than changed noise.
+//
+// This started as a Phase 0 exit criterion checked by hand; it found that of
+// 2,023 leaf values exactly two differed for a non-timing reason, both raw
+// microsecond figures baked into `actual` by the cursor-stress probes. Making
+// it executable stops that creeping back in.
+TEST_F(CrusherE2EFixture, TwoRunsDifferOnlyInTimings) {
+    const std::string conn =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;";
+    auto a = run_crusher(conn);
+    auto b = run_crusher(conn);
+    ASSERT_TRUE(a.report.contains("summary")) << a.raw_stderr;
+    ASSERT_TRUE(b.report.contains("summary")) << b.raw_stderr;
+
+    // Flatten to leaf paths so a difference can be named precisely.
+    std::function<void(const nlohmann::json&, const std::string&,
+                       std::map<std::string, std::string>&)> flatten =
+        [&](const nlohmann::json& j, const std::string& path,
+            std::map<std::string, std::string>& out) {
+            if (j.is_object()) {
+                for (auto it = j.begin(); it != j.end(); ++it) {
+                    flatten(it.value(), path + "/" + it.key(), out);
+                }
+            } else if (j.is_array()) {
+                for (size_t i = 0; i < j.size(); ++i) {
+                    flatten(j[i], path + "/" + std::to_string(i), out);
+                }
+            } else {
+                out[path] = j.dump();
+            }
+        };
+
+    std::map<std::string, std::string> fa, fb;
+    flatten(a.report, "", fa);
+    flatten(b.report, "", fb);
+
+    // Fields that are *expected* to move between runs.
+    const auto is_volatile = [](const std::string& key) {
+        return key == "/timestamp" ||
+               key.size() >= 12 &&
+                   key.compare(key.size() - 12, 12, "/duration_us") == 0 ||
+               key == "/summary/total_duration_us";
+    };
+
+    std::vector<std::string> unstable;
+    for (const auto& [key, value] : fa) {
+        if (is_volatile(key)) continue;
+        auto it = fb.find(key);
+        if (it == fb.end() || it->second != value) {
+            unstable.push_back(key + ": " + value + " vs " +
+                               (it == fb.end() ? "<missing>" : it->second));
+        }
+    }
+    for (const auto& [key, value] : fb) {
+        if (is_volatile(key)) continue;
+        if (fa.find(key) == fa.end()) unstable.push_back(key + ": <missing> vs " + value);
+    }
+
+    std::string detail;
+    for (const auto& u : unstable) detail += "\n  " + u;
+    EXPECT_TRUE(unstable.empty())
+        << unstable.size() << " non-timing value(s) differ between two "
+        << "identical runs, out of " << fa.size() << " leaves:" << detail;
 }
