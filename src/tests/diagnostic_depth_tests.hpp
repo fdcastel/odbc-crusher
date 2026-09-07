@@ -17,6 +17,9 @@ private:
     TestResult test_diagfield_sqlstate();
     TestResult test_diagfield_record_count();
     TestResult test_diagfield_row_count();
+    TestResult test_diagfield_return_code();
+    TestResult test_diagfield_dynamic_function();
+    TestResult test_diagfield_cursor_row_count();
     TestResult test_multiple_diagnostic_records();
 };
 

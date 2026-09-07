@@ -18,6 +18,9 @@ std::vector<TestResult> DiagnosticDepthTests::run() {
         test_diagfield_sqlstate(),
         test_diagfield_record_count(),
         test_diagfield_row_count(),
+        test_diagfield_return_code(),
+        test_diagfield_dynamic_function(),
+        test_diagfield_cursor_row_count(),
         test_multiple_diagnostic_records()
     };
 }
@@ -206,6 +209,209 @@ TestResult DiagnosticDepthTests::test_diagfield_row_count() {
                     "Two different numbers usually means the diagnostic "
                     "header field is not wired to the statement's row count "
                     "at all.";
+            }
+        });
+}
+
+// ── B11 — the header fields no probe used to read ────────────────────────
+//
+// The tool read SQL_DIAG_ROW_COUNT and nothing else from record 0. The mock
+// had SQL_DIAG_RETURNCODE, SQL_DIAG_DYNAMIC_FUNCTION and
+// SQL_DIAG_CURSOR_ROW_COUNT wrong — declared, read, and written by nobody —
+// until D22, and no probe could tell. A driver that never writes them would
+// ship the same way.
+
+TestResult DiagnosticDepthTests::test_diagfield_return_code() {
+    return run_test(
+        "test_diagfield_return_code", "SQLGetDiagField",
+        "SQL_DIAG_RETURNCODE reports the return code of the failed call, "
+        "not SQL_SUCCESS",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetDiagField: SQL_DIAG_RETURNCODE",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            // A statement no engine will accept. If a driver somehow does,
+            // there is nothing to measure here.
+            const SQLRETURN exec_ret = SQLExecDirectW(stmt.get_handle(),
+                SqlWcharBuf("THIS IS INVALID SQL SYNTAX !@#$").ptr(), SQL_NTS);
+            if (SQL_SUCCEEDED(exec_ret)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Driver accepted deliberately invalid SQL, so there "
+                           "is no failed call to read a return code from";
+                return;
+            }
+
+            SQLRETURN reported = SQL_SUCCESS;
+            SQLSMALLINT len = 0;
+            const SQLRETURN diag_ret = SQLGetDiagFieldW(
+                SQL_HANDLE_STMT, stmt.get_handle(), 0, SQL_DIAG_RETURNCODE,
+                &reported, 0, &len);
+            if (!SQL_SUCCEEDED(diag_ret)) {
+                r.actual = "SQLGetDiagField(SQL_DIAG_RETURNCODE) returned "
+                         + std::to_string(diag_ret);
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLGetDiagField(SQL_DIAG_RETURNCODE)");
+                return;
+            }
+
+            std::ostringstream oss;
+            oss << "SQLExecDirect returned " << exec_ret
+                << "; SQL_DIAG_RETURNCODE = " << reported;
+            r.actual = oss.str();
+            if (reported == exec_ret) {
+                // A23-style: measured, not assumed. Against a driver that
+                // deliberately reports SQL_SUCCESS in this field (the mock
+                // before D22 did exactly that), the probe still read
+                // SQL_ERROR - so on Windows the driver manager answers
+                // SQL_DIAG_RETURNCODE itself and the agreement is a fact
+                // about the stack, not about the driver. Reported, not
+                // scored (B2). The disagreement branch below stays scored:
+                // if a mismatch ever does reach the application, it is worth
+                // failing on whoever produced it.
+                r.status = TestStatus::INFORMATIONAL;
+                return;
+            }
+            if (reported != exec_ret) {
+                r.status = TestStatus::FAIL;
+                r.suggestion =
+                    "SQL_DIAG_RETURNCODE is the return code of the last "
+                    "function called on the handle. Reporting SQL_SUCCESS "
+                    "after a call that returned SQL_ERROR usually means the "
+                    "field is never written at all.";
+            }
+        });
+}
+
+TestResult DiagnosticDepthTests::test_diagfield_dynamic_function() {
+    return run_test(
+        "test_diagfield_dynamic_function", "SQLGetDiagField",
+        "SQL_DIAG_DYNAMIC_FUNCTION_CODE names the statement just executed",
+        Severity::WARNING, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetDiagField: SQL_DIAG_DYNAMIC_FUNCTION_CODE",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+
+            // A SELECT is the one statement every engine in the matrix runs,
+            // and its code is unambiguous.
+            const auto variants = literal_select_variants("SELECT 1");
+            bool executed = false;
+            for (const auto& q : variants) {
+                if (SQL_SUCCEEDED(SQLExecDirectW(stmt.get_handle(),
+                                                 SqlWcharBuf(q.c_str()).ptr(),
+                                                 SQL_NTS))) {
+                    executed = true;
+                    break;
+                }
+                SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+            }
+            if (!executed) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "No SELECT variant executed, so there is no "
+                           "statement to name";
+                return;
+            }
+
+            SQLINTEGER code = -1;
+            SQLSMALLINT len = 0;
+            const SQLRETURN diag_ret = SQLGetDiagFieldW(
+                SQL_HANDLE_STMT, stmt.get_handle(), 0,
+                SQL_DIAG_DYNAMIC_FUNCTION_CODE, &code, 0, &len);
+            if (!SQL_SUCCEEDED(diag_ret)) {
+                r.actual = "SQLGetDiagField(SQL_DIAG_DYNAMIC_FUNCTION_CODE) "
+                           "returned " + std::to_string(diag_ret);
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLGetDiagField(SQL_DIAG_DYNAMIC_FUNCTION_CODE)");
+                return;
+            }
+
+            std::ostringstream oss;
+            oss << "SQL_DIAG_DYNAMIC_FUNCTION_CODE = " << code
+                << " (expected " << SQL_DIAG_SELECT_CURSOR
+                << ", SQL_DIAG_SELECT_CURSOR)";
+            r.actual = oss.str();
+            if (code != SQL_DIAG_SELECT_CURSOR) {
+                r.status = TestStatus::FAIL;
+                r.suggestion =
+                    code == SQL_DIAG_UNKNOWN_STATEMENT
+                    ? "The driver reports SQL_DIAG_UNKNOWN_STATEMENT after a "
+                      "SELECT. That code means \"I do not know what this "
+                      "statement was\", which is rarely true of the statement "
+                      "the driver just parsed and executed."
+                    : "SQL_DIAG_DYNAMIC_FUNCTION_CODE should be "
+                      "SQL_DIAG_SELECT_CURSOR after a SELECT that opened a "
+                      "cursor.";
+            }
+        });
+}
+
+TestResult DiagnosticDepthTests::test_diagfield_cursor_row_count() {
+    return run_test(
+        "test_diagfield_cursor_row_count", "SQLGetDiagField",
+        "SQL_DIAG_CURSOR_ROW_COUNT agrees with the number of rows fetched",
+        Severity::WARNING, ConformanceLevel::LEVEL_1,
+        "ODBC 3.8 SQLGetDiagField: SQL_DIAG_CURSOR_ROW_COUNT",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            const auto variants = literal_select_variants("SELECT 1");
+            bool executed = false;
+            for (const auto& q : variants) {
+                if (SQL_SUCCEEDED(SQLExecDirectW(stmt.get_handle(),
+                                                 SqlWcharBuf(q.c_str()).ptr(),
+                                                 SQL_NTS))) {
+                    executed = true;
+                    break;
+                }
+                SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+            }
+            if (!executed) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "No SELECT variant executed";
+                return;
+            }
+
+            SQLLEN reported = -1;
+            SQLSMALLINT len = 0;
+            const SQLRETURN diag_ret = SQLGetDiagFieldW(
+                SQL_HANDLE_STMT, stmt.get_handle(), 0,
+                SQL_DIAG_CURSOR_ROW_COUNT, &reported, 0, &len);
+
+            // Count what the cursor actually holds. The loop must accept
+            // SQL_SUCCESS_WITH_INFO: a driver that posts a per-row warning
+            // still delivered the row, and `== SQL_SUCCESS` would stop at the
+            // first one and then blame the driver for a row count the cursor
+            // does have. The e2e harness has a scenario for exactly this
+            // mistake, and it caught this probe making it.
+            SQLLEN fetched = 0;
+            while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) ++fetched;
+            SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+
+            if (!SQL_SUCCEEDED(diag_ret)) {
+                r.actual = "SQLGetDiagField(SQL_DIAG_CURSOR_ROW_COUNT) "
+                           "returned " + std::to_string(diag_ret);
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.suggestion =
+                    "SQL_DIAG_CURSOR_ROW_COUNT is only defined for drivers "
+                    "that can count a cursor's rows without fetching them; a "
+                    "driver that declines to answer is not violating Core.";
+                return;
+            }
+
+            std::ostringstream oss;
+            oss << "SQL_DIAG_CURSOR_ROW_COUNT = " << reported
+                << "; rows actually fetched = " << fetched;
+            r.actual = oss.str();
+
+            // A driver that cannot know the count before fetching reports 0
+            // or -1, which is legitimate. A positive number that disagrees
+            // with the cursor is not.
+            if (reported > 0 && reported != fetched) {
+                r.status = TestStatus::FAIL;
+                r.suggestion =
+                    "SQL_DIAG_CURSOR_ROW_COUNT reported a row count the "
+                    "cursor does not have. Reporting 0 or -1 for \"not "
+                    "known without fetching\" is fine; reporting a different "
+                    "positive number is not.";
             }
         });
 }
