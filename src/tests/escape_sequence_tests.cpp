@@ -2,8 +2,12 @@
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <vector>
 
 namespace odbc_crusher::tests {
 
@@ -220,7 +224,8 @@ TestResult EscapeSequenceTests::test_convert_function_capabilities() {
             oss << types_with_conversions << " of " << (sizeof(convert_types) / sizeof(convert_types[0]))
                 << " types have conversion support";
             if (conv_funcs) {
-                oss << "; CONVERT_FUNCTIONS=0x" << std::hex << *conv_funcs;
+                oss << "; CONVERT_FUNCTIONS=0x" << std::hex << *conv_funcs
+                    << std::dec;
             }
 
             r.actual = oss.str();
@@ -981,6 +986,20 @@ CallProbeOutcome run_mock_inout_call(core::OdbcConnection& conn,
         return out;
     }
     out.execute_ok = true;
+
+    // A16: drain any result sets the procedure produced before reading the
+    // output parameters. A driver may legally defer populating bound OUT and
+    // INOUT buffers until every result set has been consumed, so a conformant
+    // driver whose SP body returns a result set was being FAILed at
+    // Severity::ERR for "did not write to the bound buffer".
+    //
+    // SQL_NO_DATA ends the sequence; anything else means there are no more
+    // result sets to wait for, and it is not this helper's job to judge that.
+    int guard = 0;
+    while (SQLMoreResults(stmt.get_handle()) == SQL_SUCCESS) {
+        if (++guard > 100) break;   // a driver stuck on the same result set
+    }
+
     out.inout_text = std::string(inout_buf);
     return out;
 }

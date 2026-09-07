@@ -11,6 +11,7 @@
 #endif
 #include <sql.h>
 #include <sqlext.h>
+#include <algorithm>   // A26: std::min was used without it
 
 namespace odbc_crusher::tests {
 
@@ -696,6 +697,7 @@ TestResult DataTypeEdgeCaseTests::test_varchar_raw_byte_integrity() {
                 actual << std::setfill('0') << std::setw(2) << std::hex
                        << static_cast<int>(raw[i]);
             }
+            actual << std::dec << std::setfill(' ');
             actual << " (informational; engines with inline length prefixes "
                       "should NOT show ASCII 'A'=0x41 in the first prefix bytes)";
             r.actual = actual.str();
@@ -835,8 +837,14 @@ TestResult DataTypeEdgeCaseTests::test_null_vs_zero_distinction_integer() {
             // Sentinel value for the NULL row: a driver that zeroes the buffer
             // instead of setting SQL_NULL_DATA leaves us unable to distinguish
             // VAL=0 from NULL.
-            SQLINTEGER bufZero = 0xDEADBEEF;
-            SQLINTEGER bufNull = 0xDEADBEEF;
+            // A26: 0xDEADBEEF exceeds INT32_MAX, so assigning it to a signed
+            // SQLINTEGER was implementation-defined before C++20. The sentinel
+            // only has to be a value the driver would never produce for this
+            // column; the two's-complement bit pattern of 0xDEADBEEF is that,
+            // written in a way the standard defines.
+            constexpr SQLINTEGER kSentinel = static_cast<SQLINTEGER>(0xDEADBEEFu);
+            SQLINTEGER bufZero = kSentinel;
+            SQLINTEGER bufNull = kSentinel;
             SQLLEN indZero = 999, indNull = 999;
             if (!collect_indicators(conn_, table, SQL_C_SLONG,
                                     bufZero, indZero,

@@ -1,7 +1,9 @@
 #include "metadata_tests.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
+#include <optional>
 #include <sstream>
+#include <string>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -782,11 +784,15 @@ std::string fetch_string_col(SQLHSTMT h, SQLUSMALLINT col) {
     return std::string(buf);
 }
 
-long long fetch_int_col(SQLHSTMT h, SQLUSMALLINT col) {
+// A18: this returned 0 for a NULL value *and* for a failed SQLGetData, and
+// 0 is also SQL_PARAM_TYPE_UNKNOWN — so an unreadable row was indistinguishable
+// from a legitimate one and got counted as a bogus type code. Returns nullopt
+// for "no value" now, leaving the caller to decide what that means.
+std::optional<long long> fetch_int_col(SQLHSTMT h, SQLUSMALLINT col) {
     SQLBIGINT v = 0;
     SQLLEN ind = 0;
     SQLRETURN rc = SQLGetData(h, col, SQL_C_SBIGINT, &v, sizeof(v), &ind);
-    if (!SQL_SUCCEEDED(rc) || ind == SQL_NULL_DATA) return 0;
+    if (!SQL_SUCCEEDED(rc) || ind == SQL_NULL_DATA) return std::nullopt;
     return static_cast<long long>(v);
 }
 
@@ -837,16 +843,24 @@ TestResult MetadataTests::test_sqlprocedures_smoke() {
             }
 
             // Walk the result, count rows, capture the first procedure name.
+            //
+            // A26: capped. SQLProcedures on PostgreSQL returns thousands of
+            // pg_catalog rows, and this probe only needs to know that the call
+            // works and returns a plausible shape.
+            constexpr int kMaxRows = 500;
             int row_count = 0;
+            bool hit_cap = false;
             std::string first_name;
             while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
                 if (row_count == 0) {
                     first_name = fetch_string_col(stmt.get_handle(), 3);
                 }
                 ++row_count;
+                if (row_count >= kMaxRows) { hit_cap = true; break; }
             }
             std::ostringstream oss;
             oss << "ncols=" << ncols << " rows=" << row_count;
+            if (hit_cap) oss << "+ (stopped at cap)";
             if (!first_name.empty()) oss << " first=" << first_name;
             r.actual = oss.str();
             // Empty procedure list is valid — many DBMSs ship without stored
@@ -895,26 +909,43 @@ TestResult MetadataTests::test_sqlprocedurecolumns_smoke() {
                 return;
             }
 
+            // A26: capped, as above.
+            constexpr int kMaxRows = 500;
             int row_count = 0;
+            bool hit_cap = false;
             int input_count = 0, output_count = 0, inout_count = 0,
-                result_count = 0, return_count = 0, other_count = 0;
+                result_count = 0, return_count = 0, other_count = 0,
+                unknown_count = 0, unreadable_count = 0;
             std::ostringstream first_rows;
             while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
                 ++row_count;
+                if (row_count >= kMaxRows) { hit_cap = true; break; }
                 std::string proc = fetch_string_col(stmt.get_handle(), 3);
                 std::string colname = fetch_string_col(stmt.get_handle(), 4);
-                long long ctype = fetch_int_col(stmt.get_handle(), 5);
-                switch (static_cast<SQLSMALLINT>(ctype)) {
-                    case SQL_PARAM_INPUT:        ++input_count;  break;
-                    case SQL_PARAM_OUTPUT:       ++output_count; break;
-                    case SQL_PARAM_INPUT_OUTPUT: ++inout_count;  break;
-                    case SQL_RESULT_COL:         ++result_count; break;
-                    case SQL_RETURN_VALUE:       ++return_count; break;
-                    default:                     ++other_count; break;
+                std::optional<long long> ctype = fetch_int_col(stmt.get_handle(), 5);
+                if (!ctype) {
+                    // A18: unreadable or NULL COLUMN_TYPE. Counted separately
+                    // — it is a different defect from a code outside the set.
+                    ++unreadable_count;
+                } else {
+                    switch (static_cast<SQLSMALLINT>(*ctype)) {
+                        // A18: SQL_PARAM_TYPE_UNKNOWN (0) is in the spec's
+                        // documented set and was missing, so every driver that
+                        // reports it landed in other_count and FAILed.
+                        case SQL_PARAM_TYPE_UNKNOWN: ++unknown_count; break;
+                        case SQL_PARAM_INPUT:        ++input_count;  break;
+                        case SQL_PARAM_OUTPUT:       ++output_count; break;
+                        case SQL_PARAM_INPUT_OUTPUT: ++inout_count;  break;
+                        case SQL_RESULT_COL:         ++result_count; break;
+                        case SQL_RETURN_VALUE:       ++return_count; break;
+                        default:                     ++other_count; break;
+                    }
                 }
                 if (row_count <= 3) {
                     if (row_count > 1) first_rows << ", ";
-                    first_rows << proc << "." << colname << "(type=" << ctype << ")";
+                    first_rows << proc << "." << colname << "(type=";
+                    if (ctype) first_rows << *ctype; else first_rows << "?";
+                    first_rows << ")";
                 }
             }
             std::ostringstream oss;
@@ -924,7 +955,10 @@ TestResult MetadataTests::test_sqlprocedurecolumns_smoke() {
                 << " INOUT=" << inout_count
                 << " RESULT=" << result_count
                 << " RETURN=" << return_count;
+            if (unknown_count) oss << " UNKNOWN=" << unknown_count;
             if (other_count) oss << " OTHER=" << other_count;
+            if (unreadable_count) oss << " UNREADABLE=" << unreadable_count;
+            if (hit_cap) oss << " (stopped at cap)";
             if (row_count > 0) oss << " sample=[" << first_rows.str() << "]";
             r.actual = oss.str();
 
@@ -938,9 +972,16 @@ TestResult MetadataTests::test_sqlprocedurecolumns_smoke() {
             if (other_count > 0) {
                 r.status = TestStatus::FAIL;
                 r.suggestion = "Some COLUMN_TYPE codes are outside the documented "
-                               "set {SQL_PARAM_INPUT, SQL_PARAM_OUTPUT, "
-                               "SQL_PARAM_INPUT_OUTPUT, SQL_RESULT_COL, "
-                               "SQL_RETURN_VALUE}.";
+                               "set {SQL_PARAM_TYPE_UNKNOWN, SQL_PARAM_INPUT, "
+                               "SQL_PARAM_OUTPUT, SQL_PARAM_INPUT_OUTPUT, "
+                               "SQL_RESULT_COL, SQL_RETURN_VALUE}.";
+            } else if (unreadable_count > 0) {
+                // A18: a row whose COLUMN_TYPE cannot be read is its own
+                // failure, not a bogus type code.
+                r.status = TestStatus::FAIL;
+                r.suggestion = "COLUMN_TYPE could not be read for some rows. "
+                               "It is a NOT NULL SMALLINT in the documented "
+                               "result set, so every row must carry one.";
             }
         });
 }

@@ -388,6 +388,13 @@ TestResult StatementTests::test_bind_col_integer() {
         "Bind an integer column and fetch via bound buffer",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLBindCol",
         [&](TestResult& r) {
+            // A26: the bound buffers are declared before the statement so
+            // that they outlive it. They used to live inside the loop body,
+            // so a `break` left the statement handle holding a binding to a
+            // dead stack slot until the OdbcStatement destructor ran — and
+            // destruction order made hoisting them below `stmt` no better.
+            SQLINTEGER value = 0;
+            SQLLEN indicator = 0;
             core::OdbcStatement stmt(conn_);
 
             std::vector<std::string> queries = {"SELECT 42", "SELECT 42 FROM RDB$DATABASE"};
@@ -396,9 +403,6 @@ TestResult StatementTests::test_bind_col_integer() {
             for (const auto& query : queries) {
                 try {
                     stmt.execute(query);
-
-                    SQLINTEGER value = 0;
-                    SQLLEN indicator = 0;
 
                     SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG,
                                              &value, sizeof(value), &indicator);
@@ -442,6 +446,13 @@ TestResult StatementTests::test_bind_col_string() {
         "Bind a string column and fetch via bound buffer",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLBindCol",
         [&](TestResult& r) {
+            // A26: the bound buffers are declared before the statement so
+            // that they outlive it. They used to live inside the loop body,
+            // so a `break` left the statement handle holding a binding to a
+            // dead stack slot until the OdbcStatement destructor ran — and
+            // destruction order made hoisting them below `stmt` no better.
+            SQLCHAR value[256] = {0};
+            SQLLEN indicator = 0;
             core::OdbcStatement stmt(conn_);
 
             std::vector<std::string> queries = {"SELECT 'hello'", "SELECT 'hello' FROM RDB$DATABASE"};
@@ -450,9 +461,6 @@ TestResult StatementTests::test_bind_col_string() {
             for (const auto& query : queries) {
                 try {
                     stmt.execute(query);
-
-                    SQLCHAR value[256] = {0};
-                    SQLLEN indicator = 0;
 
                     SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_CHAR,
                                              value, sizeof(value), &indicator);
@@ -483,6 +491,13 @@ TestResult StatementTests::test_fetch_bound_vs_getdata() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLBindCol, SQLGetData",
         [&](TestResult& r) {
+            // A26: the bound buffers are declared before the statement so
+            // that they outlive it. They used to live inside the loop body,
+            // so a `break` left the statement handle holding a binding to a
+            // dead stack slot until the OdbcStatement destructor ran — and
+            // destruction order made hoisting them below `stmt` no better.
+            SQLINTEGER bound_value = 0;
+            SQLLEN indicator = 0;
             core::OdbcStatement stmt(conn_);
 
             std::vector<std::string> queries = {"SELECT 99", "SELECT 99 FROM RDB$DATABASE"};
@@ -495,8 +510,6 @@ TestResult StatementTests::test_fetch_bound_vs_getdata() {
                     // A7: the SQLBindCol return code used to be discarded.
                     // SQLBindCol is Core, so a failure here is the driver's,
                     // and continuing would have compared an unwritten buffer.
-                    SQLINTEGER bound_value = 0;
-                    SQLLEN indicator = 0;
                     SQLRETURN bind_rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG,
                                                    &bound_value, sizeof(bound_value),
                                                    &indicator);

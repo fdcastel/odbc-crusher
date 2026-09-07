@@ -228,20 +228,30 @@ TestResult CursorStressTests::test_open_close_hammer_loop() {
             const long long open_total = trimmed_total(open_ns);
             const long long close_total = trimmed_total(close_ns);
 
-            // A12: an absolute floor. Below this the two phases are too fast to
-            // compare and any ratio is measurement noise — which is the normal
-            // case for an in-process driver, and precisely where the old
-            // integer-division guard silently disabled the check instead of
-            // saying so.
-            constexpr long long kMinMeasurableNs = 1000000;   // 1 ms in total
+            // A12: an absolute floor, so a ratio between two negligible
+            // quantities is not treated as a finding.
+            //
+            // The floor is on the *close* phase, not the open one. The question
+            // this probe asks is "is SQLCloseCursor pathologically slow?", and
+            // if the whole close phase takes under a millisecond across 500
+            // cycles the answer is no at any ratio — a 20x ratio between 20us
+            // and 400us is scheduler noise, not a driver re-fetching rows.
+            //
+            // An earlier version put the floor on the open phase and reported
+            // SKIP_INCONCLUSIVE below it. CI caught that: the e2e slots run the
+            // *Release* build, where the mock's open phase drops under 1ms and
+            // the probe stopped returning a verdict at all, breaking the
+            // 195/195 reference contract. A measured "not pathological" is a
+            // real PASS, not an absence of information.
+            constexpr long long kNegligibleNs = 1000000;   // 1 ms in total
 
             std::ostringstream oss;
             oss << successful << "/" << kIterations << " cycles";
 
-            if (open_total < kMinMeasurableNs) {
-                oss << " | open phase under 1ms in total, too fast to compare";
+            if (close_total <= kNegligibleNs) {
+                oss << " | close phase under 1ms in total, not pathological at "
+                       "any ratio";
                 r.actual = oss.str();
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
                 return;
             }
 

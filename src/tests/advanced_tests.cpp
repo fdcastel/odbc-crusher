@@ -354,8 +354,18 @@ TestResult AdvancedTests::test_fetch_scroll_next() {
                         success = true;
                         break;
                     } else if (rc == SQL_NO_DATA) {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQLFetchScroll(SQL_FETCH_NEXT) returned SQL_NO_DATA (empty result)";
+                        // A26: this used to PASS as "empty result". The query
+                        // is `SELECT 1`, which has exactly one row — so
+                        // SQL_NO_DATA on the first fetch means the driver lost
+                        // it, not that the result set was empty.
+                        r.status = TestStatus::FAIL;
+                        r.actual = "SQLFetchScroll(SQL_FETCH_NEXT) returned "
+                                   "SQL_NO_DATA on the first row of a "
+                                   "single-row result set";
+                        r.severity = Severity::ERR;
+                        r.suggestion =
+                            "SELECT 1 returns one row; the first "
+                            "SQLFetchScroll(SQL_FETCH_NEXT) must deliver it.";
                         success = true;
                         break;
                     }

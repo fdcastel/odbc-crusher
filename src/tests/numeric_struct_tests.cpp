@@ -36,15 +36,32 @@ std::vector<TestResult> NumericStructTests::run() {
     };
 }
 
-// Helper: convert SQL_NUMERIC_STRUCT val[] to double
+// Helper: convert SQL_NUMERIC_STRUCT val[] to double.
+//
+// A26: this used to shift all 16 val[] bytes into an `unsigned long long`,
+// where every `<< 8` past the eighth byte silently discards the top one — so
+// bytes 8-15 were dropped, in a file whose probes are named for extremes.
+// Accumulating into the double this function already returns keeps every byte;
+// the precision limit is then double's own, which is inherent to the return
+// type rather than an accident of the loop.
 static double numeric_struct_to_double(const SQL_NUMERIC_STRUCT& ns) {
-    unsigned long long int_val = 0;
+    double int_val = 0.0;
     for (int i = SQL_MAX_NUMERIC_LEN - 1; i >= 0; --i) {
-        int_val = (int_val << 8) | ns.val[i];
+        int_val = int_val * 256.0 + static_cast<double>(ns.val[i]);
     }
-    double result = static_cast<double>(int_val) / std::pow(10.0, ns.scale);
+    double result = int_val / std::pow(10.0, ns.scale);
     if (ns.sign == 0) result = -result;
     return result;
+}
+
+// True when a SQL_NUMERIC_STRUCT carries more magnitude than a uint64 mantissa
+// can hold — i.e. any of the high 8 val[] bytes is set. A26: probes that
+// reconstruct an exact integer mantissa must check this rather than wrap.
+static bool numeric_exceeds_64_bits(const SQL_NUMERIC_STRUCT& ns) {
+    for (int i = 8; i < SQL_MAX_NUMERIC_LEN; ++i) {
+        if (ns.val[i] != 0) return true;
+    }
+    return false;
 }
 
 // Helper: set ARD descriptor precision/scale for SQL_C_NUMERIC retrieval
@@ -631,9 +648,20 @@ TestResult NumericStructTests::test_decimal_sum_loop_precision() {
                     r.actual = "SQLGetData(SQL_C_NUMERIC) returned " + std::to_string(rc);
                     return;
                 }
-                // Reconstruct mantissa, normalising for the driver's reported scale.
+                // Reconstruct mantissa, normalising for the driver's reported
+                // scale. A26: the loop used to run over all 16 val[] bytes into
+                // a 64-bit accumulator, silently dropping bytes 8-15. Values
+                // that large cannot be summed exactly here, so say so instead
+                // of reporting a wrapped total.
+                if (numeric_exceeds_64_bits(ns)) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = "Driver returned a mantissa wider than 64 bits; "
+                               "this probe sums mantissas exactly and cannot "
+                               "represent it";
+                    return;
+                }
                 uint64_t mantissa = 0;
-                for (int i = SQL_MAX_NUMERIC_LEN - 1; i >= 0; --i) {
+                for (int i = 7; i >= 0; --i) {
                     mantissa = (mantissa << 8) | ns.val[i];
                 }
                 int scale_diff = static_cast<int>(ns.scale) - static_cast<int>(kScale);

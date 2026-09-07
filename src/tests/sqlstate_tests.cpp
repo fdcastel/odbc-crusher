@@ -82,7 +82,7 @@ TestResult SqlstateTests::test_execute_without_prepare() {
 TestResult SqlstateTests::test_fetch_no_cursor() {
     return run_test(
         "test_fetch_no_cursor", "SQLFetch",
-        "SQL_ERROR with SQLSTATE 24000",
+        "SQL_ERROR with SQLSTATE HY010 (24000 tolerated)",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLFetch, Appendix B: Statement Transitions",
         [&](TestResult& r) {
@@ -94,16 +94,30 @@ TestResult SqlstateTests::test_fetch_no_cursor() {
 
                 if (rc == SQL_ERROR) {
                     std::string state = get_stmt_sqlstate(stmt.get_handle());
-                    if (state == "24000") {
+                    // A26: this had the two states the wrong way round. The
+                    // statement here is freshly allocated with no prepare and
+                    // no execute, which is Appendix B state S1, and the
+                    // transition table gives HY010 (function sequence error)
+                    // for SQLFetch in S1. 24000 (invalid cursor state) is the
+                    // answer from S2/S3, where a statement exists but no cursor
+                    // is open. Many drivers return 24000 here anyway, so it
+                    // stays a PASS — but the suggestion no longer tells a
+                    // correct driver that it got it wrong.
+                    if (state == "HY010") {
                         r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with 24000 (Invalid cursor state)";
-                    } else if (state == "HY010") {
+                        r.actual = "SQL_ERROR with HY010 (Function sequence error)";
+                    } else if (state == "24000") {
                         r.status = TestStatus::PASS;
-                        r.actual = "SQL_ERROR with HY010 (Function sequence error) - acceptable alternative";
-                        r.suggestion = "ODBC spec prefers 24000 for fetch without active cursor";
+                        r.actual = "SQL_ERROR with 24000 (Invalid cursor state) - "
+                                   "tolerated alternative";
+                        r.suggestion = "Appendix B gives HY010 for SQLFetch on a "
+                                       "statement that has never been prepared or "
+                                       "executed (state S1); 24000 is the state S2/S3 "
+                                       "answer. Both are widely returned.";
                     } else {
                         r.status = TestStatus::FAIL;
-                        r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 24000)";
+                        r.actual = "SQL_ERROR but SQLSTATE=" + state +
+                                   " (expected HY010, or 24000)";
                         r.severity = Severity::WARNING;
                     }
                 } else {

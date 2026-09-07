@@ -579,7 +579,8 @@ TestResult ArrayParamTests::test_param_status_array() {
                 case SQL_PARAM_ERROR: actual << "ERROR"; all_success = false; break;
                 case SQL_PARAM_UNUSED: actual << "UNUSED"; break;
                 case SQL_PARAM_DIAG_UNAVAILABLE: actual << "DIAG_UNAVAILABLE"; break;
-                default: actual << "0x" << std::hex << status_array[i]; all_success = false; break;
+                default: actual << "0x" << std::hex << status_array[i] << std::dec;
+                         all_success = false; break;
             }
         }
         actual << "]";
@@ -806,7 +807,7 @@ TestResult ArrayParamTests::test_param_operation_array() {
                 case SQL_PARAM_SUCCESS: actual << "SUCCESS"; break;
                 case SQL_PARAM_UNUSED: actual << "UNUSED"; break;
                 case SQL_PARAM_ERROR: actual << "ERROR"; break;
-                default: actual << "0x" << std::hex << status_array[i]; break;
+                default: actual << "0x" << std::hex << status_array[i] << std::dec; break;
             }
             
             // Rows 1 and 3 should be UNUSED (they were IGNORED)
@@ -1000,7 +1001,8 @@ TestResult ArrayParamTests::test_array_partial_error() {
                 case SQL_PARAM_ERROR: 
                     actual << "ERROR"; break;
                 default: 
-                    actual << "0x" << std::hex << status_array[i]; break;
+                    actual << "0x" << std::hex << status_array[i] << std::dec;
+                    break;
             }
         }
         actual << "]";
