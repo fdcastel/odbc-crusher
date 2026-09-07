@@ -571,7 +571,9 @@ std::vector<MockProcedure> MockCatalog::snapshot_procedures() const {
     return procedures_;
 }
 
-bool MockCatalog::matches_pattern(const std::string& value, const std::string& pattern) {
+bool MockCatalog::matches_pattern(const std::string& value,
+                                  const std::string& pattern,
+                                  char escape_char) {
     if (pattern.empty() || pattern == "%") return true;
     
     std::string upper_value = to_upper(value);
@@ -583,7 +585,8 @@ bool MockCatalog::matches_pattern(const std::string& value, const std::string& p
     size_t plen = upper_pattern.length();
     
     while (v < vlen && p < plen) {
-        if (upper_pattern[p] == '\\' && p + 1 < plen) {
+        if (escape_char != '\0' && upper_pattern[p] == escape_char
+            && p + 1 < plen) {
             // D25: `\\` is the escape character this driver advertises
             // through SQLGetInfo(SQL_SEARCH_PATTERN_ESCAPE), and the matcher
             // ignored it - so a caller asking for a name containing a literal
@@ -599,7 +602,8 @@ bool MockCatalog::matches_pattern(const std::string& value, const std::string& p
             
             // Find next match
             while (v < vlen) {
-                if (matches_pattern(upper_value.substr(v), upper_pattern.substr(p))) {
+                if (matches_pattern(upper_value.substr(v),
+                                    upper_pattern.substr(p), escape_char)) {
                     return true;
                 }
                 ++v;

@@ -102,9 +102,11 @@ protected:
 TEST_F(WhereParserTest, DeleteWithAnUnreadablePredicateErrorsAndKeepsTheRows) {
     ASSERT_EQ(TableSize(), 4);
 
-    // LIKE is not implemented. Before D12 this fell through to "match
-    // everything" and erased all four rows, returning SQL_SUCCESS.
-    EXPECT_FALSE(SQL_SUCCEEDED(Try("DELETE FROM W WHERE V LIKE 'a%'")));
+    // BETWEEN is not implemented. Before D12 a clause the parser could
+    // not read fell through to "match everything" and erased all four
+    // rows, returning SQL_SUCCESS. (This example used to be LIKE; D42
+    // implemented LIKE, so it needed a predicate that is still unread.)
+    EXPECT_FALSE(SQL_SUCCEEDED(Try("DELETE FROM W WHERE V BETWEEN 'a' AND 'b'")));
     EXPECT_EQ(State(), "42000");
     EXPECT_EQ(TableSize(), 4) << "the mock's parser gap deleted the table";
 }
@@ -116,12 +118,12 @@ TEST_F(WhereParserTest, DeleteWithAnUnknownColumnErrorsAndKeepsTheRows) {
 }
 
 TEST_F(WhereParserTest, SelectWithAnUnreadablePredicateErrors) {
-    EXPECT_FALSE(SQL_SUCCEEDED(Try("SELECT ID FROM W WHERE V LIKE 'a%'")));
+    EXPECT_FALSE(SQL_SUCCEEDED(Try("SELECT ID FROM W WHERE V BETWEEN 'a' AND 'b'")));
     EXPECT_EQ(State(), "42000");
 }
 
 TEST_F(WhereParserTest, UpdateWithAnUnreadablePredicateErrors) {
-    EXPECT_FALSE(SQL_SUCCEEDED(Try("UPDATE W SET V = 'z' WHERE V LIKE 'a%'")));
+    EXPECT_FALSE(SQL_SUCCEEDED(Try("UPDATE W SET V = 'z' WHERE V BETWEEN 'a' AND 'b'")));
     EXPECT_EQ(State(), "42000");
 }
 
@@ -213,3 +215,42 @@ TEST_F(WhereParserTest, MalformedStatementsAnswerInsteadOfCrashing) {
 }
 
 }  // namespace
+
+// ── D42: LIKE is evaluated, and honours an ESCAPE clause ─────────────────
+//
+// A LIKE predicate used to fall through the filter entirely, so every row came
+// back - and the mock advertises SQL_LIKE_ESCAPE_CLAUSE while being unable to
+// fail a probe that tests it.
+
+TEST_F(WhereParserTest, LikeWithATrailingWildcardFilters) {
+    EXPECT_EQ(CountRows("SELECT ID FROM W WHERE V LIKE 'a%'"), 1);
+    EXPECT_EQ(CountRows("SELECT ID FROM W WHERE V LIKE '%'"), 3);
+}
+
+TEST_F(WhereParserTest, NotLikeInverts) {
+    EXPECT_EQ(CountRows("SELECT ID FROM W WHERE V NOT LIKE 'a%'"), 2);
+}
+
+TEST_F(WhereParserTest, UnderscoreMatchesOneCharacter) {
+    Exec("INSERT INTO W (ID, V) VALUES (5, 'ab'), (6, 'abc')");
+    EXPECT_EQ(CountRows("SELECT ID FROM W WHERE V LIKE 'a_'"), 1);
+}
+
+// The point of the escape clause: with `!` named as the escape, `!_` is a
+// literal underscore rather than "any character".
+TEST_F(WhereParserTest, EscapeClauseMakesAWildcardLiteral) {
+    Exec("INSERT INTO W (ID, V) VALUES (7, 'x_y'), (8, 'xzy')");
+    EXPECT_EQ(CountRows(
+        "SELECT ID FROM W WHERE V LIKE 'x!_y' ESCAPE '!'"), 1);
+    // Without the escape, `_` is a wildcard and both rows match.
+    EXPECT_EQ(CountRows("SELECT ID FROM W WHERE V LIKE 'x_y'"), 2);
+}
+
+// The shape the escape probe uses: both sides literal, no table involved.
+TEST_F(WhereParserTest, LiteralLikeWithEscapeIsEvaluated) {
+    EXPECT_EQ(CountRows("SELECT ID FROM W WHERE 'xzy' LIKE 'x!_y' ESCAPE '!'"), 0)
+        << "the escaped underscore matched a 'z'";
+    // A true constant predicate keeps every row; W has four.
+    EXPECT_EQ(CountRows("SELECT ID FROM W WHERE 'x_y' LIKE 'x!_y' ESCAPE '!'"), 4)
+        << "the escaped underscore did not match a literal underscore";
+}

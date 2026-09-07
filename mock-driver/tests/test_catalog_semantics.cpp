@@ -241,4 +241,55 @@ TEST_F(CatalogSemanticsTest, NullArgumentsStillMeanNoFilter) {
     EXPECT_GT(ColumnValues(3).size(), 1u);
 }
 
+
+// ── D38: quoted identifiers ──────────────────────────────────────────────
+//
+// The driver advertises `"` through SQLGetInfo(SQL_IDENTIFIER_QUOTE_CHAR) and
+// the W wrappers agree, but the parser took the identifier as the raw token -
+// quotes included - so `SELECT COUNT(*) FROM "T"` found no table. A fixture
+// that claims a capability it does not have is a fixture no probe can use to
+// catch a driver getting that capability wrong.
+
+TEST_F(CatalogSemanticsTest, AQuotedTableNameResolves) {
+    Exec("CREATE TABLE QUOTED_T (ID INTEGER)");
+    Exec("INSERT INTO QUOTED_T (ID) VALUES (1), (2)");
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT ID FROM \"QUOTED_T\"", SQL_NTS)))
+        << "a quoted table name did not resolve";
+    EXPECT_EQ(ColumnValues(1).size(), 2u);
+}
+
+TEST_F(CatalogSemanticsTest, AQuotedNameWorksForInsertAndDeleteToo) {
+    Exec("CREATE TABLE QUOTED_D (ID INTEGER)");
+    Exec("INSERT INTO \"QUOTED_D\" (ID) VALUES (1), (2), (3)");
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT ID FROM QUOTED_D", SQL_NTS)));
+    EXPECT_EQ(ColumnValues(1).size(), 3u);
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"DELETE FROM \"QUOTED_D\" WHERE ID = 1", SQL_NTS)));
+    SQLCloseCursor(hstmt);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT ID FROM QUOTED_D", SQL_NTS)));
+    EXPECT_EQ(ColumnValues(1).size(), 2u);
+}
+
+// The claim and the behaviour have to agree: the mock folds every identifier
+// to upper case, quoted or not, which is what SQL_IC_UPPER describes.
+TEST_F(CatalogSemanticsTest, QuotedIdentifierCaseMatchesWhatTheParserDoes) {
+    SQLUSMALLINT reported = 0xFFFF;
+    SQLSMALLINT len = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetInfo(
+        hdbc, SQL_QUOTED_IDENTIFIER_CASE, &reported, sizeof(reported), &len)));
+    EXPECT_EQ(reported, SQL_IC_UPPER);
+
+    // ...and a lower-case quoted name really does resolve, as SQL_IC_UPPER says.
+    Exec("CREATE TABLE QUOTED_C (ID INTEGER)");
+    Exec("INSERT INTO QUOTED_C (ID) VALUES (1)");
+    EXPECT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT ID FROM \"quoted_c\"", SQL_NTS)));
+    SQLCloseCursor(hstmt);
+}
+
 }  // namespace

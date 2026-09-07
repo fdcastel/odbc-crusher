@@ -93,6 +93,9 @@ ParsedQuery parse_sql(const std::string& sql);
 // in `SELECT '?' FROM t WHERE a = ?` as two parameters.
 int count_param_markers(const std::string& sql);
 
+// Strip a matching pair of double quotes from an identifier - D38.
+std::string unquote_identifier(const std::string& raw);
+
 // Execute a parsed query and get results
 struct QueryResult {
     bool success = false;

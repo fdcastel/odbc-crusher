@@ -677,6 +677,73 @@ static WhereFilter make_where_filter(const MockTable& table,
             }
         }
 
+        // ── <col> [NOT] LIKE <pattern> [ESCAPE 'c'] ──
+        //
+        // D42: a LIKE predicate used to fall through the filter entirely, so
+        // every row came back and the mock could not fail a probe testing the
+        // LIKE escaping it advertises through SQL_LIKE_ESCAPE_CLAUSE. The
+        // matcher already existed for the catalog functions.
+        {
+            const size_t like_at = find_top_level(atom, upper, "LIKE", 0, true);
+            if (like_at != std::string::npos) {
+                std::string left = trim(atom.substr(0, like_at));
+                bool negated = false;
+                const std::string left_upper = to_upper(left);
+                if (left_upper.size() >= 3
+                    && left_upper.compare(left_upper.size() - 3, 3, "NOT") == 0) {
+                    negated = true;
+                    left = trim(left.substr(0, left.size() - 3));
+                }
+
+                std::string rest = trim(atom.substr(like_at + 4));
+
+                // `{escape 'c'}` reaches the parser as `ESCAPE 'c'`, and
+                // standard SQL gives LIKE no escape character without it.
+                char escape_char = '\0';
+                const std::string rest_upper = to_upper(rest);
+                const size_t esc_at = find_top_level(rest, rest_upper, "ESCAPE", 0, true);
+                if (esc_at != std::string::npos) {
+                    const std::string esc = trim(rest.substr(esc_at + 6));
+                    if (esc.size() >= 3 && esc.front() == '\'' && esc.back() == '\'') {
+                        escape_char = esc[1];
+                    } else if (!esc.empty()) {
+                        return fail("42000", "Malformed ESCAPE clause: " + esc);
+                    }
+                    rest = trim(rest.substr(0, esc_at));
+                }
+
+                const int col_idx = resolve_col(left);
+                const CellValue pattern_lit = parse_literal(rest);
+                if (!std::holds_alternative<std::string>(pattern_lit)) {
+                    return fail("42000", "LIKE pattern must be a string: " + rest);
+                }
+                const std::string pattern = std::get<std::string>(pattern_lit);
+
+                if (col_idx < 0) {
+                    // `'xzy' LIKE 'x!_y'` - both sides literal, which is the
+                    // shape the escape probe uses.
+                    if (looks_like_name(left)) {
+                        return fail("42S22", "Column not found: " + left);
+                    }
+                    const CellValue lhs = parse_literal(left);
+                    if (!std::holds_alternative<std::string>(lhs)) {
+                        return fail("42000", "LIKE needs a string on the left: " + left);
+                    }
+                    const bool hit = MockCatalog::matches_pattern(
+                        std::get<std::string>(lhs), pattern, escape_char);
+                    const bool want = negated ? !hit : hit;
+                    return [want](const MockRow&) { return want; };
+                }
+                return [col_idx, pattern, escape_char, negated](const MockRow& row) -> bool {
+                    if (col_idx >= static_cast<int>(row.size())) return false;
+                    if (!std::holds_alternative<std::string>(row[col_idx])) return false;
+                    const bool hit = MockCatalog::matches_pattern(
+                        std::get<std::string>(row[col_idx]), pattern, escape_char);
+                    return negated ? !hit : hit;
+                };
+            }
+        }
+
         // ── <col> [NOT] IN (...) ──
         {
             const size_t in_at = find_top_level(atom, upper, "IN", 0, true);
@@ -866,6 +933,25 @@ std::vector<ParsedQuery::ColumnDef> parse_column_defs(const std::string& defs_st
 // string literal as a parameter.
 
 // Count '?' parameter markers in SQL (outside of quoted strings)
+// D38: the driver advertises `"` through SQLGetInfo(SQL_IDENTIFIER_QUOTE_CHAR)
+// and unicode_wrappers agrees, but the parser took the identifier as the raw
+// token - quotes included - so `SELECT COUNT(*) FROM "ODBC_TEST_PARAM"` found
+// no table. A matching pair is stripped and a doubled quote inside it is an
+// escaped one. The mock folds identifiers to upper case either way, which is
+// what it now reports as SQL_QUOTED_IDENTIFIER_CASE.
+std::string unquote_identifier(const std::string& raw) {
+    const std::string t = trim(raw);
+    if (t.size() < 2 || t.front() != '"' || t.back() != '"') return t;
+    const std::string inner = t.substr(1, t.size() - 2);
+    std::string out;
+    out.reserve(inner.size());
+    for (size_t i = 0; i < inner.size(); ++i) {
+        out += inner[i];
+        if (inner[i] == '"' && i + 1 < inner.size() && inner[i + 1] == '"') ++i;
+    }
+    return out;
+}
+
 int count_param_markers(const std::string& sql) {
     int count = 0;
     bool in_single_quote = false;
@@ -1371,7 +1457,7 @@ ParsedQuery parse_sql(const std::string& sql) {
         while (name_start < upper.length() && std::isspace(upper[name_start])) ++name_start;
         auto name_end = name_start;
         while (name_end < upper.length() && !std::isspace(upper[name_end]) && upper[name_end] != '(') ++name_end;
-        result.table_name = to_upper(trim(trimmed.substr(name_start, name_end - name_start)));
+        result.table_name = to_upper(unquote_identifier(trim(trimmed.substr(name_start, name_end - name_start))));
         auto open_paren = trimmed.find('(', name_end);
         auto close_paren = trimmed.rfind(')');
         if (open_paren != std::string::npos && close_paren != std::string::npos && close_paren > open_paren) {
@@ -1389,7 +1475,7 @@ ParsedQuery parse_sql(const std::string& sql) {
         while (name_start < upper.length() && std::isspace(upper[name_start])) ++name_start;
         auto name_end = name_start;
         while (name_end < upper.length() && !std::isspace(upper[name_end]) && upper[name_end] != ';') ++name_end;
-        result.table_name = to_upper(trim(trimmed.substr(name_start, name_end - name_start)));
+        result.table_name = to_upper(unquote_identifier(trim(trimmed.substr(name_start, name_end - name_start))));
         result.is_valid = true;
         return result;
     }
@@ -1424,7 +1510,7 @@ ParsedQuery parse_sql(const std::string& sql) {
             while (table_start < upper.length() && std::isspace(upper[table_start])) ++table_start;
             auto table_end = table_start;
             while (table_end < upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != ';' && upper[table_end] != '(' && upper[table_end] != ')') ++table_end;
-            result.table_name = trimmed.substr(table_start, table_end - table_start);
+            result.table_name = unquote_identifier(trimmed.substr(table_start, table_end - table_start));
             
             // Skip system pseudo-tables used by Firebird/Oracle
             std::string upper_table = to_upper(result.table_name);
@@ -1514,7 +1600,7 @@ ParsedQuery parse_sql(const std::string& sql) {
             while (table_start < upper.length() && std::isspace(upper[table_start])) ++table_start;
             auto table_end = table_start;
             while (table_end < upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != '(') ++table_end;
-            result.table_name = trimmed.substr(table_start, table_end - table_start);
+            result.table_name = unquote_identifier(trimmed.substr(table_start, table_end - table_start));
             
             // Parse column names
             auto col_open = trimmed.find('(', table_end);
@@ -1558,7 +1644,7 @@ ParsedQuery parse_sql(const std::string& sql) {
         while (table_start < (int)upper.length() && std::isspace(upper[table_start])) ++table_start;
         auto table_end = table_start;
         while (table_end < (int)upper.length() && !std::isspace(upper[table_end]) && upper[table_end] != ';') ++table_end;
-        result.table_name = trimmed.substr(table_start, table_end - table_start);
+        result.table_name = unquote_identifier(trimmed.substr(table_start, table_end - table_start));
         result.is_valid = true;
         // affected_rows is computed by the executor walking MockCatalog
         // — no hard-coded stub here.
@@ -1578,7 +1664,7 @@ ParsedQuery parse_sql(const std::string& sql) {
             if (where_pos != std::string::npos && where_pos < table_end) table_end = where_pos;
             // Trim trailing whitespace introduced by the WHERE adjustment.
             while (table_end > table_start && std::isspace(upper[table_end - 1])) --table_end;
-            result.table_name = trimmed.substr(table_start, table_end - table_start);
+            result.table_name = unquote_identifier(trimmed.substr(table_start, table_end - table_start));
             result.is_valid = true;
             // affected_rows is computed by the executor (count + erase).
             if (where_pos != std::string::npos) {

@@ -541,9 +541,13 @@ SQLRETURN SQL_API SQLGetInfo(
         // about one it simply never got round to. Every one of them is a Core
         // or Level 1 type a client reasonably asks for.
         case SQL_QUOTED_IDENTIFIER_CASE:
-            // The mock upper-cases unquoted identifiers and preserves quoted
-            // ones, which is SQL_IC_SENSITIVE for the quoted form.
-            RETURN_USHORT(SQL_IC_SENSITIVE);
+            // D38 correction: D29 answered SQL_IC_SENSITIVE on the
+            // assumption that quoted names kept their case. They do not -
+            // the mock folds every identifier to upper case, quoted or
+            // not, which is exactly what SQL_IC_UPPER describes. Saying
+            // SENSITIVE would have been a second capability claim the
+            // driver does not honour, which is the shape D38 is about.
+            RETURN_USHORT(SQL_IC_UPPER);
 
         case SQL_CORRELATION_NAME:
             // The parser accepts `FROM t alias` but not `AS`; SQL_CN_DIFFERENT

@@ -201,7 +201,14 @@ public:
     std::vector<MockProcedure> snapshot_procedures() const;
 
     // Pattern matching (SQL LIKE)
-    static bool matches_pattern(const std::string& value, const std::string& pattern);
+    // The escape character defaults to `\\`, which is what the driver
+    // advertises through SQLGetInfo(SQL_SEARCH_PATTERN_ESCAPE) for the
+    // catalog functions. D42: a LIKE predicate passes '\0' unless the
+    // statement supplied an ESCAPE clause, because standard SQL gives LIKE no
+    // escape character unless one is named.
+    static bool matches_pattern(const std::string& value,
+                                const std::string& pattern,
+                                char escape_char = '\\');
 
 private:
     MockCatalog() = default;
