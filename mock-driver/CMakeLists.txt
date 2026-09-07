@@ -145,6 +145,7 @@ add_executable(mock-odbc-tests
     tests/test_silent_corruption.cpp
     tests/test_param_binding.cpp
     tests/test_dml.cpp
+    tests/test_where_parser.cpp
     tests/test_literal_select.cpp
     tests/test_buffer_copy.cpp
     tests/test_c_types.cpp

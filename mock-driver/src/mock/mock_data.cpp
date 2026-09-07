@@ -275,7 +275,8 @@ ParsedQuery::LiteralExpr parse_literal_expression(const std::string& expr_str) {
                     lit.value = std::monostate{};
                 } else if (upper_inner == "NULL") {
                     lit.value = std::monostate{};
-                } else if (inner_expr.front() == '\'' && inner_expr.back() == '\'') {
+                } else if (inner_expr.size() >= 2 && inner_expr.front() == '\''
+                           && inner_expr.back() == '\'') {
                     std::string val = inner_expr.substr(1, inner_expr.length() - 2);
                     std::string unescaped;
                     for (size_t i = 0; i < val.length(); ++i) {
@@ -287,7 +288,9 @@ ParsedQuery::LiteralExpr parse_literal_expression(const std::string& expr_str) {
                         }
                     }
                     lit.value = unescaped;
-                } else if ((inner_expr.find("N'") == 0 || inner_expr.find("n'") == 0) && inner_expr.back() == '\'') {
+                } else if (inner_expr.size() >= 3
+                           && (inner_expr.find("N'") == 0 || inner_expr.find("n'") == 0)
+                           && inner_expr.back() == '\'') {
                     std::string val = inner_expr.substr(2, inner_expr.length() - 3);
                     lit.value = val;
                     if (lit.sql_type == SQL_VARCHAR) lit.sql_type = SQL_WVARCHAR;
@@ -343,7 +346,10 @@ ParsedQuery::LiteralExpr parse_literal_expression(const std::string& expr_str) {
     // DATE 'yyyy-mm-dd'
     if (upper.find("DATE ") == 0 && trimmed.length() > 6) {
         std::string date_part = trim(trimmed.substr(5));
-        if (date_part.front() == '\'' && date_part.back() == '\'') date_part = date_part.substr(1, date_part.length() - 2);
+        if (date_part.size() >= 2 && date_part.front() == '\''
+            && date_part.back() == '\'') {
+            date_part = date_part.substr(1, date_part.length() - 2);
+        }
         lit.value = date_part; lit.sql_type = SQL_TYPE_DATE; lit.column_size = 10;
         return lit;
     }
@@ -457,7 +463,15 @@ InsertValuesResult parse_insert_values(const std::string& values_str) {
         std::string upper = to_upper(trimmed);
         if (upper == "NULL") { result.values.push_back(std::monostate{}); result.param_markers.push_back(false); }
         else if (trimmed == "?") { result.values.push_back(std::monostate{}); result.param_markers.push_back(true); }
-        else if (trimmed.front() == '\'' && trimmed.back() == '\'') {
+        else if (trimmed.empty()) {
+            // `VALUES (1,,3)`. An empty expression is not a value; treat it
+            // as NULL rather than indexing an empty string. The statement is
+            // malformed either way - D12 keeps it from being *undefined*.
+            result.values.push_back(std::monostate{});
+            result.param_markers.push_back(false);
+        }
+        else if (trimmed.size() >= 2 && trimmed.front() == '\''
+                 && trimmed.back() == '\'') {
             std::string val = trimmed.substr(1, trimmed.length() - 2);
             std::string unescaped;
             for (size_t i = 0; i < val.length(); ++i) {
@@ -475,22 +489,108 @@ InsertValuesResult parse_insert_values(const std::string& values_str) {
     return result;
 }
 
-// Build a row-predicate from an UPDATE/DELETE WHERE clause. Supports:
-//   <empty>                         → always-true
+// Build a row-filter from a WHERE clause. Understands:
+//   <empty>                            -> always-true
 //   <col> {= | != | <> | < | > | <= | >=} <literal>
-//   <col> IN (lit, lit, ...)
-// Anything else falls back to always-true so the executor can still
-// produce a sensible row count rather than silently miscounting. Mock
-// parser is deliberately simple — quoted strings containing comparison
-// operators (e.g. WHERE name = 'a<=b') will mis-parse; not a concern
-// for the probes that exist today.
-static std::function<bool(const MockRow&)> make_where_predicate(
-    const MockTable& table, const std::string& where_clause)
-{
-    auto trimmed = trim(where_clause);
-    if (trimmed.empty()) {
-        return [](const MockRow&) { return true; };
+//   <col> IS [NOT] NULL
+//   <col> [NOT] IN (lit, lit, ...)
+//   <literal> = <literal>              (constant predicates such as 1=0)
+//   the above joined by AND / OR, and grouped with parentheses
+//
+// D12: every fallback used to return always-**true**, so a clause the mock
+// could not read matched every row - and `DELETE FROM t WHERE <unparsable>`
+// erased the table and reported success. A clause that cannot be evaluated is
+// now an error the caller reports (42S22 for an unknown column, 42000 for
+// syntax) and matches nothing, so a mock limitation can never look like a
+// driver result. Known limitation, unchanged: a quoted string containing a
+// comparison operator or the word AND (e.g. `name = 'a<=b'`) mis-parses.
+struct WhereFilter {
+    std::function<bool(const MockRow&)> match = [](const MockRow&) { return true; };
+    bool understood = true;
+    std::string sqlstate;
+    std::string message;
+};
+
+namespace {
+
+// Find `needle` in `hay` at paren depth 0 and outside string literals,
+// searching from `from`. `word` requires non-identifier characters on both
+// sides so that `IN` does not match inside `MAIN`.
+size_t find_top_level(const std::string& hay, const std::string& upper_hay,
+                      const std::string& needle, size_t from, bool word) {
+    int depth = 0;
+    bool in_quote = false;
+    for (size_t i = from; i + needle.size() <= hay.size(); ++i) {
+        const char c = hay[i];
+        if (c == '\'') {
+            if (in_quote && i + 1 < hay.size() && hay[i + 1] == '\'') { ++i; continue; }
+            in_quote = !in_quote;
+            continue;
+        }
+        if (in_quote) continue;
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth > 0) --depth; continue; }
+        if (depth != 0) continue;
+        if (upper_hay.compare(i, needle.size(), needle) != 0) continue;
+        if (word) {
+            const auto ident = [](char ch) {
+                return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+            };
+            if (i > 0 && ident(hay[i - 1])) continue;
+            const size_t after = i + needle.size();
+            if (after < hay.size() && ident(hay[after])) continue;
+        }
+        return i;
     }
+    return std::string::npos;
+}
+
+// Split on every top-level occurrence of `sep`.
+std::vector<std::string> split_top_level(const std::string& clause,
+                                         const std::string& sep) {
+    std::vector<std::string> parts;
+    const std::string upper = to_upper(clause);
+    size_t from = 0;
+    for (;;) {
+        const size_t at = find_top_level(clause, upper, sep, from, true);
+        if (at == std::string::npos) break;
+        parts.push_back(clause.substr(from, at - from));
+        from = at + sep.size();
+    }
+    parts.push_back(clause.substr(from));
+    return parts;
+}
+
+// True when `s` is one parenthesised group covering the whole string.
+bool is_wrapped(const std::string& s) {
+    if (s.size() < 2 || s.front() != '(' || s.back() != ')') return false;
+    int depth = 0;
+    bool in_quote = false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c == '\'') {
+            if (in_quote && i + 1 < s.size() && s[i + 1] == '\'') { ++i; continue; }
+            in_quote = !in_quote;
+            continue;
+        }
+        if (in_quote) continue;
+        if (c == '(') ++depth;
+        else if (c == ')') {
+            --depth;
+            if (depth == 0 && i + 1 != s.size()) return false;
+        }
+    }
+    return depth == 0;
+}
+
+} // namespace
+
+static WhereFilter make_where_filter(const MockTable& table,
+                                     const std::string& where_clause)
+{
+    WhereFilter result;
+    auto trimmed = trim(where_clause);
+    if (trimmed.empty()) return result;   // no WHERE means every row
 
     auto resolve_col = [&](const std::string& name) -> int {
         std::string up = to_upper(name);
@@ -532,118 +632,227 @@ static std::function<bool(const MockRow&)> make_where_predicate(
         } catch (...) {}
         return s;
     };
-
-    // ── IN (...) ──
-    {
-        auto upper = to_upper(trimmed);
-        auto in_pos = upper.find(" IN ");
-        if (in_pos != std::string::npos) {
-            int col_idx = resolve_col(trim(trimmed.substr(0, in_pos)));
-            auto paren_open = trimmed.find('(', in_pos);
-            auto paren_close = trimmed.rfind(')');
-            if (col_idx < 0 || paren_open == std::string::npos
-                || paren_close == std::string::npos || paren_close <= paren_open) {
-                return [](const MockRow&) { return true; };
-            }
-            auto val_list = split_expressions(
-                trimmed.substr(paren_open + 1, paren_close - paren_open - 1));
-            std::vector<CellValue> values;
-            for (auto& v : val_list) {
-                std::string tv = trim(v);
-                if (!tv.empty()) values.push_back(parse_literal(tv));
-            }
-            return [col_idx, values](const MockRow& row) -> bool {
-                if (col_idx >= static_cast<int>(row.size())) return false;
-                for (const auto& v : values) {
-                    if (row[col_idx] == v) return true;
-                }
-                return false;
-            };
+    // A bare word that is not a number and not quoted is a column reference,
+    // and an unresolved one is 42S22 rather than a string literal.
+    auto looks_like_name = [](const std::string& s) {
+        if (s.empty()) return false;
+        if (s.front() == '\'') return false;
+        if (std::isdigit(static_cast<unsigned char>(s.front())) || s.front() == '-'
+            || s.front() == '+' || s.front() == '.') {
+            return false;
         }
-    }
-
-    // ── <col> OP <literal> ──
-    // Scan multi-char ops first so "<=" doesn't get split into "<".
-    enum Op { EQ = 0, NE, LT, GT, LE, GE };
-    struct Tok { const char* s; Op op; };
-    static constexpr Tok ops[] = {
-        {"<=", LE}, {">=", GE}, {"<>", NE}, {"!=", NE},
-        {"=",  EQ}, {"<",  LT}, {">",  GT},
+        for (char c : s) {
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '.') {
+                return false;
+            }
+        }
+        return true;
     };
-    for (const auto& tok : ops) {
-        auto pos = trimmed.find(tok.s);
-        if (pos == std::string::npos) continue;
-        std::string col_name = trim(trimmed.substr(0, pos));
-        std::string val_str  = trim(trimmed.substr(pos + std::strlen(tok.s)));
-        if (col_name.empty() || val_str.empty()) continue;
-        CellValue lit = parse_literal(val_str);
-        int col_idx = resolve_col(col_name);
-        if (col_idx < 0) {
-            // D41/D13: `WHERE 1=0` has no column on the left. The deleted
-            // SELECT engine evaluated it; this one skipped the filter and
-            // returned every row - the opposite of what the predicate asks
-            // for, and the shape the table-existence probe depends on.
-            const CellValue left = parse_literal(col_name);
-            const bool is_literal_left =
-                !std::holds_alternative<std::string>(left) ||
-                (col_name.size() >= 2 && col_name.front() == '\'');
-            if (is_literal_left) {
+
+    auto fail = [&result](const char* state, const std::string& msg) {
+        if (result.understood) {          // keep the first complaint
+            result.understood = false;
+            result.sqlstate = state;
+            result.message = msg;
+        }
+        return std::function<bool(const MockRow&)>(
+            [](const MockRow&) { return false; });
+    };
+
+    // Forward declaration for the recursive descent below.
+    std::function<std::function<bool(const MockRow&)>(const std::string&)> parse_expr;
+
+    auto parse_atom = [&](const std::string& raw)
+        -> std::function<bool(const MockRow&)>
+    {
+        const std::string atom = trim(raw);
+        if (atom.empty()) return fail("42000", "Empty predicate");
+        if (is_wrapped(atom)) return parse_expr(atom.substr(1, atom.size() - 2));
+
+        const std::string upper = to_upper(atom);
+
+        // ── <col> IS [NOT] NULL ──
+        {
+            const size_t is_at = find_top_level(atom, upper, "IS", 0, true);
+            if (is_at != std::string::npos) {
+                const std::string col_name = trim(atom.substr(0, is_at));
+                std::string rest = trim(to_upper(atom.substr(is_at + 2)));
+                bool negated = false;
+                if (rest.rfind("NOT", 0) == 0) {
+                    negated = true;
+                    rest = trim(rest.substr(3));
+                }
+                if (rest != "NULL") {
+                    return fail("42000", "Unsupported IS predicate: " + atom);
+                }
+                const int col_idx = resolve_col(col_name);
+                if (col_idx < 0) {
+                    return fail("42S22", "Column not found: " + col_name);
+                }
+                return [col_idx, negated](const MockRow& row) -> bool {
+                    if (col_idx >= static_cast<int>(row.size())) return negated;
+                    const bool is_null =
+                        std::holds_alternative<std::monostate>(row[col_idx]);
+                    return negated ? !is_null : is_null;
+                };
+            }
+        }
+
+        // ── <col> [NOT] IN (...) ──
+        {
+            const size_t in_at = find_top_level(atom, upper, "IN", 0, true);
+            if (in_at != std::string::npos) {
+                std::string left = trim(atom.substr(0, in_at));
+                bool negated = false;
+                const std::string left_upper = to_upper(left);
+                if (left_upper.size() >= 3
+                    && left_upper.compare(left_upper.size() - 3, 3, "NOT") == 0) {
+                    negated = true;
+                    left = trim(left.substr(0, left.size() - 3));
+                }
+                const int col_idx = resolve_col(left);
+                const auto paren_open = atom.find('(', in_at);
+                const auto paren_close = atom.rfind(')');
+                if (paren_open == std::string::npos
+                    || paren_close == std::string::npos
+                    || paren_close <= paren_open) {
+                    return fail("42000", "Malformed IN list: " + atom);
+                }
+                if (col_idx < 0) {
+                    return fail("42S22", "Column not found: " + left);
+                }
+                auto val_list = split_expressions(
+                    atom.substr(paren_open + 1, paren_close - paren_open - 1));
+                std::vector<CellValue> values;
+                for (auto& v : val_list) {
+                    std::string tv = trim(v);
+                    if (!tv.empty()) values.push_back(parse_literal(tv));
+                }
+                return [col_idx, values, negated](const MockRow& row) -> bool {
+                    if (col_idx >= static_cast<int>(row.size())) return false;
+                    for (const auto& v : values) {
+                        if (row[col_idx] == v) return !negated;
+                    }
+                    return negated;
+                };
+            }
+        }
+
+        // ── <col-or-literal> OP <literal> ──
+        // Multi-character operators first so "<=" is not split into "<".
+        enum Op { EQ = 0, NE, LT, GT, LE, GE };
+        struct Tok { const char* s; Op op; };
+        static constexpr Tok ops[] = {
+            {"<=", LE}, {">=", GE}, {"<>", NE}, {"!=", NE},
+            {"=",  EQ}, {"<",  LT}, {">",  GT},
+        };
+        for (const auto& tok : ops) {
+            const size_t pos = find_top_level(atom, upper, tok.s, 0, false);
+            if (pos == std::string::npos) continue;
+            const std::string col_name = trim(atom.substr(0, pos));
+            const std::string val_str  =
+                trim(atom.substr(pos + std::strlen(tok.s)));
+            if (col_name.empty() || val_str.empty()) {
+                return fail("42000", "Malformed comparison: " + atom);
+            }
+            const CellValue lit = parse_literal(val_str);
+            const int col_idx = resolve_col(col_name);
+            const Op op = tok.op;
+            if (col_idx < 0) {
+                // D41: `WHERE 1=0` has no column on the left; evaluate it.
+                if (looks_like_name(col_name)) {
+                    return fail("42S22", "Column not found: " + col_name);
+                }
+                const CellValue left = parse_literal(col_name);
                 const bool eq = (left == lit);
-                const bool want = (tok.op == EQ) ? eq
-                                : (tok.op == NE) ? !eq
-                                : false;   // ordering on constants: not needed
+                const bool want = (op == EQ) ? eq : (op == NE) ? !eq : false;
                 return [want](const MockRow&) { return want; };
             }
-            // An unresolved *name* is a malformed predicate, not a constant.
-            // Matching everything is the historical behaviour and is what
-            // the catalog walks rely on; D12 owns turning it into 42S22.
-            return [](const MockRow&) { return true; };
-        }
-        Op op = tok.op;
-        return [col_idx, lit, op](const MockRow& row) -> bool {
-            if (col_idx >= static_cast<int>(row.size())) return false;
-            const CellValue& cell = row[col_idx];
-            if (op == EQ) return cell == lit;
-            if (op == NE) return !(cell == lit);
-            // Numeric compare when both sides project to a number.
-            auto to_num = [](const CellValue& c, double& out) {
-                if (std::holds_alternative<long long>(c)) {
-                    out = static_cast<double>(std::get<long long>(c)); return true;
+            return [col_idx, lit, op](const MockRow& row) -> bool {
+                if (col_idx >= static_cast<int>(row.size())) return false;
+                const CellValue& cell = row[col_idx];
+                if (op == EQ) return cell == lit;
+                if (op == NE) return !(cell == lit);
+                auto to_num = [](const CellValue& c, double& out) {
+                    if (std::holds_alternative<long long>(c)) {
+                        out = static_cast<double>(std::get<long long>(c)); return true;
+                    }
+                    if (std::holds_alternative<double>(c)) {
+                        out = std::get<double>(c); return true;
+                    }
+                    return false;
+                };
+                double l = 0, r = 0;
+                if (to_num(cell, l) && to_num(lit, r)) {
+                    switch (op) {
+                        case LT: return l <  r;
+                        case GT: return l >  r;
+                        case LE: return l <= r;
+                        case GE: return l >= r;
+                        default: return false;
+                    }
                 }
-                if (std::holds_alternative<double>(c)) {
-                    out = std::get<double>(c); return true;
+                if (std::holds_alternative<std::string>(cell)
+                    && std::holds_alternative<std::string>(lit)) {
+                    const auto& a = std::get<std::string>(cell);
+                    const auto& b = std::get<std::string>(lit);
+                    switch (op) {
+                        case LT: return a <  b;
+                        case GT: return a >  b;
+                        case LE: return a <= b;
+                        case GE: return a >= b;
+                        default: return false;
+                    }
                 }
                 return false;
             };
-            double l = 0, r = 0;
-            if (to_num(cell, l) && to_num(lit, r)) {
-                switch (op) {
-                    case LT: return l <  r;
-                    case GT: return l >  r;
-                    case LE: return l <= r;
-                    case GE: return l >= r;
-                    default: return false;
-                }
-            }
-            // String compare when both sides are strings.
-            if (std::holds_alternative<std::string>(cell)
-                && std::holds_alternative<std::string>(lit)) {
-                const auto& a = std::get<std::string>(cell);
-                const auto& b = std::get<std::string>(lit);
-                switch (op) {
-                    case LT: return a <  b;
-                    case GT: return a >  b;
-                    case LE: return a <= b;
-                    case GE: return a >= b;
-                    default: return false;
-                }
-            }
-            return false;
-        };
-    }
+        }
 
-    return [](const MockRow&) { return true; };
+        return fail("42000", "Unsupported predicate: " + atom);
+    };
+
+    parse_expr = [&](const std::string& expr)
+        -> std::function<bool(const MockRow&)>
+    {
+        const std::string text = trim(expr);
+        if (text.empty()) return fail("42000", "Empty predicate");
+
+        auto or_terms = split_top_level(text, "OR");
+        if (or_terms.size() > 1) {
+            std::vector<std::function<bool(const MockRow&)>> terms;
+            terms.reserve(or_terms.size());
+            for (const auto& t : or_terms) terms.push_back(parse_expr(t));
+            return [terms](const MockRow& row) {
+                for (const auto& t : terms) if (t(row)) return true;
+                return false;
+            };
+        }
+
+        auto and_terms = split_top_level(text, "AND");
+        if (and_terms.size() > 1) {
+            std::vector<std::function<bool(const MockRow&)>> terms;
+            terms.reserve(and_terms.size());
+            for (const auto& t : and_terms) terms.push_back(parse_atom(t));
+            return [terms](const MockRow& row) {
+                for (const auto& t : terms) if (!t(row)) return false;
+                return true;
+            };
+        }
+
+        return parse_atom(text);
+    };
+
+    // ORDER BY rides along in where_clause; the executor parses it separately.
+    const std::string upper_all = to_upper(trimmed);
+    const size_t order_at = find_top_level(trimmed, upper_all, "ORDER BY", 0, true);
+    const std::string predicate_text =
+        order_at == std::string::npos ? trimmed : trim(trimmed.substr(0, order_at));
+    if (predicate_text.empty()) return result;
+
+    result.match = parse_expr(predicate_text);
+    return result;
 }
+
 
 // Parse column definitions for CREATE TABLE
 std::vector<ParsedQuery::ColumnDef> parse_column_defs(const std::string& defs_str) {
@@ -945,14 +1154,14 @@ CellValue evaluate_scalar_function(const std::string& func_name_upper, const std
         // Remove DATE prefix if present
         std::string uv = to_upper(v);
         if (uv.find("DATE ") == 0) v = trim(v.substr(5));
-        if (v.front() == '\'') v = v.substr(1, v.length() - 2);
+        if (v.size() >= 2 && v.front() == '\'') v = v.substr(1, v.length() - 2);
         try { return static_cast<long long>(std::stoi(v.substr(0, 4))); } catch (...) { return static_cast<long long>(0); }
     }
     if (func_name_upper == "MONTH") {
         std::string v = trim(args_str);
         std::string uv = to_upper(v);
         if (uv.find("DATE ") == 0) v = trim(v.substr(5));
-        if (v.front() == '\'') v = v.substr(1, v.length() - 2);
+        if (v.size() >= 2 && v.front() == '\'') v = v.substr(1, v.length() - 2);
         auto dash = v.find('-');
         if (dash != std::string::npos) {
             auto dash2 = v.find('-', dash + 1);
@@ -966,7 +1175,7 @@ CellValue evaluate_scalar_function(const std::string& func_name_upper, const std
         std::string v = trim(args_str);
         std::string uv = to_upper(v);
         if (uv.find("DATE ") == 0) v = trim(v.substr(5));
-        if (v.front() == '\'') v = v.substr(1, v.length() - 2);
+        if (v.size() >= 2 && v.front() == '\'') v = v.substr(1, v.length() - 2);
         try {
             int y = std::stoi(v.substr(0, 4));
             int m = std::stoi(v.substr(5, 2));
@@ -1607,7 +1816,7 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             }
             
             // D13: this used to re-implement WHERE filtering rather than
-            // call make_where_predicate, and the copy was weaker in three
+            // call the shared predicate builder, and the copy was weaker in three
             // ways that mattered. It supported only `=` and `IN`; its
             // `find("=")` matched inside `<=`, `>=` and `!=`, so
             // `WHERE ID >= 5` resolved a column named "ID >" and returned
@@ -1615,12 +1824,20 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             // un-doubling embedded quotes, so `WHERE V = \'it\'\'s\'` matched
             // nothing. One predicate builder, used by SELECT, UPDATE and
             // DELETE alike.
-            if (!query.where_clause.empty() && !result.data.empty()) {
-                auto pred = make_where_predicate(*table, query.where_clause);
+            if (!query.where_clause.empty()) {
+                auto filter = make_where_filter(*table, query.where_clause);
+                if (!filter.understood) {
+                    // D12: reporting the clause the mock could not read beats
+                    // returning rows chosen by a predicate nobody evaluated.
+                    result.success = false;
+                    result.error_sqlstate = filter.sqlstate;
+                    result.error_message = filter.message;
+                    return result;
+                }
                 std::vector<MockRow> filtered;
                 filtered.reserve(result.data.size());
                 for (const auto& r : result.data) {
-                    if (pred(r)) filtered.push_back(r);
+                    if (filter.match(r)) filtered.push_back(r);
                 }
                 result.data.swap(filtered);
             }
@@ -1721,6 +1938,20 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             result.success = true;
             const size_t row_count = std::max<size_t>(query.insert_row_count, 1);
             const size_t total_vals = query.insert_values.size();
+            // D12: `INSERT INTO t (a, b) VALUES (1,,3)` names two columns
+            // and supplies three values. The mismatch was absorbed by the
+            // stride fall-back below, which built a row out of whatever
+            // lined up - a malformed statement reported as success.
+            if (!query.insert_columns.empty() && total_vals > 0
+                && total_vals % query.insert_columns.size() != 0) {
+                result.success = false;
+                result.error_sqlstate = "21S01";
+                result.error_message =
+                    "Insert value list does not match column list: "
+                    + std::to_string(total_vals) + " values for "
+                    + std::to_string(query.insert_columns.size()) + " columns";
+                break;
+            }
             const size_t stride = (row_count > 0 && total_vals > 0)
                 ? total_vals / row_count : 0;
             // Defensive: if the tuple count and value count don't divide evenly
@@ -1794,16 +2025,29 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             // SET clause itself isn't applied — the mock has no SET
             // evaluator, and no probe today reads back UPDATEd values.
             result.success = true;
-            auto pred = make_where_predicate(*table, query.where_clause);
+            auto filter = make_where_filter(*table, query.where_clause);
+            if (!filter.understood) {
+                result.success = false;
+                result.error_sqlstate = filter.sqlstate;
+                result.error_message = filter.message;
+                break;
+            }
             result.affected_rows = static_cast<long long>(
-                catalog.count_matching_rows(query.table_name, pred));
+                catalog.count_matching_rows(query.table_name, filter.match));
             break;
         }
         case ParsedQuery::QueryType::Delete: {
             result.success = true;
-            auto pred = make_where_predicate(*table, query.where_clause);
+            auto filter = make_where_filter(*table, query.where_clause);
+            if (!filter.understood) {
+                // The one that mattered: this used to erase the whole table.
+                result.success = false;
+                result.error_sqlstate = filter.sqlstate;
+                result.error_message = filter.message;
+                break;
+            }
             result.affected_rows = static_cast<long long>(
-                catalog.erase_matching_rows(query.table_name, pred));
+                catalog.erase_matching_rows(query.table_name, filter.match));
             break;
         }
             
