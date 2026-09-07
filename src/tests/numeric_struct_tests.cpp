@@ -442,10 +442,17 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
             // computed through a double. Mantissas must still fit in the
             // uint64_t that encode_val_le() takes, which all three do with
             // room to spare.
+            // A24: the last two used to be DECIMAL(19,0) and DECIMAL(38,10).
+            // Firebird 3 caps DECIMAL precision at 18, so both CREATE TABLEs
+            // failed there and the probe reported SKIP - on the driver family
+            // this tool exists for. 18 is the largest precision every target
+            // engine accepts, and it still exercises what the probe is about:
+            // a mantissa wider than 32 bits, and a non-zero scale on a
+            // precision beyond what a double can hold exactly.
             const DecimalShape shapes[] = {
                 { 10,  2, "12345.67"    },
-                { 19,  0, "1234567890"  },
-                { 38, 10, "123.4567890" },
+                { 18,  0, "1234567890"  },
+                { 18, 10, "123.4567890" },
             };
 
             std::ostringstream summary;

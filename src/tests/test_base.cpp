@@ -446,6 +446,50 @@ RowVerification TestBase::verify_rows_persisted(
     return v;
 }
 
+// C7
+std::vector<DiscoveredTable> TestBase::discover_tables(size_t limit,
+                                                       const std::string& types) {
+    std::vector<DiscoveredTable> out;
+    if (limit == 0) return out;
+
+    try {
+        core::OdbcStatement stmt(conn_);
+        SQLRETURN rc = SQLTables(
+            stmt.get_handle(),
+            nullptr, 0,                       // every catalog
+            nullptr, 0,                       // every schema
+            nullptr, 0,                       // every table
+            types.empty()
+                ? nullptr
+                : reinterpret_cast<SQLCHAR*>(const_cast<char*>(types.c_str())),
+            types.empty() ? 0 : SQL_NTS);
+        if (!SQL_SUCCEEDED(rc)) return out;
+
+        while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle())) && out.size() < limit) {
+            DiscoveredTable t;
+            t.catalog = get_string(stmt.get_handle(), 1);
+            t.schema  = get_string(stmt.get_handle(), 2);
+            t.name    = get_string(stmt.get_handle(), 3);
+            // A row with no table name is not a table.
+            if (!t.name.empty()) out.push_back(std::move(t));
+        }
+    } catch (...) {
+        // Discovery is a convenience: a probe that gets nothing back reports
+        // that it could not find a table, which is more useful than an
+        // exception escaping from a helper.
+    }
+    return out;
+}
+
+// C7
+std::string TestBase::get_string(SQLHSTMT hstmt, SQLUSMALLINT col) {
+    std::string value;
+    bool is_null = false;
+    std::string err;
+    if (!get_data_full(hstmt, col, value, is_null, err)) return std::string();
+    return is_null ? std::string() : value;
+}
+
 // A22
 CommitOutcome TestBase::commit_now() {
     CommitOutcome out;
@@ -548,11 +592,22 @@ RoundTripTableGuard::RoundTripTableGuard(
         }
     }
 
+    // A24: ClickHouse requires an engine clause on every CREATE TABLE, so a
+    // guard that emits none SKIPs every guard-based probe there - which is
+    // most of them. The plain form is tried first because appending
+    // `ENGINE = Memory` to a Firebird or PostgreSQL statement is a syntax
+    // error, so this has to be a fallback rather than a default.
+    static const char* const kEngineSuffixes[] = {
+        "",
+        " ENGINE = Memory",           // ClickHouse
+    };
+
     auto try_create_all = [&]() -> bool {
+      for (const char* suffix : kEngineSuffixes) {
         for (const auto& id_ddl : id_ddl_variants) {
             const std::string sql = "CREATE TABLE " + table_name_ +
                                     " (ID " + id_ddl + ", " + val_column_ +
-                                    " " + val_ddl_ + ")";
+                                    " " + val_ddl_ + ")" + suffix;
             try {
                 core::OdbcStatement s(conn_);
                 s.execute(sql);
@@ -564,7 +619,8 @@ RoundTripTableGuard::RoundTripTableGuard(
                 SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
             }
         }
-        return false;
+      }
+      return false;
     };
 
     if (try_create_all()) {

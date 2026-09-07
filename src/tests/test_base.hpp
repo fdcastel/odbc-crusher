@@ -91,6 +91,29 @@ struct RowVerification {
     }
 };
 
+// A table found through SQLTables — C7.
+//
+// Five copies of the discovery loop existed, with this struct declared twice
+// in one file. Two probes skipped discovery altogether and tried only
+// `RDB$DATABASE`, `information_schema.TABLES` and `sys.tables`, none of
+// which exist on PostgreSQL, DuckDB or ClickHouse — so they reported
+// "callable (no primary keys)" without ever having seen a table that has
+// one.
+struct DiscoveredTable {
+    std::string catalog;
+    std::string schema;
+    std::string name;
+
+    // Qualified as a probe would print it, skipping the parts the driver
+    // left empty.
+    std::string qualified() const {
+        std::string out;
+        if (!catalog.empty()) out += catalog + ".";
+        if (!schema.empty()) out += schema + ".";
+        return out + name;
+    }
+};
+
 // Outcome of TestBase::commit_now — A22.
 //
 // The probes that INSERT, commit and then check the rows landed used to
@@ -480,6 +503,28 @@ protected:
         const std::string& pk_col,
         const std::string& value_col,
         long expected_count);
+
+    // Ask SQLTables for up to `limit` real tables — C7.
+    //
+    // Returns them in the order the driver reported. Empty when SQLTables
+    // fails or the catalog has none, which a caller must treat as "cannot
+    // test against a real table" rather than as a pass: an empty result here
+    // is why the primary-key and statistics probes used to pass without ever
+    // seeing a table.
+    //
+    // `types` is the SQLTables table-type filter; the default asks for base
+    // tables only, since a view has no statistics or primary key to find.
+    std::vector<DiscoveredTable> discover_tables(
+        size_t limit = 5, const std::string& types = "TABLE");
+
+    // Read one character column of the current row into a string — C7.
+    //
+    // "SQLGetData into a std::string" was written four ways across the suite
+    // and none of them looped on 01004, so each silently truncated at its own
+    // buffer size. This is get_data_full (A19) with the parts a caller does
+    // not need folded away: empty string for NULL, empty string on error.
+    // Use get_data_full directly where NULL and error have to be told apart.
+    static std::string get_string(SQLHSTMT hstmt, SQLUSMALLINT col);
 
     // SQLEndTran(SQL_COMMIT) on this connection, keeping the return code and
     // the diagnostics that came with it — A22.

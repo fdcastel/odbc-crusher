@@ -82,43 +82,12 @@ TestResult MetadataTests::test_columns_catalog() {
             // catalog and table name, then query SQLColumns with both.
             // This avoids hard-coding schema/catalog assumptions that break on
             // drivers that use catalogs (MySQL/MariaDB) vs schemas (SQL Server).
-            struct DiscoveredTable {
-                std::string catalog;
-                std::string schema;
-                std::string name;
-            };
-            std::vector<DiscoveredTable> discovered;
-
-            {
-                core::OdbcStatement tbl_stmt(conn_);
-                SQLRETURN tbl_ret = SQLTables(
-                    tbl_stmt.get_handle(),
-                    nullptr, 0,   // Catalog (all)
-                    nullptr, 0,   // Schema (all)
-                    nullptr, 0,   // Table (all)
-                    (SQLCHAR*)"TABLE", SQL_NTS  // Type
-                );
-                if (SQL_SUCCEEDED(tbl_ret)) {
-                    char cat_buf[128] = {0};
-                    char sch_buf[128] = {0};
-                    char name_buf[128] = {0};
-                    SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
-                    while (SQL_SUCCEEDED(SQLFetch(tbl_stmt.get_handle()))
-                           && discovered.size() < 5) {
-                        cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
-                        SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
-                        SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
-                        SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
-                        if (name_ind > 0) {
-                            discovered.push_back({
-                                cat_ind > 0 ? std::string(cat_buf) : "",
-                                sch_ind > 0 ? std::string(sch_buf) : "",
-                                std::string(name_buf)
-                            });
-                        }
-                    }
-                }
-            }
+            // C7: was a hand-rolled SQLTables walk with its own
+            // DiscoveredTable struct, three fixed-size buffers and no 01004
+            // loop - one of five such copies. The helper reads each column
+            // with get_data_full, so a table name longer than 128 bytes is
+            // no longer silently cut.
+            std::vector<DiscoveredTable> discovered = discover_tables(5);
 
             // Strategy 2: Also try well-known system tables / mock tables with
             // different catalog/schema arrangements.
@@ -227,12 +196,21 @@ TestResult MetadataTests::test_primary_keys() {
         [&](TestResult& r) {
             core::OdbcStatement stmt(conn_);
 
-            // Try to get primary keys from system tables
-            std::vector<std::pair<std::string, std::string>> test_tables = {
-                {"", "RDB$DATABASE"},
-                {"information_schema", "TABLES"},
-                {"sys", "tables"}
-            };
+            // A24: this list is the whole problem. RDB$DATABASE is Firebird,
+            // information_schema.TABLES is MySQL and SQL Server, sys.tables is
+            // SQL Server - none of them exists on PostgreSQL, DuckDB or
+            // ClickHouse, so on those engines every attempt returned nothing
+            // and the probe passed as "callable (nothing found)" without ever
+            // having seen a table. Ask the driver what it has first (C7), and
+            // keep the well-known names as a fallback for a catalog that
+            // reports none.
+            std::vector<std::pair<std::string, std::string>> test_tables;
+            for (const auto& t : discover_tables(3)) {
+                test_tables.emplace_back(t.schema, t.name);
+            }
+            test_tables.emplace_back("", "RDB$DATABASE");
+            test_tables.emplace_back("information_schema", "TABLES");
+            test_tables.emplace_back("sys", "tables");
 
             bool callable = false;
 
@@ -293,10 +271,20 @@ TestResult MetadataTests::test_statistics() {
         [&](TestResult& r) {
             core::OdbcStatement stmt(conn_);
 
-            std::vector<std::pair<std::string, std::string>> test_tables = {
-                {"", "RDB$DATABASE"},
-                {"information_schema", "TABLES"}
-            };
+            // A24: this list is the whole problem. RDB$DATABASE is Firebird,
+            // information_schema.TABLES is MySQL and SQL Server, sys.tables is
+            // SQL Server - none of them exists on PostgreSQL, DuckDB or
+            // ClickHouse, so on those engines every attempt returned nothing
+            // and the probe passed as "callable (nothing found)" without ever
+            // having seen a table. Ask the driver what it has first (C7), and
+            // keep the well-known names as a fallback for a catalog that
+            // reports none.
+            std::vector<std::pair<std::string, std::string>> test_tables;
+            for (const auto& t : discover_tables(3)) {
+                test_tables.emplace_back(t.schema, t.name);
+            }
+            test_tables.emplace_back("", "RDB$DATABASE");
+            test_tables.emplace_back("information_schema", "TABLES");
 
             bool callable = false;
 
@@ -360,43 +348,10 @@ TestResult MetadataTests::test_special_columns() {
             // Strategy 1: Dynamically discover a base table via SQLTables.
             // We want a TABLE (not VIEW) because SQLSpecialColumns with
             // SQL_BEST_ROWID is meaningful on base tables with primary keys.
-            struct DiscoveredTable {
-                std::string catalog;
-                std::string schema;
-                std::string name;
-            };
-            std::vector<DiscoveredTable> discovered;
+            // C7 - see test_tables_catalog. Second copy of the same walk.
+            std::vector<DiscoveredTable> discovered = discover_tables(5);
 
-            try {
-                core::OdbcStatement tbl_stmt(conn_);
-                SQLRETURN tbl_ret = SQLTables(tbl_stmt.get_handle(),
-                    nullptr, 0, nullptr, 0, nullptr, 0,
-                    (SQLCHAR*)"TABLE", SQL_NTS);
-                if (SQL_SUCCEEDED(tbl_ret)) {
-                    char cat_buf[128] = {0};
-                    char sch_buf[128] = {0};
-                    char name_buf[128] = {0};
-                    SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
-                    while (SQL_SUCCEEDED(SQLFetch(tbl_stmt.get_handle()))
-                           && discovered.size() < 5) {
-                        cat_buf[0] = sch_buf[0] = name_buf[0] = '\0';
-                        SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
-                        SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
-                        SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
-                        if (name_ind > 0) {
-                            discovered.push_back({
-                                (cat_ind > 0) ? std::string(cat_buf) : "",
-                                (sch_ind > 0) ? std::string(sch_buf) : "",
-                                std::string(name_buf)
-                            });
-                        }
-                    }
-                }
-            } catch (...) {}
-
-            // Strategy 2: Static fallback list covering major drivers.
-            // Use discovered tables first, then well-known base tables.
-            std::vector<DiscoveredTable> test_tables;
+                        std::vector<DiscoveredTable> test_tables;
             for (auto& d : discovered) test_tables.push_back(std::move(d));
             test_tables.push_back({"", "",  "RDB$DATABASE"});                // Firebird
             test_tables.push_back({"", "pg_catalog", "pg_class"});           // PostgreSQL

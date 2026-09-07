@@ -110,11 +110,29 @@ TestResult CatalogDepthTests::test_statistics_result() {
         Severity::INFO, ConformanceLevel::LEVEL_1,
         "ODBC 3.8 SQLStatistics: Returns index and table statistics",
         [&](TestResult& r) {
+            // A24: this used to be the literal "CUSTOMERS", which exists only
+            // in the mock's Default catalog - so on every real driver the call
+            // asked about a table that is not there, got no rows, and passed.
+            // Catalog functions also match case-sensitively unless
+            // SQL_ATTR_METADATA_ID is set, so even a real `customers` would
+            // not have matched. Ask the driver what it has (C7).
+            const auto tables = discover_tables(1);
+            if (tables.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "SQLTables reported no tables, so there is nothing "
+                           "to ask about";
+                r.suggestion = "Create at least one table the connected user "
+                               "can see, or point the tool at a populated "
+                               "database.";
+                return;
+            }
+            const std::string probe_table = tables.front().name;
+
             core::OdbcStatement stmt(conn_);
 
             SQLRETURN ret = SQLStatisticsW(stmt.get_handle(),
                 nullptr, 0, nullptr, 0,
-                SqlWcharBuf("CUSTOMERS").ptr(), SQL_NTS,
+                SqlWcharBuf(probe_table.c_str()).ptr(), SQL_NTS,
                 SQL_INDEX_ALL, SQL_QUICK);
 
             if (!SQL_SUCCEEDED(ret)) {
@@ -201,11 +219,29 @@ TestResult CatalogDepthTests::test_privileges_result() {
         Severity::INFO, ConformanceLevel::LEVEL_2,
         "ODBC 3.8 SQLTablePrivileges: Returns privilege information",
         [&](TestResult& r) {
+            // A24: this used to be the literal "CUSTOMERS", which exists only
+            // in the mock's Default catalog - so on every real driver the call
+            // asked about a table that is not there, got no rows, and passed.
+            // Catalog functions also match case-sensitively unless
+            // SQL_ATTR_METADATA_ID is set, so even a real `customers` would
+            // not have matched. Ask the driver what it has (C7).
+            const auto tables = discover_tables(1);
+            if (tables.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "SQLTables reported no tables, so there is nothing "
+                           "to ask about";
+                r.suggestion = "Create at least one table the connected user "
+                               "can see, or point the tool at a populated "
+                               "database.";
+                return;
+            }
+            const std::string probe_table = tables.front().name;
+
             core::OdbcStatement stmt(conn_);
 
             SQLRETURN ret = SQLTablePrivilegesW(stmt.get_handle(),
                 nullptr, 0, nullptr, 0,
-                SqlWcharBuf("CUSTOMERS").ptr(), SQL_NTS);
+                SqlWcharBuf(probe_table.c_str()).ptr(), SQL_NTS);
 
             bool tbl_priv_ok = SQL_SUCCEEDED(ret);
             int tbl_priv_rows = 0;
@@ -219,7 +255,7 @@ TestResult CatalogDepthTests::test_privileges_result() {
             core::OdbcStatement stmt2(conn_);
             SQLRETURN ret2 = SQLColumnPrivilegesW(stmt2.get_handle(),
                 nullptr, 0, nullptr, 0,
-                SqlWcharBuf("CUSTOMERS").ptr(), SQL_NTS,
+                SqlWcharBuf(probe_table.c_str()).ptr(), SQL_NTS,
                 SqlWcharBuf("%").ptr(), SQL_NTS);
 
             bool col_priv_ok = SQL_SUCCEEDED(ret2);
