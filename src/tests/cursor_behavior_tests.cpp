@@ -289,7 +289,13 @@ TestResult CursorBehaviorTests::test_getdata_same_column_twice() {
             }
             r.actual = actual.str();
 
-            // Both outcomes are valid: re-read succeeds (SQL_GD_ANY_ORDER) or fails
+            // B8: this cited SQL_GD_ANY_ORDER, which governs the *order*
+            // columns may be retrieved in, not whether one column may be read
+            // twice. The flag for that is SQL_GD_ANY_COLUMN's neighbour
+            // SQL_GD_BLOCK / the driver's own choice - the spec leaves a
+            // repeated SQLGetData on the same column to the driver, which is
+            // why both outcomes are accepted here.
+            // Both outcomes are valid: the re-read succeeds, or fails
             if (!SQL_SUCCEEDED(ret1)) {
                 r.status = TestStatus::FAIL;
                 r.suggestion = "First SQLGetData call should succeed";

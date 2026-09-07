@@ -21,7 +21,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
 
     results.push_back(test_bindparam_wchar_input());
     results.push_back(test_bindparam_null_indicator());
-    results.push_back(test_param_rebind_execute());
+    results.push_back(test_param_bound_value_reread_on_execute());
     results.push_back(test_bindparam_tinyint_to_varchar_roundtrip());
     results.push_back(test_bindparam_short_to_varchar_roundtrip());
     results.push_back(test_bindparam_int_to_varchar_roundtrip());
@@ -224,12 +224,19 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
         });
 }
 
-TestResult ParameterBindingTests::test_param_rebind_execute() {
+TestResult ParameterBindingTests::test_param_bound_value_reread_on_execute() {
     return run_test(
-        "test_param_rebind_execute", "SQLBindParameter",
+        // B8: named for a rebind it does not do. The body binds once,
+        // mutates the bound variable, and executes again with no intervening
+        // SQLBindParameter - which is the *bind-once* contract, and is what
+        // test_param_bind_once_execute_many_endtran covers at scale. Renamed
+        // to what it tests; the parameter-rebinding shape has its own probe
+        // in test_param_rebind_per_row_row_count.
+        "test_param_bound_value_reread_on_execute", "SQLBindParameter",
         "Bind, execute, rebind with new value, execute again",
         Severity::INFO, ConformanceLevel::CORE,
-        "ODBC 3.8 SQLBindParameter: Parameters persist across executions",
+        "ODBC 3.8 SQLBindParameter: the driver re-reads the bound buffer at "
+        "each execute",
         [&](TestResult& r) {
         core::OdbcStatement stmt(conn_);
         

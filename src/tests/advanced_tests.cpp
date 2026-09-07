@@ -25,8 +25,12 @@ std::vector<TestResult> AdvancedTests::run() {
 
 TestResult AdvancedTests::test_cursor_types() {
     return run_test(
-        "test_cursor_types", "SQLSetStmtAttr(SQL_ATTR_CURSOR_TYPE)",
-        "Query supported cursor types",
+        // B8: the name and both strings promised more than the probe does.
+        // It reads SQL_ATTR_CURSOR_TYPE off a fresh statement - it neither
+        // sets a cursor type nor enumerates which are supported, and the
+        // function it named is the one it does not call.
+        "test_cursor_types", "SQLGetStmtAttr(SQL_ATTR_CURSOR_TYPE)",
+        "The default cursor type is readable from a fresh statement",
         Severity::INFO, ConformanceLevel::LEVEL_2,
         "ODBC 3.8 SQLSetStmtAttr, SQL_ATTR_CURSOR_TYPE",
         [&](TestResult& r) {

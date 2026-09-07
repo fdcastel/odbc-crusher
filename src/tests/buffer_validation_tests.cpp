@@ -27,7 +27,7 @@ std::vector<TestResult> BufferValidationTests::run() {
 
 TestResult BufferValidationTests::test_null_termination() {
     return run_test(
-        "Null Termination Test", "SQLGetInfo",
+        "test_null_termination", "SQLGetInfo",
         "Null-terminated with correct length",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetInfo, Buffer Length",
@@ -99,7 +99,7 @@ TestResult BufferValidationTests::test_null_termination() {
 
 TestResult BufferValidationTests::test_buffer_overflow_protection() {
     return run_test(
-        "Buffer Overflow Protection Test", "SQLGetInfo",
+        "test_buffer_overflow_protection", "SQLGetInfo",
         "No overflow",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetInfo, Buffer Length",
@@ -151,7 +151,7 @@ TestResult BufferValidationTests::test_buffer_overflow_protection() {
 
 TestResult BufferValidationTests::test_truncation_indicators() {
     return run_test(
-        "Truncation Indicators Test", "SQLGetInfo",
+        "test_truncation_indicators", "SQLGetInfo",
         "SQL_SUCCESS_WITH_INFO with length > buffer",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetInfo, String Truncation",
@@ -252,7 +252,7 @@ TestResult BufferValidationTests::test_truncation_indicators() {
 
 TestResult BufferValidationTests::test_undersized_buffer() {
     return run_test(
-        "Undersized Buffer Test", "SQLGetInfo",
+        "test_undersized_buffer", "SQLGetInfo",
         "No crash with small buffers",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetInfo, Buffer Length",
@@ -291,7 +291,7 @@ TestResult BufferValidationTests::test_undersized_buffer() {
 
 TestResult BufferValidationTests::test_sentinel_values() {
     return run_test(
-        "Sentinel Values Test", "SQLGetInfo",
+        "test_sentinel_values", "SQLGetInfo",
         "Unused buffer preserved",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetInfo, Buffer Length",

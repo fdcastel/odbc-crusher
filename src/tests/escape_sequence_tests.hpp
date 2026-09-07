@@ -14,12 +14,17 @@ namespace odbc_crusher::tests {
  *   {ts '...'}    — Timestamp literals
  *   {oj ...}      — Outer joins
  *   {CALL ...}    — Procedure calls
- *   {escape '...'} — LIKE escape character
- *   {INTERVAL ...} — Interval literals
+ *   {escape '...'} — LIKE escape character   (advertised only, see below)
+ *   {INTERVAL ...} — Interval literals        (advertised only, see below)
  *
- * All tests are RDBMS-independent — they use ODBC escape syntax
- * and verify the driver processes it. The driver does the native
- * SQL translation.
+ * B8: the two lines above used to read like the rest of the list. No probe
+ * in this file sends either escape - the three that are named for them read
+ * a SQLGetInfo bitmask and stop, which is why B1 made them INFORMATIONAL and
+ * D44 carries the redesign. Saying so here matters because this comment is
+ * what a reader checks before assuming a category is covered.
+ *
+ * The rest are RDBMS-independent — they use ODBC escape syntax and verify
+ * the driver processes it. The driver does the native SQL translation.
  */
 class EscapeSequenceTests : public TestBase {
 public:

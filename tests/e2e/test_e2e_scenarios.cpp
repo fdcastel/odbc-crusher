@@ -650,13 +650,13 @@ TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
     ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
     if (auto why = baseline_blocker(ok.report, "Buffer Validation",
-                                    "Null Termination Test")) GTEST_SKIP() << *why;
+                                    "test_null_termination")) GTEST_SKIP() << *why;
 
     auto bad = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
         "BufferValidation=Lenient;");
     ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
-    auto t = find_test(bad.report, "Buffer Validation", "Null Termination Test");
+    auto t = find_test(bad.report, "Buffer Validation", "test_null_termination");
     ASSERT_TRUE(t.has_value());
     EXPECT_EQ(t->value("status", std::string{}), "FAIL")
         << "BufferValidation=Lenient returns SQL_DRIVER_NAME without its NUL; "

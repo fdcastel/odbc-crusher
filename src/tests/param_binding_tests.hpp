@@ -39,7 +39,9 @@ private:
 
     TestResult test_bindparam_wchar_input();
     TestResult test_bindparam_null_indicator();
-    TestResult test_param_rebind_execute();
+    // B8: renamed - it binds once and re-executes, which is the bind-once
+    // contract, not a rebind.
+    TestResult test_param_bound_value_reread_on_execute();
 
     // §1.1 — numeric-C → character-SQL round-trip matrix. Integer shapes
     // share `run_int_to_string_roundtrip<CType>`; float shapes use

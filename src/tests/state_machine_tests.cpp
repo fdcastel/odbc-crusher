@@ -20,7 +20,7 @@ std::vector<TestResult> StateMachineTests::run() {
 
 TestResult StateMachineTests::test_valid_transitions() {
     return run_test(
-        "Valid Transitions Test", "State Machine",
+        "test_valid_transitions", "State Machine",
         "Normal operation sequence works",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLAllocHandle, Statement Transitions",
@@ -71,7 +71,7 @@ TestResult StateMachineTests::test_valid_transitions() {
 
 TestResult StateMachineTests::test_invalid_operation() {
     return run_test(
-        "Invalid Operation Test", "SQLExecute",
+        "test_invalid_operation", "SQLExecute",
         "SQLExecute without SQLPrepare returns HY010",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLExecute, Appendix B State Transition Tables",
@@ -141,7 +141,7 @@ TestResult StateMachineTests::test_invalid_operation() {
 
 TestResult StateMachineTests::test_state_reset() {
     return run_test(
-        "State Reset Test", "SQLCloseCursor/SQLFreeStmt",
+        "test_state_reset", "SQLCloseCursor/SQLFreeStmt",
         "Close cursor resets state, statement is reusable",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLCloseCursor, SQLFreeStmt, Statement Transitions",
@@ -195,7 +195,7 @@ TestResult StateMachineTests::test_state_reset() {
 
 TestResult StateMachineTests::test_prepare_execute_cycle() {
     return run_test(
-        "Prepare-Execute Cycle Test", "SQLPrepare/SQLExecute",
+        "test_prepare_execute_cycle", "SQLPrepare/SQLExecute",
         "Repeated prepare/execute cycle works",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLPrepare, SQLExecute, Statement Transitions",
@@ -238,7 +238,7 @@ TestResult StateMachineTests::test_prepare_execute_cycle() {
 
 TestResult StateMachineTests::test_connection_state() {
     return run_test(
-        "Connection State Test", "Connection State",
+        "test_connection_state", "Connection State",
         "Connection is active",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetConnectAttr, Connection Transitions",
@@ -276,7 +276,7 @@ TestResult StateMachineTests::test_connection_state() {
 
 TestResult StateMachineTests::test_multiple_statements() {
     return run_test(
-        "Multiple Statements Test", "State Machine",
+        "test_multiple_statements", "State Machine",
         "Independent state tracking per statement",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLAllocHandle, Statement Transitions",

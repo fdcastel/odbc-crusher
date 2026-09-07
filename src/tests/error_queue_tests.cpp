@@ -21,7 +21,7 @@ std::vector<TestResult> ErrorQueueTests::run() {
 
 TestResult ErrorQueueTests::test_single_error() {
     return run_test(
-        "Single Error Test", "SQLGetDiagRec",
+        "test_single_error", "SQLGetDiagRec",
         "One diagnostic record retrieved",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetDiagRec",
         [&](TestResult& r) {
@@ -77,7 +77,7 @@ TestResult ErrorQueueTests::test_single_error() {
 
 TestResult ErrorQueueTests::test_multiple_errors() {
     return run_test(
-        "Multiple Errors Test", "SQLGetDiagRec",
+        "test_multiple_errors", "SQLGetDiagRec",
         "Multiple diagnostic records retrieved",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetDiagRec",
         [&](TestResult& r) {
@@ -140,7 +140,7 @@ TestResult ErrorQueueTests::test_multiple_errors() {
 
 TestResult ErrorQueueTests::test_error_clearing() {
     return run_test(
-        "Error Clearing Test", "SQLGetDiagRec",
+        "test_error_clearing", "SQLGetDiagRec",
         "Successful operation clears error queue",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetDiagRec",
         [&](TestResult& r) {
@@ -172,6 +172,15 @@ TestResult ErrorQueueTests::test_error_clearing() {
                     r.actual = "Could not verify initial error diagnostic";
                     return;
                 }
+
+                // B10: the state the driver actually chose for this error.
+                // The check below used to compare against three hard-coded
+                // values - 42000, 42S02, HY000 - so any engine that picked
+                // something else for a bad statement (37000, 42601, HY090 ...)
+                // had its leftover diagnostic waved through as "info from the
+                // new operation".
+                const std::string initial_state(
+                    reinterpret_cast<char*>(sqlstate));
 
                 // Step 2: Execute a successful operation (try patterns)
                 bool success = false;
@@ -212,15 +221,21 @@ TestResult ErrorQueueTests::test_error_clearing() {
                 } else if (SQL_SUCCEEDED(diag_rc)) {
                     // There might be info/warning from the successful op, check if it's the OLD error
                     std::string state(reinterpret_cast<char*>(sqlstate));
-                    if (state == "42000" || state == "42S02" || state == "HY000") {
+                    if (state == initial_state) {
+                        // B10: the same state the forced error produced is
+                        // still there, whatever that state was.
                         r.status = TestStatus::FAIL;
-                        r.actual = "Old error SQLSTATE=" + state + " still present after successful operation";
+                        r.actual = "The forced error's SQLSTATE=" + state +
+                                   " is still present after a successful "
+                                   "operation on the same handle";
                         r.severity = Severity::WARNING;
                         r.suggestion = "Per ODBC spec, diagnostics should be cleared when a new function is called on the same handle";
                     } else {
                         // A23 - see above.
                         r.status = TestStatus::INFORMATIONAL;
-                        r.actual = "Previous error cleared; current SQLSTATE=" + state + " (likely info from new op)";
+                        r.actual = "Previous error (" + initial_state +
+                                   ") cleared; the successful operation left "
+                                   "SQLSTATE=" + state;
                     }
                 }
             } else {
@@ -232,7 +247,7 @@ TestResult ErrorQueueTests::test_error_clearing() {
 
 TestResult ErrorQueueTests::test_hierarchy() {
     return run_test(
-        "Hierarchy Test", "SQLGetDiagRec",
+        "test_diagnostic_hierarchy", "SQLGetDiagRec",
         "Diagnostics accessible from handles",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetDiagRec",
         [&](TestResult& r) {
@@ -266,7 +281,7 @@ TestResult ErrorQueueTests::test_hierarchy() {
 
 TestResult ErrorQueueTests::test_field_extraction() {
     return run_test(
-        "Field Extraction Test", "SQLGetDiagField",
+        "test_field_extraction", "SQLGetDiagField",
         "Individual diagnostic fields retrieved",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetDiagField",
         [&](TestResult& r) {
@@ -340,7 +355,7 @@ TestResult ErrorQueueTests::test_field_extraction() {
 
 TestResult ErrorQueueTests::test_iteration() {
     return run_test(
-        "Iteration Test", "SQLGetDiagRec",
+        "test_diagnostic_iteration", "SQLGetDiagRec",
         "Loop through records until SQL_NO_DATA",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetDiagRec",
         [&](TestResult& r) {
