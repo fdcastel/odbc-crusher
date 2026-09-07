@@ -476,7 +476,7 @@ The mock is the reference fixture. Until it is right, "195/195" means little, an
 | 41 | **D17** | Grow the mock's tests alongside each fix above, not after. Start with the catalog column-count test that would have caught **D25**. |
 | 42 | **D19**, **D31** | Object library for the tests; collapse the `unicode_wrappers` / `info_api` / `catalog_api` boilerplate (≈ −550 LoC). |
 
-**Exit criteria**: mock suite substantially larger and green; 195/195 still holds on Windows; every fix above has a test that would catch its regression.
+**Exit criteria**: mock suite substantially larger and green; 195/195 still holds on Windows; every fix above has a test that would catch its regression. **Met.** The mock suite went **107 → 372** and is green in Debug and Release. The reference run is **191 PASS + 15 INFORMATIONAL = 206, 100% of the 191 scored** — the *number* is not 195/195 any more and each move is recorded on the row that caused it: **B2** split scored from informational, **A17** and **B11** added four probes, **D44** moved three from informational to scored. What the criterion meant — no regression against the reference — holds throughout; the total moved only when a probe was added or started grading. Every fix has a regression test, with two limits stated on their own rows rather than glossed: **D5**'s test is an arrangement for the sanitiser rather than a deterministic failure, and the calls the Windows driver manager answers itself (**A23**'s eight, `SQL_DIAG_RETURNCODE`, `SQLSetCursorName`) cannot be made to fail from the driver at all.
 
 ---
 
