@@ -4,6 +4,7 @@
 // outcomes in the JSON report. The harness lives in e2e_harness.{hpp,cpp}.
 // Tests SKIP gracefully when the mock driver isn't loadable on the host
 // — an environment problem, not a regression to flag.
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <functional>
 #include <iostream>
@@ -21,6 +22,24 @@ class CrusherE2EFixture : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!has_runnable_mock()) {
+            // D51: skipping is right on a developer's machine, where the
+            // driver may simply not be registered. In CI it is not: the whole
+            // §5.1 harness exists to catch e2e regressions, and a driver that
+            // has stopped loading is the largest regression there is. When
+            // D2's first attempt made the .so export nothing, all 30
+            // scenarios skipped and the job still reported success - the gate
+            // went quiet at exactly the moment it mattered.
+            //
+            // CI sets ODBC_CRUSHER_REQUIRE_MOCK=1, which turns the skip into
+            // the failure it should have been.
+            const char* required = std::getenv("ODBC_CRUSHER_REQUIRE_MOCK");
+            if (required && *required && std::string(required) != "0") {
+                FAIL() << "Mock ODBC Driver is not loadable, and "
+                          "ODBC_CRUSHER_REQUIRE_MOCK is set. In CI the driver "
+                          "is registered before this runs, so this means the "
+                          "driver stopped loading - check the export surface "
+                          "and the registration step.";
+            }
             GTEST_SKIP() << "Mock ODBC Driver not loadable on this host — "
                             "register mock-driver/build/<config>/mockodbc.dll first.";
         }

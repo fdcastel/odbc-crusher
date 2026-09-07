@@ -147,13 +147,14 @@ else()
     mock_generate_export_list(
         "${CMAKE_CURRENT_SOURCE_DIR}/src/mockodbc.def" "${MOCK_EXPORT_LIST}")
 
-    set_target_properties(mock_core PROPERTIES
-        CXX_VISIBILITY_PRESET hidden
-        VISIBILITY_INLINES_HIDDEN ON
-    )
+    # The version script alone, and deliberately *not*
+    # -fvisibility=hidden. The two do not compose the way the row assumes:
+    # hidden visibility is applied by the compiler, and a version script can
+    # only restrict what the linker was given - it cannot re-export a symbol
+    # the compiler already hid. Setting both exported nothing at all, so the
+    # .so stopped being loadable as a driver. Measured: every Linux e2e test
+    # skipped and the CI job still went green, which is what prompted D51.
     set_target_properties(mock-odbc-driver PROPERTIES
-        CXX_VISIBILITY_PRESET hidden
-        VISIBILITY_INLINES_HIDDEN ON
         LINK_DEPENDS "${MOCK_EXPORT_LIST}"
     )
     if(APPLE)

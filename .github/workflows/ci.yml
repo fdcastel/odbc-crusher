@@ -285,6 +285,8 @@ jobs:
         $driverDest = "C:\Windows\System32\mockodbc.dll"
         Copy-Item mock-driver-artifact/build/Release/mockodbc.dll -Destination $driverDest
         & mock-driver-artifact/install/register.ps1 -DriverPath $driverDest
+        # D51: in CI a driver that will not load must fail, not skip.
+        $env:ODBC_CRUSHER_REQUIRE_MOCK = "1"
         ctest --test-dir build -C Release --output-on-failure -L e2e
 
     - name: Register Mock Driver and Run E2E Tests (Linux/macOS)
@@ -317,6 +319,8 @@ jobs:
         # built-in fallback paths for odbcinst, so sudoers' secure_path
         # stripping PATH no longer matters.
         sudo ./mock-driver-artifact/install/register.sh "$DRIVER_ABS"
+        # D51: in CI a driver that will not load must fail, not skip.
+        export ODBC_CRUSHER_REQUIRE_MOCK=1
         ctest --test-dir build -C Release --output-on-failure -L e2e
 
     - name: Report the reference-run baseline
