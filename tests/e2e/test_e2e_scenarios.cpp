@@ -461,12 +461,23 @@ TEST_F(CrusherE2EFixture, NativeSqlPassThroughTripsTranslationProbes) {
 
     // Sanity: SQLExecDirect-side tests still pass — the mock translates at
     // execution time independently of SQLNativeSql.
-    auto exec_oj = find_test(run.report, "Escape Sequence Tests",
-                             "test_outer_join_escape");
-    ASSERT_TRUE(exec_oj.has_value());
-    EXPECT_EQ(exec_oj->value("status", std::string{}), "PASS")
-        << "Execution-time {oj} translation must remain intact under the "
-           "SQLNativeSql-only pass-through.";
+    //
+    // B1: the control used to be test_outer_join_escape, which was a poor
+    // one — it never executed anything, so it could not have shown that
+    // execution-time translation survived. (It is INFORMATIONAL now for
+    // exactly that reason.) These three send `{fn …}` through SQLExecDirect
+    // and compare the value that comes back, so they fail if execution-time
+    // translation breaks.
+    for (const char* name : {"test_string_scalar_functions",
+                             "test_numeric_scalar_functions",
+                             "test_scalar_function_claim_vs_execute"}) {
+        auto t = find_test(run.report, "Escape Sequence Tests", name);
+        ASSERT_TRUE(t.has_value()) << "Probe missing: " << name;
+        EXPECT_EQ(t->value("status", std::string{}), "PASS")
+            << name << ": execution-time escape translation must remain "
+                       "intact under the SQLNativeSql-only pass-through. "
+            << t->value("actual", std::string{});
+    }
 }
 
 // ── SilentCorruption=MangleUnicode: WCHAR round-trip probes FAIL ───────────

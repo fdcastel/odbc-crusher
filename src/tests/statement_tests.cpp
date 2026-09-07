@@ -125,9 +125,18 @@ TestResult StatementTests::test_prepared_statement() {
                 break;            } while (false);
 
             if (!success) {
-                r.actual = "Could not prepare/execute any query pattern";
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "No compatible query pattern found for this driver";
+                // B1: was SKIP_INCONCLUSIVE, which made this probe unable to
+                // fail. SQLPrepare + SQLExecute is Core, and the three
+                // variants cover the dialects this tool targets - a driver
+                // that runs none of them cannot run a prepared statement at
+                // all.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.actual = "No variant of SELECT 1 could be prepared and "
+                           "executed";
+                r.suggestion =
+                    "SQLPrepare and SQLExecute are Core. The diagnostic lists "
+                    "what each dialect variant returned.";
             }
         });
 }
@@ -315,9 +324,16 @@ TestResult StatementTests::test_column_metadata() {
                 }            } while (false);
 
             if (!success) {
-                r.actual = "Could not retrieve column metadata";
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "No compatible query pattern produced result column metadata";
+                // B1: SQLNumResultCols and SQLDescribeCol are Core. An
+                // application cannot read a result set without them, so
+                // failing both is a finding, not an inconclusive result.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.actual = "SQLNumResultCols/SQLDescribeCol produced no column "
+                           "metadata for any query variant";
+                r.suggestion =
+                    "Both are Core. Without them an application cannot "
+                    "discover the shape of a result set.";
             }
         });
 }
@@ -358,9 +374,18 @@ TestResult StatementTests::test_statement_reuse() {
             }
 
             if (!success) {
-                r.actual = "Could not reuse statement";
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "Statement reuse test could not complete with available query patterns";
+                // B1: SQLCloseCursor followed by a re-execute on the same
+                // handle is Core, and it is the shape every bulk consumer
+                // uses. A driver that cannot do it forces a fresh handle per
+                // statement, which is a real and reportable limitation.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "Could not execute, close the cursor, and re-execute "
+                           "on the same statement handle";
+                r.suggestion =
+                    "SQLCloseCursor is Core. If the driver needs a fresh "
+                    "handle between executes, say so with a SQLSTATE rather "
+                    "than failing the second execute.";
             }
         });
 }
@@ -397,17 +422,46 @@ TestResult StatementTests::test_multiple_result_sets() {
 
                 // SQL_NO_DATA means no more result sets (expected)
                 // SQL_SUCCESS means there are more results
-                if (ret == SQL_NO_DATA || ret == SQL_SUCCESS) {
-                    r.actual = "SQLMoreResults callable (returned " +
-                                   std::string(ret == SQL_NO_DATA ? "SQL_NO_DATA" : "SQL_SUCCESS") + ")";
+                // B1: this accepted SQL_NO_DATA *and* SQL_SUCCESS as a pass,
+                // so it asserted only that the function was callable. The
+                // query is a single SELECT with one result set, so SQL_NO_DATA
+                // is the only correct answer - SQL_SUCCESS claims a second
+                // result set that does not exist, and an application looping
+                // on SQLMoreResults would then read a stale or empty one.
+                if (ret == SQL_NO_DATA) {
+                    r.actual = "SQLMoreResults returned SQL_NO_DATA after the "
+                               "single result set";
                     success = true;
                     break;
-                }            } while (false);
+                }
+                if (ret == SQL_SUCCESS) {
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::ERR;
+                    r.actual = "SQLMoreResults returned SQL_SUCCESS after a "
+                               "single-result-set query, claiming another "
+                               "result set exists";
+                    r.suggestion =
+                        "A query with one result set must yield SQL_NO_DATA. "
+                        "An application driving a loop on SQLMoreResults will "
+                        "otherwise read a result set that is not there.";
+                    success = true;
+                    break;
+                }
+                // Anything else: let B3 read the SQLSTATE and decide whether
+                // this driver is declining an optional function or failing.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLMoreResults");
+                success = true;
+                break;
+            } while (false);
 
             if (!success) {
-                r.actual = "SQLMoreResults not tested";
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "Could not execute a query to test SQLMoreResults";
+                // B1: reaching here means no query variant executed, which is
+                // a Core failure and not a reason to excuse SQLMoreResults.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.actual = "No query variant executed, so SQLMoreResults could "
+                           "not be reached";
             }
         });
 }
@@ -516,8 +570,16 @@ TestResult StatementTests::test_bind_col_string() {
                 }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not bind/fetch string column";
+                // B1: SQLBindCol with SQL_C_CHAR is Core and is how most
+                // applications read a result set. Failing it is a finding.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.actual = "Could not bind a character column with SQLBindCol "
+                           "and fetch it";
+                r.suggestion =
+                    "SQLBindCol is Core. An application that binds columns "
+                    "rather than calling SQLGetData per column cannot read "
+                    "anything from this driver.";
             }
         });
 }
@@ -704,8 +766,16 @@ TestResult StatementTests::test_row_count() {
                 }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not test SQLRowCount";
+                // B1: SQLRowCount is Core. The *value* is driver-defined for
+                // a SELECT - which is why the passing branch above only
+                // records it - but the call itself must succeed.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLRowCount failed after a successful SELECT";
+                r.suggestion =
+                    "SQLRowCount is Core and must succeed after an executed "
+                    "statement, even where the count it reports for a SELECT "
+                    "is left to the driver.";
             }
         });
 }
@@ -743,16 +813,29 @@ TestResult StatementTests::test_num_params() {
                         r.status = TestStatus::PASS;
                         r.actual = "SQLNumParams correctly returned 1 for single-parameter query";
                     } else {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQLNumParams returned " + std::to_string(num_params);
+                        // B1: this was a second PASS, so the probe reported
+                        // success whatever number came back - which is the
+                        // one thing it exists to check. The statement has
+                        // exactly one parameter marker.
+                        r.status = TestStatus::FAIL;
+                        r.severity = Severity::ERR;
+                        r.actual = "SQLNumParams returned " +
+                                   std::to_string(num_params) +
+                                   " for a statement with one parameter marker";
+                        r.suggestion =
+                            "SQLNumParams must report the number of parameter "
+                            "markers in the prepared statement. A wrong count "
+                            "misleads any application that binds by position.";
                     }
                     success = true;
                     break;
                 }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not test SQLNumParams";
+                // B1: SQLNumParams is Core.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLNumParams failed on a prepared statement";
             }
         });
 }

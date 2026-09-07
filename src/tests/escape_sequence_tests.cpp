@@ -297,6 +297,13 @@ TestResult EscapeSequenceTests::test_convert_function_capabilities() {
                     << std::dec;
             }
 
+            // B1/B2: a census of what the driver advertises. Converting
+            // everything and converting nothing are both legal, so there is
+            // no right answer to grade. The probes that *use* these
+            // conversions - the {fn CONVERT} cases in this file, and
+            // test_scalar_function_claim_vs_execute - are where a wrong
+            // bitmask shows up as a failure.
+            r.status = TestStatus::INFORMATIONAL;
             r.actual = oss.str();
         });
 }
@@ -877,7 +884,21 @@ TestResult EscapeSequenceTests::test_like_escape_sequence() {
                 return;
             }
 
-            r.actual = "SQL_LIKE_ESCAPE_CLAUSE = '" + like_support + "'";
+            // B1/B2: the probe reads a SQLGetInfo string and stops. Every
+            // answer it can get is legal, so there is nothing to grade, and
+            // scoring it as PASS gave every driver a free point.
+            //
+            // It is named for an escape it never sends, which is the real
+            // defect. Sending one was written and backed out, because the
+            // reference driver accepts `{escape '!'}` and ignores it -
+            // measured, with 'xzy' still matching 'x!_y' - since it does not
+            // evaluate LIKE predicates at all. The probe would have been
+            // failing the fixture, not testing a driver. Fixture gap: D42.
+            // The redesign of these three probes: D44.
+            r.status = TestStatus::INFORMATIONAL;
+            r.actual = "SQL_LIKE_ESCAPE_CLAUSE = '" + like_support +
+                       "' (advertised only; this probe does not send the "
+                       "escape - D44)";
         });
 }
 
@@ -909,7 +930,15 @@ TestResult EscapeSequenceTests::test_outer_join_escape() {
             if (caps & SQL_OJ_INNER) oss << "INNER ";
             if (caps & SQL_OJ_ALL_COMPARISON_OPS) oss << "ALL_COMPARISON_OPS ";
 
-            r.actual = "OJ capabilities: " + (oss.str().empty() ? "none" : oss.str());
+            // B1/B2 - see test_like_escape_sequence. Sending
+            // `{oj ... LEFT OUTER JOIN ...}` needs a second table or a derived
+            // table, and the reference driver can run neither (42S02 on
+            // `FROM (SELECT 1 AS A) T1`) - fixture gap D43, redesign D44.
+            r.status = TestStatus::INFORMATIONAL;
+            r.actual = "OJ capabilities: " +
+                       (oss.str().empty() ? std::string("none") : oss.str()) +
+                       " (advertised only; this probe does not send the "
+                       "escape - D44)";
         });
 }
 
@@ -936,7 +965,13 @@ TestResult EscapeSequenceTests::test_interval_literal_escape() {
             if (mask & SQL_DL_SQL92_INTERVAL_MONTH) oss << "INTERVAL_MONTH ";
             if (mask & SQL_DL_SQL92_INTERVAL_DAY) oss << "INTERVAL_DAY ";
 
-            r.actual = "Datetime literals: " + (oss.str().empty() ? "none" : oss.str());
+            // B1/B2 - see test_like_escape_sequence. The redesign that
+            // actually sends `{d '...'}` is D44.
+            r.status = TestStatus::INFORMATIONAL;
+            r.actual = "Datetime literals: " +
+                       (oss.str().empty() ? std::string("none") : oss.str()) +
+                       " (advertised only; this probe does not send the "
+                       "escape - D44)";
         });
 }
 

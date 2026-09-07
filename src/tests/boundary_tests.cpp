@@ -158,9 +158,23 @@ TestResult BoundaryTests::test_getdata_zero_buffer() {
                 }
 
                 if (!success) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = "Could not determine data length via zero-buffer or truncation";
-                    r.suggestion = "Driver may not support SQLGetData with NULL buffer or may not set indicator on truncation";
+                    // B1: this was a SKIP, which made the probe unfailable -
+                    // two PASS branches and an excuse. Reporting the length of
+                    // a character column in StrLen_or_IndPtr is Core, and the
+                    // probe tries both accepted ways of asking (a null
+                    // pointer with a zero buffer, then a one-byte buffer that
+                    // forces truncation). A driver that answers neither cannot
+                    // be used to read a value of unknown length at all, which
+                    // is a finding and not an inconclusive result.
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::ERR;
+                    r.actual = "Neither SQLGetData(NULL, 0) nor a 1-byte "
+                               "buffer produced a data length in the indicator";
+                    r.suggestion =
+                        "SQLGetData must set StrLen_or_IndPtr to the number of "
+                        "bytes available, both when called with a zero-length "
+                        "buffer and when the value is truncated. Without it an "
+                        "application cannot size a buffer for a long value.";
                 }
             } catch (const std::exception& e) {
                 r.status = TestStatus::ERR;
@@ -202,8 +216,24 @@ TestResult BoundaryTests::test_bindparam_null_value_with_null_indicator() {
                     r.status = TestStatus::PASS;
                     r.actual = "SQLBindParameter with NULL value + SQL_NULL_DATA indicator succeeded";
                 } else {
-                    r.status = TestStatus::PASS;
-                    r.actual = "SQLBindParameter handled NULL value (rc=" + std::to_string(rc) + ")";
+                    // B1: this `else` was a second PASS, so the probe could
+                    // not fail. The spec is not ambiguous here - binding a
+                    // null ParameterValuePtr with StrLen_or_IndPtr set to
+                    // SQL_NULL_DATA is the documented way to pass a NULL
+                    // parameter, and it must succeed. A driver that rejects it
+                    // cannot be given a NULL through a bound parameter at all.
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::ERR;
+                    r.actual = "SQLBindParameter rejected a NULL value pointer "
+                               "with SQL_NULL_DATA (rc=" +
+                               std::to_string(rc) + ") [" +
+                               first_sqlstate(SQL_HANDLE_STMT,
+                                              stmt.get_handle(),
+                                              "no diagnostic") + "]";
+                    r.suggestion =
+                        "A null ParameterValuePtr with StrLen_or_IndPtr = "
+                        "SQL_NULL_DATA is how an application passes SQL NULL. "
+                        "The driver must accept it and ignore the pointer.";
                 }
             } catch (const std::exception& e) {
                 r.status = TestStatus::ERR;
@@ -224,15 +254,24 @@ TestResult BoundaryTests::test_execdirect_empty_sql() {
 
                 SQLRETURN rc = SQLExecDirect(stmt.get_handle(), (SQLCHAR*)"", SQL_NTS);
 
+                // B1/B2: three PASS branches, because there is genuinely no
+                // right answer - the spec does not say what an empty
+                // statement text must do, and real drivers split between
+                // 42000 and accepting it as a no-op. Recording which one this
+                // driver does is useful; scoring it is not, so the result is
+                // reported and left out of the pass rate.
+                r.status = TestStatus::INFORMATIONAL;
                 if (rc == SQL_ERROR) {
-                    r.status = TestStatus::PASS;
-                    r.actual = "SQL_ERROR for empty SQL string - expected behavior";
+                    r.actual = "SQL_ERROR for an empty SQL string [" +
+                               first_sqlstate(SQL_HANDLE_STMT,
+                                              stmt.get_handle(),
+                                              "no diagnostic") + "]";
                 } else if (SQL_SUCCEEDED(rc)) {
-                    r.status = TestStatus::PASS;
-                    r.actual = "Driver accepted empty SQL string (implementation-defined behavior)";
+                    r.actual = "Driver accepted an empty SQL string (rc=" +
+                               std::to_string(rc) + ")";
                 } else {
-                    r.status = TestStatus::PASS;
-                    r.actual = "Driver returned rc=" + std::to_string(rc) + " for empty SQL";
+                    r.actual = "Driver returned rc=" + std::to_string(rc) +
+                               " for an empty SQL string";
                 }
             } catch (const std::exception& e) {
                 r.status = TestStatus::ERR;
