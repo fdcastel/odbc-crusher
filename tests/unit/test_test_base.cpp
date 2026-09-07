@@ -18,6 +18,7 @@
 #include "core/odbc_error.hpp"
 #include "tests/test_base.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <new>
@@ -257,4 +258,59 @@ TEST(BoundedStringTest, NullBufferAndZeroCapacityAreHandled) {
     auto b = tests::TestBase::bounded_string(buf, 0, 3);
     EXPECT_EQ(b.value, "");
     EXPECT_TRUE(b.length_unknown);
+}
+
+// ── DialectAttempt::format_failures — IMPROVEMENT_PLAN.md C2 ───────────────
+//
+// The point of the helper is that a probe which finds no working dialect can
+// say what the driver objected to. Prior plan item 2.8 was closed as
+// "implicitly addressed"; it was not, and this is the part that closes it.
+
+TEST(DialectAttemptTest, NoFailuresFormatsEmpty) {
+    tests::DialectAttempt a;
+    a.executed = true;
+    a.query = "SELECT 1";
+    EXPECT_EQ(a.format_failures(), "");
+}
+
+TEST(DialectAttemptTest, EachFailedVariantIsNamedWithItsSqlstate) {
+    tests::DialectAttempt a;
+    a.failures.push_back({"SELECT 1 FROM RDB$DATABASE", "42S02", "Table unknown"});
+    a.failures.push_back({"SELECT 1 FROM dual", "42000", "Syntax error"});
+
+    const auto text = a.format_failures();
+    EXPECT_NE(text.find("RDB$DATABASE"), std::string::npos) << text;
+    EXPECT_NE(text.find("42S02"), std::string::npos) << text;
+    EXPECT_NE(text.find("Table unknown"), std::string::npos) << text;
+    EXPECT_NE(text.find("dual"), std::string::npos) << text;
+    EXPECT_NE(text.find("42000"), std::string::npos) << text;
+    // One line per variant.
+    EXPECT_EQ(std::count(text.begin(), text.end(), '\n'), 1);
+}
+
+// A driver that fails without posting a diagnostic must still be reported —
+// "(no SQLSTATE)" is information, an empty string is not.
+TEST(DialectAttemptTest, MissingSqlstateIsSaidExplicitly) {
+    tests::DialectAttempt a;
+    a.failures.push_back({"SELECT 1", "", ""});
+    const auto text = a.format_failures();
+    EXPECT_NE(text.find("SELECT 1"), std::string::npos) << text;
+    EXPECT_NE(text.find("no SQLSTATE"), std::string::npos) << text;
+}
+
+TEST(DialectAttemptTest, BoolConversionReflectsExecution) {
+    tests::DialectAttempt a;
+    EXPECT_FALSE(static_cast<bool>(a));
+    a.executed = true;
+    EXPECT_TRUE(static_cast<bool>(a));
+}
+
+// first_sqlstate on a handle with no diagnostics returns the caller's
+// fallback, so a probe can distinguish "driver said nothing" from a state.
+TEST_F(RunTestFixture, FirstSqlstateFallsBackWhenNoDiagnosticPosted) {
+    EXPECT_EQ(tests::TestBase::first_sqlstate(SQL_HANDLE_DBC, conn_->get_handle(),
+                                              "none"),
+              "none");
+    EXPECT_EQ(tests::TestBase::first_sqlstate(SQL_HANDLE_DBC, conn_->get_handle()),
+              "");
 }

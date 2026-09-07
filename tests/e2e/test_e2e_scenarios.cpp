@@ -787,3 +787,83 @@ TEST_F(CrusherE2EFixture, TwoRunsDifferOnlyInTimings) {
         << unstable.size() << " non-timing value(s) differ between two "
         << "identical runs, out of " << fa.size() << " leaves:" << detail;
 }
+
+// A1 — the largest false-negative class in the suite. A dialect-fallback loop
+// treated "executed fine, returned 41 instead of 42" exactly like "did not
+// execute": both fell through to the next variant, and when the list ran out
+// the probe reported SKIP_INCONCLUSIVE — which does not affect the exit code.
+//
+// With C2's helper the two are distinguishable: once a variant executes the
+// probe is conclusive, so a wrong value is a FAIL.
+//
+// Measured across the whole suite under SkewNumeric: 33 failures / 4 skips
+// before, 36 / 1 after — the three DataType probes moving from SKIP to FAIL.
+TEST_F(CrusherE2EFixture, WrongValueIsAFailureNotAnInconclusiveSkip) {
+    const std::string base =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;";
+
+    auto quiet = run_crusher(base);
+    ASSERT_TRUE(quiet.report.contains("summary")) << quiet.raw_stderr;
+    if (auto why = baseline_blocker(quiet.report, "Data Type Tests",
+                                    "test_integer_types")) GTEST_SKIP() << *why;
+
+    auto skewed = run_crusher(base + "SilentCorruption=SkewNumeric;");
+    ASSERT_TRUE(skewed.report.contains("summary")) << skewed.raw_stderr;
+
+    for (const char* probe : {"test_integer_types", "test_decimal_types",
+                              "test_float_types"}) {
+        auto t = find_test(skewed.report, "Data Type Tests", probe);
+        ASSERT_TRUE(t.has_value()) << probe;
+        EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+            << probe << " returned a wrong value; SKIP_INCONCLUSIVE would hide "
+            << "it from the exit code. actual: " << t->value("actual", std::string{});
+        // The report must say what the driver returned, not just that it was
+        // wrong — that is what makes the finding actionable.
+        EXPECT_NE(t->value("actual", std::string{}).find("Expected"),
+                  std::string::npos)
+            << probe << " actual: " << t->value("actual", std::string{});
+    }
+}
+
+// C2 — when no dialect variant executes, the report must say what each one
+// failed with. Prior plan item 2.8 was closed as "implicitly addressed" by the
+// run_test extraction; it was not, because every fallback loop carried its own
+// inner `catch (const OdbcError&) { continue; }` that discarded the query, the
+// SQLSTATE and the message.
+TEST_F(CrusherE2EFixture, FailedDialectVariantsAreReportedNotSwallowed) {
+    // Catalog=Empty removes the tables, so catalog-dependent variants fail;
+    // Mode=Partial with FailOn=SQLExecDirect makes every variant fail outright.
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Partial;FailOn=SQLExecDirect;"
+        "Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(run.launched);
+    if (!run.report.contains("categories")) {
+        GTEST_SKIP() << "driver refused the connection under this configuration";
+    }
+
+    // Find any probe that reported no compatible query pattern, and require it
+    // to carry a diagnostic naming at least one failed variant.
+    int checked = 0;
+    for (const auto& cat : run.report["categories"]) {
+        if (!cat.contains("tests")) continue;
+        for (const auto& t : cat["tests"]) {
+            const auto actual = t.value("actual", std::string{});
+            if (actual.find("No compatible") == std::string::npos &&
+                actual.find("Could not test") == std::string::npos) {
+                continue;
+            }
+            ++checked;
+            const auto diag = t.value("diagnostic", std::string{});
+            EXPECT_FALSE(diag.empty())
+                << cat.value("name", std::string{}) << "/"
+                << t.value("test_name", std::string{})
+                << " gave up on every dialect variant without saying why";
+            EXPECT_NE(diag.find("->"), std::string::npos)
+                << "diagnostic should list each variant and its SQLSTATE: " << diag;
+        }
+    }
+    if (checked == 0) {
+        GTEST_SKIP() << "no probe exhausted its dialect list under this "
+                        "configuration; nothing to assert";
+    }
+}

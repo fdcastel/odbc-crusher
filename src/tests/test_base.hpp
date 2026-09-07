@@ -2,6 +2,8 @@
 
 #include "core/odbc_connection.hpp"
 #include "core/odbc_error.hpp"
+#include "core/odbc_statement.hpp"
+#include <functional>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -67,6 +69,33 @@ struct BoundedString {
     bool length_unknown = false;   // driver returned SQL_NO_TOTAL, or a negative
 };
 
+// One dialect variant that failed to execute, and why — C2.
+struct DialectFailure {
+    std::string query;
+    std::string sqlstate;    // empty when the driver posted no diagnostic
+    std::string message;
+};
+
+// Outcome of trying a list of dialect variants until one executes — C2.
+//
+// Prior plan item 2.8 ("collect failing query text in retry loops") was closed
+// as "implicitly addressed" by the run_test extraction. It was not: run_test
+// centralises the *outer* catch, while ~33 hand-rolled fallback loops each
+// carried their own inner `catch (const OdbcError&) { continue; }` that
+// discarded the query, the SQLSTATE and the message. When every variant fails,
+// the probe reports "No compatible query pattern found" and the report says
+// nothing about what the driver actually objected to.
+struct DialectAttempt {
+    bool executed = false;                   // one of the queries ran
+    std::string query;                       // the one that ran; empty if none
+    std::vector<DialectFailure> failures;    // every variant that did not
+
+    explicit operator bool() const { return executed; }
+
+    // One line per failed variant, for TestResult::diagnostic.
+    std::string format_failures() const;
+};
+
 // Base class for all ODBC tests
 class TestBase {
 public:
@@ -80,6 +109,48 @@ public:
 
     // Get test category name
     virtual std::string category_name() const = 0;
+
+    // First SQLSTATE on a handle, or `fallback` when the driver posted no
+    // diagnostic — C5.
+    //
+    // This shape was re-implemented six ways across the tree
+    // (sqlstate_tests.cpp twice, state_machine_tests.cpp, advanced_tests.cpp,
+    // metadata_tests.cpp twice) plus the file-local copies Phase 2 added while
+    // waiting for this. B3's classify_failure() is built on it.
+    static std::string first_sqlstate(SQLSMALLINT handle_type, SQLHANDLE handle,
+                                      const std::string& fallback = "");
+
+    // Execute the first query in `queries` that the driver accepts — C2.
+    //
+    // Probes offer the same query in several dialects ("SELECT 42",
+    // "SELECT 42 FROM RDB$DATABASE", ...) and take whichever runs. Every one of
+    // the ~33 hand-rolled versions of this loop swallowed the failures; this
+    // one records them, so a probe that finds no working variant can say why
+    // instead of shrugging.
+    //
+    // It reports only whether a query *executed*. Deciding what the result
+    // means is the caller's job — and once a query has executed the probe is
+    // conclusive, so a wrong value is a FAIL rather than a reason to try the
+    // next dialect (A1).
+    DialectAttempt execute_first_working(core::OdbcStatement& stmt,
+                                         const std::vector<std::string>& queries);
+
+    // Same, for probes whose loop prepares rather than executes — several
+    // parameter-binding probes need the statement prepared so they can bind
+    // before executing.
+    DialectAttempt prepare_first_working(core::OdbcStatement& stmt,
+                                         const std::vector<std::string>& queries);
+
+    // The general form both of the above are written in terms of: run `body`
+    // for each query until one completes without throwing OdbcError.
+    //
+    // Some probes need more than one call to decide whether a variant works —
+    // prepare, then bind, then execute — and any of them can be the step this
+    // dialect does not support. Throwing from `body` rejects the variant and
+    // records why; returning normally accepts it.
+    static DialectAttempt try_first_working(
+        const std::vector<std::string>& queries,
+        const std::function<void(const std::string&)>& body);
 
     // Build a std::string from a buffer the driver filled, using the length
     // the driver reported — safely. A3.

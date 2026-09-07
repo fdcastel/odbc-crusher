@@ -43,31 +43,36 @@ TestResult CancellationTests::test_cancel_as_reset() {
             core::OdbcStatement stmt(conn_);
 
             std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
-            bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    // Execute a query
-                    stmt.execute(query);
-                    stmt.fetch();
-
-                    // Cancel to reset state
-                    SQLRETURN rc = SQLCancel(stmt.get_handle());
-
-                    if (SQL_SUCCEEDED(rc)) {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQLCancel after query execution succeeded";
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
-
-            if (!success) {
+            // C2: the loop this replaces swallowed both failures, so a driver
+            // that rejected every variant reported only "Could not test".
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "Could not test SQLCancel state reset";
+                r.diagnostic = attempt.format_failures();
+                return;
+            }
+
+            stmt.fetch();
+
+            // A1: the query executed, so whatever SQLCancel does now is the
+            // driver's answer. It used to fall through to the next dialect and
+            // end as SKIP_INCONCLUSIVE, which hid the failure from the exit code.
+            SQLRETURN rc = SQLCancel(stmt.get_handle());
+            if (SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::PASS;
+                r.actual = "SQLCancel after query execution succeeded";
+            } else {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLCancel after query execution returned " +
+                           std::to_string(rc) + " (" +
+                           first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(),
+                                          "no SQLSTATE") + ")";
+                r.severity = Severity::WARNING;
+                r.suggestion = "SQLCancel on a statement with a result set should "
+                               "succeed and reset the statement to the prepared or "
+                               "allocated state.";
             }
         });
 }

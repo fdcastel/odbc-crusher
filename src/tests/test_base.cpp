@@ -14,6 +14,78 @@
 
 namespace odbc_crusher::tests {
 
+std::string DialectAttempt::format_failures() const {
+    if (failures.empty()) return {};
+    std::string out;
+    for (const auto& f : failures) {
+        if (!out.empty()) out += "\n";
+        out += "  " + f.query + "  ->  ";
+        out += f.sqlstate.empty() ? std::string("(no SQLSTATE)") : f.sqlstate;
+        if (!f.message.empty()) out += ": " + f.message;
+    }
+    return out;
+}
+
+std::string TestBase::first_sqlstate(SQLSMALLINT handle_type, SQLHANDLE handle,
+                                     const std::string& fallback) {
+    try {
+        auto err = core::OdbcError::from_handle(handle_type, handle, "");
+        if (!err.diagnostics().empty()) return err.diagnostics()[0].sqlstate;
+    } catch (...) {
+        // Reading diagnostics must never be the thing that fails a probe.
+    }
+    return fallback;
+}
+
+namespace {
+
+// Record why one dialect variant was rejected.
+DialectFailure make_failure(const std::string& query, const core::OdbcError& e) {
+    DialectFailure failure;
+    failure.query = query;
+    failure.message = e.what();
+    if (!e.diagnostics().empty()) {
+        failure.sqlstate = e.diagnostics()[0].sqlstate;
+        failure.message = e.diagnostics()[0].message;
+    }
+    return failure;
+}
+
+}  // namespace
+
+DialectAttempt TestBase::try_first_working(
+    const std::vector<std::string>& queries,
+    const std::function<void(const std::string&)>& body) {
+    DialectAttempt attempt;
+    for (const auto& query : queries) {
+        try {
+            body(query);
+            attempt.executed = true;
+            attempt.query = query;
+            return attempt;
+        } catch (const core::OdbcError& e) {
+            attempt.failures.push_back(make_failure(query, e));
+            // No recycle() here: OdbcStatement::execute() and ::prepare() both
+            // recycle on entry, which is what makes trying the next variant
+            // safe on drivers like Firebird that poison a handle after a
+            // syntax error.
+        }
+    }
+    return attempt;
+}
+
+DialectAttempt TestBase::prepare_first_working(
+    core::OdbcStatement& stmt, const std::vector<std::string>& queries) {
+    return try_first_working(queries,
+                             [&](const std::string& q) { stmt.prepare(q); });
+}
+
+DialectAttempt TestBase::execute_first_working(
+    core::OdbcStatement& stmt, const std::vector<std::string>& queries) {
+    return try_first_working(queries,
+                             [&](const std::string& q) { stmt.execute(q); });
+}
+
 BoundedString TestBase::bounded_string(const char* buf, size_t capacity,
                                        SQLLEN reported) {
     BoundedString out;

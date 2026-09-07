@@ -257,7 +257,23 @@ ParsedQuery::LiteralExpr parse_literal_expression(const std::string& expr_str) {
                 lit.column_size = col_size;
 
                 std::string upper_inner = to_upper(inner_expr);
-                if (upper_inner == "NULL") {
+                if (inner_expr == "?") {
+                    // Found by A1 in Phase 3: only a *bare* `?` was
+                    // recognised as a parameter marker, so
+                    // `SELECT CAST(? AS INTEGER)` came back as the
+                    // literal string "?" - the driver accepted the
+                    // query, executed it, and returned the wrong value.
+                    // The CAST form is the portable way to write a
+                    // parameterised literal SELECT (a bare `SELECT ?`
+                    // leaves some engines no type to infer), so it is
+                    // the form probes reach for first.
+                    //
+                    // The declared CAST type stays as the marker type,
+                    // which is exactly what the cast is there to say.
+                    // This is the literal-SELECT corner of D10.
+                    lit.is_parameter_marker = true;
+                    lit.value = std::monostate{};
+                } else if (upper_inner == "NULL") {
                     lit.value = std::monostate{};
                 } else if (inner_expr.front() == '\'' && inner_expr.back() == '\'') {
                     std::string val = inner_expr.substr(1, inner_expr.length() - 2);

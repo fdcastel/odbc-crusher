@@ -68,17 +68,19 @@ TestResult StatementTests::test_simple_query() {
             bool success = false;
             std::string successful_query;
 
-            for (const auto& query : test_queries) {
-                try {
-                    stmt.execute(query);
-                    success = true;
-                    successful_query = query;
-                    break;
-                } catch (const core::OdbcError&) {
-                    // Try next pattern
-                    continue;
-                }
-            }
+            auto attempt = execute_first_working(stmt, test_queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
+                const std::string& query = attempt.query;
+                success = true;
+                successful_query = query;
+                break;            } while (false);
 
             if (success) {
                 r.actual = "Successfully executed: " + successful_query;
@@ -108,17 +110,19 @@ TestResult StatementTests::test_prepared_statement() {
             };
 
             bool success = false;
-            for (const auto& query : test_queries) {
-                try {
-                    stmt.prepare(query);
-                    stmt.execute_prepared();
-                    success = true;
-                    r.actual = "Successfully prepared and executed query";
-                    break;
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+            auto attempt = prepare_first_working(stmt, test_queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
+                stmt.execute_prepared();
+                success = true;
+                r.actual = "Successfully prepared and executed query";
+                break;            } while (false);
 
             if (!success) {
                 r.actual = "Could not prepare/execute any query pattern";
@@ -147,53 +151,77 @@ TestResult StatementTests::test_parameter_binding() {
                 "SELECT ?"                                        // Fallback
             };
 
-            bool success = false;
             SQLINTEGER param_value = 42;
 
-            for (const auto& query : test_queries) {
-                try {
-                    stmt.prepare(query);
+            // C2/A1. Whether a dialect variant works is not decided by the
+            // prepare alone: the bind or the execute can be the step this
+            // engine does not support. try_first_working() runs all three and
+            // rejects the variant only if one of them throws — which is
+            // exactly the rule A1 asks for, "advance only when the call
+            // failed", and what the old loop got right by accident and the
+            // first migration attempt got wrong by stopping at the prepare.
+            auto attempt = try_first_working(test_queries, [&](const std::string& q) {
+                stmt.prepare(q);
+                SQLRETURN bind_rc = SQLBindParameter(
+                    stmt.get_handle(),
+                    1,                      // Parameter number
+                    SQL_PARAM_INPUT,        // Input parameter
+                    SQL_C_SLONG,            // C type
+                    SQL_INTEGER,            // SQL type
+                    0,                      // Column size
+                    0,                      // Decimal digits
+                    &param_value,           // Parameter value
+                    0,                      // Buffer length
+                    nullptr                 // StrLen_or_IndPtr
+                );
+                core::check_odbc_result(bind_rc, SQL_HANDLE_STMT, stmt.get_handle(),
+                                        "SQLBindParameter");
+                stmt.execute_prepared();
+            });
 
-                    SQLRETURN ret = SQLBindParameter(
-                        stmt.get_handle(),
-                        1,                      // Parameter number
-                        SQL_PARAM_INPUT,        // Input parameter
-                        SQL_C_SLONG,            // C type
-                        SQL_INTEGER,            // SQL type
-                        0,                      // Column size
-                        0,                      // Decimal digits
-                        &param_value,           // Parameter value
-                        0,                      // Buffer length
-                        nullptr                 // StrLen_or_IndPtr
-                    );
-
-                    if (SQL_SUCCEEDED(ret)) {
-                        stmt.execute_prepared();
-
-                        // Try to fetch result
-                        if (stmt.fetch()) {
-                            SQLINTEGER result_value = 0;
-                            SQLLEN indicator = 0;
-
-                            ret = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                            &result_value, sizeof(result_value), &indicator);
-
-                            if (SQL_SUCCEEDED(ret) && result_value == 42) {
-                                r.actual = "Parameter binding successful, retrieved value: 42";
-                                success = true;
-                                break;
-                            }
-                        }
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
+            if (!attempt) {
+                r.actual = "No parameterised query pattern this driver accepts";
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion = "None of the tested dialect variants prepared, bound "
+                               "and executed.";
+                // C2: name each variant and what it failed with.
+                r.diagnostic = attempt.format_failures();
+                return;
             }
 
-            if (!success) {
-                r.actual = "Parameter binding not tested (driver may not support)";
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "No compatible parameterized query pattern found for this driver";
+            // A1: it prepared, bound and executed. From here the probe is
+            // conclusive — a missing row or a wrong value is the driver's
+            // answer, not a reason to try the next dialect and report
+            // SKIP_INCONCLUSIVE.
+            if (!stmt.fetch()) {
+                r.status = TestStatus::FAIL;
+                r.actual = attempt.query + " executed but returned no row";
+                r.severity = Severity::ERR;
+                return;
+            }
+
+            SQLINTEGER result_value = 0;
+            SQLLEN indicator = 0;
+            SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                       &result_value, sizeof(result_value), &indicator);
+            if (SQL_SUCCEEDED(ret) && result_value == 42 &&
+                indicator != SQL_NULL_DATA) {
+                r.actual = "Parameter binding successful, retrieved value: 42";
+            } else if (!SQL_SUCCEEDED(ret)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "SQLGetData failed with " +
+                           first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(),
+                                          "no SQLSTATE");
+                r.severity = Severity::ERR;
+            } else {
+                r.status = TestStatus::FAIL;
+                r.actual = "Bound parameter 42 came back as " +
+                           std::to_string(result_value) + " (indicator=" +
+                           std::to_string(indicator) + ")";
+                r.severity = Severity::CRITICAL;
+                r.suggestion = "A value bound as an input parameter must survive the "
+                               "round trip unchanged. This is the shape of the "
+                               "Firebird #161 silent-corruption bug.";
             }
         });
 }
@@ -213,19 +241,21 @@ TestResult StatementTests::test_result_fetching() {
             };
 
             bool success = false;
-            for (const auto& query : test_queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, test_queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    if (stmt.fetch()) {
-                        r.actual = "Successfully fetched result row";
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                if (stmt.fetch()) {
+                    r.actual = "Successfully fetched result row";
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success) {
                 r.actual = "Could not fetch results";
@@ -250,37 +280,39 @@ TestResult StatementTests::test_column_metadata() {
             };
 
             bool success = false;
-            for (const auto& query : test_queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, test_queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLSMALLINT num_cols = 0;
-                    SQLRETURN ret = SQLNumResultCols(stmt.get_handle(), &num_cols);
+                SQLSMALLINT num_cols = 0;
+                SQLRETURN ret = SQLNumResultCols(stmt.get_handle(), &num_cols);
 
-                    if (SQL_SUCCEEDED(ret) && num_cols > 0) {
-                        // Get column info
-                        SQLCHAR col_name[256];
-                        SQLSMALLINT name_len = 0;
-                        SQLSMALLINT data_type = 0;
-                        SQLULEN column_size = 0;
-                        SQLSMALLINT decimal_digits = 0;
-                        SQLSMALLINT nullable = 0;
+                if (SQL_SUCCEEDED(ret) && num_cols > 0) {
+                    // Get column info
+                    SQLCHAR col_name[256];
+                    SQLSMALLINT name_len = 0;
+                    SQLSMALLINT data_type = 0;
+                    SQLULEN column_size = 0;
+                    SQLSMALLINT decimal_digits = 0;
+                    SQLSMALLINT nullable = 0;
 
-                        ret = SQLDescribeCol(stmt.get_handle(), 1, col_name, sizeof(col_name),
-                                            &name_len, &data_type, &column_size, &decimal_digits, &nullable);
+                    ret = SQLDescribeCol(stmt.get_handle(), 1, col_name, sizeof(col_name),
+                                        &name_len, &data_type, &column_size, &decimal_digits, &nullable);
 
-                        if (SQL_SUCCEEDED(ret)) {
-                            std::ostringstream oss;
-                            oss << "Found " << num_cols << " column(s), type: " << data_type;
-                            r.actual = oss.str();
-                            success = true;
-                            break;
-                        }
+                    if (SQL_SUCCEEDED(ret)) {
+                        std::ostringstream oss;
+                        oss << "Found " << num_cols << " column(s), type: " << data_type;
+                        r.actual = oss.str();
+                        success = true;
+                        break;
                     }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                }            } while (false);
 
             if (!success) {
                 r.actual = "Could not retrieve column metadata";
@@ -349,26 +381,28 @@ TestResult StatementTests::test_multiple_result_sets() {
             };
 
             bool success = false;
-            for (const auto& query : test_queries) {
-                try {
-                    stmt.execute(query);
-                    stmt.fetch();
+            auto attempt = execute_first_working(stmt, test_queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
+                stmt.fetch();
 
-                    // Check for more results
-                    SQLRETURN ret = SQLMoreResults(stmt.get_handle());
+                // Check for more results
+                SQLRETURN ret = SQLMoreResults(stmt.get_handle());
 
-                    // SQL_NO_DATA means no more result sets (expected)
-                    // SQL_SUCCESS means there are more results
-                    if (ret == SQL_NO_DATA || ret == SQL_SUCCESS) {
-                        r.actual = "SQLMoreResults callable (returned " +
-                                       std::string(ret == SQL_NO_DATA ? "SQL_NO_DATA" : "SQL_SUCCESS") + ")";
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                // SQL_NO_DATA means no more result sets (expected)
+                // SQL_SUCCESS means there are more results
+                if (ret == SQL_NO_DATA || ret == SQL_SUCCESS) {
+                    r.actual = "SQLMoreResults callable (returned " +
+                                   std::string(ret == SQL_NO_DATA ? "SQL_NO_DATA" : "SQL_SUCCESS") + ")";
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success) {
                 r.actual = "SQLMoreResults not tested";
@@ -400,38 +434,40 @@ TestResult StatementTests::test_bind_col_integer() {
             std::vector<std::string> queries = {"SELECT 42", "SELECT 42 FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG,
-                                             &value, sizeof(value), &indicator);
+                SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG,
+                                         &value, sizeof(value), &indicator);
 
-                    if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
-                        // A6: this was `||`. The right operand is true for
-                        // every non-NULL fetch, so the probe passed on any
-                        // value at all and its FAIL branch was unreachable.
-                        if (value == 42 && indicator != SQL_NULL_DATA) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "Bound integer column, fetched value=" + std::to_string(value);
-                            success = true;
-                        } else if (indicator == SQL_NULL_DATA) {
-                            r.status = TestStatus::FAIL;
-                            r.actual = "Bound column reported SQL_NULL_DATA for a "
-                                       "non-NULL literal";
-                            r.severity = Severity::ERR;
-                        } else {
-                            r.status = TestStatus::FAIL;
-                            r.actual = "Fetched unexpected value=" + std::to_string(value) +
-                                       " (expected 42)";
-                            r.severity = Severity::ERR;
-                        }
-                        break;
+                if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
+                    // A6: this was `||`. The right operand is true for
+                    // every non-NULL fetch, so the probe passed on any
+                    // value at all and its FAIL branch was unreachable.
+                    if (value == 42 && indicator != SQL_NULL_DATA) {
+                        r.status = TestStatus::PASS;
+                        r.actual = "Bound integer column, fetched value=" + std::to_string(value);
+                        success = true;
+                    } else if (indicator == SQL_NULL_DATA) {
+                        r.status = TestStatus::FAIL;
+                        r.actual = "Bound column reported SQL_NULL_DATA for a "
+                                   "non-NULL literal";
+                        r.severity = Severity::ERR;
+                    } else {
+                        r.status = TestStatus::FAIL;
+                        r.actual = "Fetched unexpected value=" + std::to_string(value) +
+                                   " (expected 42)";
+                        r.severity = Severity::ERR;
                     }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                    break;
+                }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -458,24 +494,26 @@ TestResult StatementTests::test_bind_col_string() {
             std::vector<std::string> queries = {"SELECT 'hello'", "SELECT 'hello' FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_CHAR,
-                                             value, sizeof(value), &indicator);
+                SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_CHAR,
+                                         value, sizeof(value), &indicator);
 
-                    if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
-                        std::string fetched(reinterpret_cast<char*>(value));
-                        r.status = TestStatus::PASS;
-                        r.actual = "Bound string column, fetched '" + fetched + "'";
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
+                    std::string fetched(reinterpret_cast<char*>(value));
+                    r.status = TestStatus::PASS;
+                    r.actual = "Bound string column, fetched '" + fetched + "'";
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -503,91 +541,93 @@ TestResult StatementTests::test_fetch_bound_vs_getdata() {
             std::vector<std::string> queries = {"SELECT 99", "SELECT 99 FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    // A7: the SQLBindCol return code used to be discarded.
-                    // SQLBindCol is Core, so a failure here is the driver's,
-                    // and continuing would have compared an unwritten buffer.
-                    SQLRETURN bind_rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG,
-                                                   &bound_value, sizeof(bound_value),
-                                                   &indicator);
-                    if (!SQL_SUCCEEDED(bind_rc)) {
-                        r.status = TestStatus::FAIL;
-                        r.actual = "SQLBindCol failed (" +
-                                   first_sqlstate_or(stmt.get_handle(), "no SQLSTATE") + ")";
-                        r.severity = Severity::ERR;
-                        r.suggestion = "SQLBindCol is a Core function; binding "
-                                       "SQL_C_SLONG to an integer column must succeed.";
-                        success = true;
-                        break;
-                    }
-
-                    if (stmt.fetch()) {
-                        // Also get via SQLGetData
-                        SQLINTEGER getdata_value = 0;
-                        SQLLEN getdata_ind = 0;
-                        SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                                &getdata_value, sizeof(getdata_value), &getdata_ind);
-
-                        // A7: this probe is named for comparing the two values
-                        // and never compared them — both branches set PASS.
-                        if (SQL_SUCCEEDED(rc)) {
-                            if (bound_value == getdata_value &&
-                                indicator == getdata_ind) {
-                                r.status = TestStatus::PASS;
-                                r.actual = "Bound=" + std::to_string(bound_value) +
-                                           ", GetData=" + std::to_string(getdata_value) +
-                                           " (match)";
-                            } else {
-                                r.status = TestStatus::FAIL;
-                                r.actual = "Bound=" + std::to_string(bound_value) +
-                                           " (ind=" + std::to_string(indicator) + ")" +
-                                           " but GetData=" + std::to_string(getdata_value) +
-                                           " (ind=" + std::to_string(getdata_ind) + ")";
-                                r.severity = Severity::CRITICAL;
-                                r.suggestion =
-                                    "The same column read two ways in the same row "
-                                    "must yield the same value. A mismatch means one "
-                                    "of the two delivery paths is corrupting data.";
-                            }
-                        } else {
-                            // SQLGetData on a *bound* column is optional: a
-                            // driver may decline it unless SQL_GETDATA_EXTENSIONS
-                            // advertises SQL_GD_BOUND. Only that specific
-                            // combination is a SKIP; anything else is a failure.
-                            const std::string state =
-                                first_sqlstate_or(stmt.get_handle(), "");
-                            SQLUINTEGER gd_ext = 0;
-                            SQLGetInfo(conn_.get_handle(), SQL_GETDATA_EXTENSIONS,
-                                       &gd_ext, sizeof(gd_ext), nullptr);
-                            const bool advertises_gd_bound =
-                                (gd_ext & SQL_GD_BOUND) != 0;
-                            if ((state == "07009" || state == "HY109") &&
-                                !advertises_gd_bound) {
-                                r.status = TestStatus::SKIP_UNSUPPORTED;
-                                r.actual = "SQLGetData on a bound column returned " +
-                                           state + "; SQL_GETDATA_EXTENSIONS does not "
-                                           "advertise SQL_GD_BOUND";
-                            } else {
-                                r.status = TestStatus::FAIL;
-                                r.actual = "SQLGetData on a bound column failed (" +
-                                           (state.empty() ? "no SQLSTATE" : state) + ")";
-                                r.severity = Severity::ERR;
-                                r.suggestion =
-                                    "A driver that advertises SQL_GD_BOUND must allow "
-                                    "SQLGetData on a bound column; otherwise it must "
-                                    "report 07009 or HY109.";
-                            }
-                        }
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
+                // A7: the SQLBindCol return code used to be discarded.
+                // SQLBindCol is Core, so a failure here is the driver's,
+                // and continuing would have compared an unwritten buffer.
+                SQLRETURN bind_rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_SLONG,
+                                               &bound_value, sizeof(bound_value),
+                                               &indicator);
+                if (!SQL_SUCCEEDED(bind_rc)) {
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLBindCol failed (" +
+                               first_sqlstate_or(stmt.get_handle(), "no SQLSTATE") + ")";
+                    r.severity = Severity::ERR;
+                    r.suggestion = "SQLBindCol is a Core function; binding "
+                                   "SQL_C_SLONG to an integer column must succeed.";
+                    success = true;
+                    break;
                 }
-            }
+
+                if (stmt.fetch()) {
+                    // Also get via SQLGetData
+                    SQLINTEGER getdata_value = 0;
+                    SQLLEN getdata_ind = 0;
+                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                            &getdata_value, sizeof(getdata_value), &getdata_ind);
+
+                    // A7: this probe is named for comparing the two values
+                    // and never compared them — both branches set PASS.
+                    if (SQL_SUCCEEDED(rc)) {
+                        if (bound_value == getdata_value &&
+                            indicator == getdata_ind) {
+                            r.status = TestStatus::PASS;
+                            r.actual = "Bound=" + std::to_string(bound_value) +
+                                       ", GetData=" + std::to_string(getdata_value) +
+                                       " (match)";
+                        } else {
+                            r.status = TestStatus::FAIL;
+                            r.actual = "Bound=" + std::to_string(bound_value) +
+                                       " (ind=" + std::to_string(indicator) + ")" +
+                                       " but GetData=" + std::to_string(getdata_value) +
+                                       " (ind=" + std::to_string(getdata_ind) + ")";
+                            r.severity = Severity::CRITICAL;
+                            r.suggestion =
+                                "The same column read two ways in the same row "
+                                "must yield the same value. A mismatch means one "
+                                "of the two delivery paths is corrupting data.";
+                        }
+                    } else {
+                        // SQLGetData on a *bound* column is optional: a
+                        // driver may decline it unless SQL_GETDATA_EXTENSIONS
+                        // advertises SQL_GD_BOUND. Only that specific
+                        // combination is a SKIP; anything else is a failure.
+                        const std::string state =
+                            first_sqlstate_or(stmt.get_handle(), "");
+                        SQLUINTEGER gd_ext = 0;
+                        SQLGetInfo(conn_.get_handle(), SQL_GETDATA_EXTENSIONS,
+                                   &gd_ext, sizeof(gd_ext), nullptr);
+                        const bool advertises_gd_bound =
+                            (gd_ext & SQL_GD_BOUND) != 0;
+                        if ((state == "07009" || state == "HY109") &&
+                            !advertises_gd_bound) {
+                            r.status = TestStatus::SKIP_UNSUPPORTED;
+                            r.actual = "SQLGetData on a bound column returned " +
+                                       state + "; SQL_GETDATA_EXTENSIONS does not "
+                                       "advertise SQL_GD_BOUND";
+                        } else {
+                            r.status = TestStatus::FAIL;
+                            r.actual = "SQLGetData on a bound column failed (" +
+                                       (state.empty() ? "no SQLSTATE" : state) + ")";
+                            r.severity = Severity::ERR;
+                            r.suggestion =
+                                "A driver that advertises SQL_GD_BOUND must allow "
+                                "SQLGetData on a bound column; otherwise it must "
+                                "report 07009 or HY109.";
+                        }
+                    }
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -643,23 +683,25 @@ TestResult StatementTests::test_row_count() {
             std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLLEN row_count = -1;
-                    SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
+                SQLLEN row_count = -1;
+                SQLRETURN rc = SQLRowCount(stmt.get_handle(), &row_count);
 
-                    if (SQL_SUCCEEDED(rc)) {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQLRowCount returned " + std::to_string(row_count);
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                if (SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQLRowCount returned " + std::to_string(row_count);
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -683,28 +725,30 @@ TestResult StatementTests::test_num_params() {
             };
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.prepare(query);
+            auto attempt = prepare_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLSMALLINT num_params = -1;
-                    SQLRETURN rc = SQLNumParams(stmt.get_handle(), &num_params);
+                SQLSMALLINT num_params = -1;
+                SQLRETURN rc = SQLNumParams(stmt.get_handle(), &num_params);
 
-                    if (SQL_SUCCEEDED(rc)) {
-                        if (num_params == 1) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "SQLNumParams correctly returned 1 for single-parameter query";
-                        } else {
-                            r.status = TestStatus::PASS;
-                            r.actual = "SQLNumParams returned " + std::to_string(num_params);
-                        }
-                        success = true;
-                        break;
+                if (SQL_SUCCEEDED(rc)) {
+                    if (num_params == 1) {
+                        r.status = TestStatus::PASS;
+                        r.actual = "SQLNumParams correctly returned 1 for single-parameter query";
+                    } else {
+                        r.status = TestStatus::PASS;
+                        r.actual = "SQLNumParams returned " + std::to_string(num_params);
                     }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -728,32 +772,34 @@ TestResult StatementTests::test_describe_param() {
             };
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.prepare(query);
+            auto attempt = prepare_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLSMALLINT sql_type = 0;
-                    SQLULEN param_size = 0;
-                    SQLSMALLINT decimal_digits = 0;
-                    SQLSMALLINT nullable = 0;
+                SQLSMALLINT sql_type = 0;
+                SQLULEN param_size = 0;
+                SQLSMALLINT decimal_digits = 0;
+                SQLSMALLINT nullable = 0;
 
-                    SQLRETURN rc = SQLDescribeParam(
-                        stmt.get_handle(), 1,
-                        &sql_type, &param_size, &decimal_digits, &nullable
-                    );
+                SQLRETURN rc = SQLDescribeParam(
+                    stmt.get_handle(), 1,
+                    &sql_type, &param_size, &decimal_digits, &nullable
+                );
 
-                    if (SQL_SUCCEEDED(rc)) {
-                        r.status = TestStatus::PASS;
-                        r.actual = "Parameter 1: type=" + std::to_string(sql_type) +
-                                       ", size=" + std::to_string(param_size) +
-                                       ", nullable=" + std::to_string(nullable);
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                if (SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::PASS;
+                    r.actual = "Parameter 1: type=" + std::to_string(sql_type) +
+                                   ", size=" + std::to_string(param_size) +
+                                   ", nullable=" + std::to_string(nullable);
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success && r.status == TestStatus::PASS) {
                 r.status = TestStatus::SKIP_UNSUPPORTED;

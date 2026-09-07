@@ -82,36 +82,38 @@ TestResult DescriptorTests::test_ird_after_prepare() {
             std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.prepare(query);
+            auto attempt = prepare_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    // Get IRD handle
-                    SQLHDESC ird = SQL_NULL_HDESC;
-                    SQLRETURN rc = SQLGetStmtAttr(
-                        stmt.get_handle(), SQL_ATTR_IMP_ROW_DESC,
-                        &ird, 0, nullptr
+                // Get IRD handle
+                SQLHDESC ird = SQL_NULL_HDESC;
+                SQLRETURN rc = SQLGetStmtAttr(
+                    stmt.get_handle(), SQL_ATTR_IMP_ROW_DESC,
+                    &ird, 0, nullptr
+                );
+
+                if (SQL_SUCCEEDED(rc) && ird != SQL_NULL_HDESC) {
+                    // Read SQL_DESC_COUNT from IRD
+                    SQLSMALLINT count = 0;
+                    rc = SQLGetDescField(
+                        ird, 0, SQL_DESC_COUNT,
+                        &count, sizeof(count), nullptr
                     );
 
-                    if (SQL_SUCCEEDED(rc) && ird != SQL_NULL_HDESC) {
-                        // Read SQL_DESC_COUNT from IRD
-                        SQLSMALLINT count = 0;
-                        rc = SQLGetDescField(
-                            ird, 0, SQL_DESC_COUNT,
-                            &count, sizeof(count), nullptr
-                        );
-
-                        if (SQL_SUCCEEDED(rc)) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "IRD has " + std::to_string(count) + " column(s) after SQLPrepare";
-                            success = true;
-                            break;
-                        }
+                    if (SQL_SUCCEEDED(rc)) {
+                        r.status = TestStatus::PASS;
+                        r.actual = "IRD has " + std::to_string(count) + " column(s) after SQLPrepare";
+                        success = true;
+                        break;
                     }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                }            } while (false);
 
             if (!success) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -223,40 +225,42 @@ TestResult DescriptorTests::test_auto_populate_after_exec() {
             std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    // Check SQLNumResultCols (which reads from IRD)
-                    SQLSMALLINT num_cols = 0;
-                    SQLRETURN rc = SQLNumResultCols(stmt.get_handle(), &num_cols);
+                // Check SQLNumResultCols (which reads from IRD)
+                SQLSMALLINT num_cols = 0;
+                SQLRETURN rc = SQLNumResultCols(stmt.get_handle(), &num_cols);
 
-                    if (SQL_SUCCEEDED(rc) && num_cols > 0) {
-                        // Also verify column description works (reads from IRD)
-                        SQLCHAR col_name[128];
-                        SQLSMALLINT name_len = 0, data_type = 0, nullable = 0;
-                        SQLULEN col_size = 0;
-                        SQLSMALLINT dec_digits = 0;
+                if (SQL_SUCCEEDED(rc) && num_cols > 0) {
+                    // Also verify column description works (reads from IRD)
+                    SQLCHAR col_name[128];
+                    SQLSMALLINT name_len = 0, data_type = 0, nullable = 0;
+                    SQLULEN col_size = 0;
+                    SQLSMALLINT dec_digits = 0;
 
-                        rc = SQLDescribeCol(stmt.get_handle(), 1,
-                            col_name, sizeof(col_name), &name_len,
-                            &data_type, &col_size, &dec_digits, &nullable);
+                    rc = SQLDescribeCol(stmt.get_handle(), 1,
+                        col_name, sizeof(col_name), &name_len,
+                        &data_type, &col_size, &dec_digits, &nullable);
 
-                        if (SQL_SUCCEEDED(rc)) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "After SQLExecDirect: " + std::to_string(num_cols) +
-                                           " col(s), type=" + std::to_string(data_type);
-                        } else {
-                            r.status = TestStatus::PASS;
-                            r.actual = "After SQLExecDirect: " + std::to_string(num_cols) + " column(s) detected";
-                        }
-                        success = true;
-                        break;
+                    if (SQL_SUCCEEDED(rc)) {
+                        r.status = TestStatus::PASS;
+                        r.actual = "After SQLExecDirect: " + std::to_string(num_cols) +
+                                       " col(s), type=" + std::to_string(data_type);
+                    } else {
+                        r.status = TestStatus::PASS;
+                        r.actual = "After SQLExecDirect: " + std::to_string(num_cols) + " column(s) detected";
                     }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;

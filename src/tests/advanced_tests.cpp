@@ -342,37 +342,39 @@ TestResult AdvancedTests::test_fetch_scroll_next() {
             std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_NEXT, 0);
+                SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_NEXT, 0);
 
-                    if (SQL_SUCCEEDED(rc)) {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQLFetchScroll(SQL_FETCH_NEXT) succeeded";
-                        success = true;
-                        break;
-                    } else if (rc == SQL_NO_DATA) {
-                        // A26: this used to PASS as "empty result". The query
-                        // is `SELECT 1`, which has exactly one row — so
-                        // SQL_NO_DATA on the first fetch means the driver lost
-                        // it, not that the result set was empty.
-                        r.status = TestStatus::FAIL;
-                        r.actual = "SQLFetchScroll(SQL_FETCH_NEXT) returned "
-                                   "SQL_NO_DATA on the first row of a "
-                                   "single-row result set";
-                        r.severity = Severity::ERR;
-                        r.suggestion =
-                            "SELECT 1 returns one row; the first "
-                            "SQLFetchScroll(SQL_FETCH_NEXT) must deliver it.";
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                if (SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQLFetchScroll(SQL_FETCH_NEXT) succeeded";
+                    success = true;
+                    break;
+                } else if (rc == SQL_NO_DATA) {
+                    // A26: this used to PASS as "empty result". The query
+                    // is `SELECT 1`, which has exactly one row — so
+                    // SQL_NO_DATA on the first fetch means the driver lost
+                    // it, not that the result set was empty.
+                    r.status = TestStatus::FAIL;
+                    r.actual = "SQLFetchScroll(SQL_FETCH_NEXT) returned "
+                               "SQL_NO_DATA on the first row of a "
+                               "single-row result set";
+                    r.severity = Severity::ERR;
+                    r.suggestion =
+                        "SELECT 1 returns one row; the first "
+                        "SQLFetchScroll(SQL_FETCH_NEXT) must deliver it.";
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -398,36 +400,38 @@ TestResult AdvancedTests::test_fetch_scroll_first_last() {
             std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_FIRST, 0);
+                SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_FIRST, 0);
 
-                    if (SQL_SUCCEEDED(rc)) {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQLFetchScroll(SQL_FETCH_FIRST) succeeded (scrollable cursor)";
-                        success = true;
-                        break;
-                    } else if (rc == SQL_ERROR) {
-                        SQLCHAR sqlstate[6] = {0};
-                        SQLINTEGER native = 0;
-                        SQLCHAR msg[256] = {0};
-                        SQLSMALLINT msg_len = 0;
-                        SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                                     sqlstate, &native, msg, sizeof(msg), &msg_len);
-                        std::string state(reinterpret_cast<char*>(sqlstate));
+                if (SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQLFetchScroll(SQL_FETCH_FIRST) succeeded (scrollable cursor)";
+                    success = true;
+                    break;
+                } else if (rc == SQL_ERROR) {
+                    SQLCHAR sqlstate[6] = {0};
+                    SQLINTEGER native = 0;
+                    SQLCHAR msg[256] = {0};
+                    SQLSMALLINT msg_len = 0;
+                    SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
+                                 sqlstate, &native, msg, sizeof(msg), &msg_len);
+                    std::string state(reinterpret_cast<char*>(sqlstate));
 
-                        r.status = TestStatus::SKIP_UNSUPPORTED;
-                        r.actual = "SQLFetchScroll(SQL_FETCH_FIRST) not supported (SQLSTATE=" + state + ")";
-                        r.suggestion = "Scrollable cursors (SQL_FETCH_FIRST/LAST) are a Level 2 feature";
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQLFetchScroll(SQL_FETCH_FIRST) not supported (SQLSTATE=" + state + ")";
+                    r.suggestion = "Scrollable cursors (SQL_FETCH_FIRST/LAST) are a Level 2 feature";
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -452,28 +456,30 @@ TestResult AdvancedTests::test_fetch_scroll_absolute() {
             std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
             bool success = false;
 
-            for (const auto& query : queries) {
-                try {
-                    stmt.execute(query);
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else do {
+                // do/while(false): the body still uses `break` to mean
+                // "stop here", which is what it meant when this was a
+                // loop over dialect variants.
 
-                    SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_ABSOLUTE, 1);
+                SQLRETURN rc = SQLFetchScroll(stmt.get_handle(), SQL_FETCH_ABSOLUTE, 1);
 
-                    if (SQL_SUCCEEDED(rc)) {
-                        r.status = TestStatus::PASS;
-                        r.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE, 1) succeeded";
-                        success = true;
-                        break;
-                    } else if (rc == SQL_ERROR) {
-                        r.status = TestStatus::SKIP_UNSUPPORTED;
-                        r.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE) not supported";
-                        r.suggestion = "Absolute positioning is a Level 2 cursor feature";
-                        success = true;
-                        break;
-                    }
-                } catch (const core::OdbcError&) {
-                    continue;
-                }
-            }
+                if (SQL_SUCCEEDED(rc)) {
+                    r.status = TestStatus::PASS;
+                    r.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE, 1) succeeded";
+                    success = true;
+                    break;
+                } else if (rc == SQL_ERROR) {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE) not supported";
+                    r.suggestion = "Absolute positioning is a Level 2 cursor feature";
+                    success = true;
+                    break;
+                }            } while (false);
 
             if (!success) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;

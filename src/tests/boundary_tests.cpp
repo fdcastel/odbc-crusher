@@ -249,60 +249,62 @@ TestResult BoundaryTests::test_describecol_col0() {
                 std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
                 bool success = false;
 
-                for (const auto& query : queries) {
-                    try {
-                        stmt.execute(query);
+                auto attempt = execute_first_working(stmt, queries);
+                if (!attempt) {
+                    // C2: nothing executed. Say what each variant failed with,
+                    // instead of leaving the report to shrug.
+                    r.diagnostic = attempt.format_failures();
+                } else do {
+                    // do/while(false): the body still uses `break` to mean
+                    // "stop here", which is what it meant when this was a
+                    // loop over dialect variants.
 
-                        SQLCHAR col_name[128] = {0};
-                        SQLSMALLINT col_name_len = 0;
-                        SQLSMALLINT data_type = 0;
-                        SQLULEN col_size = 0;
-                        SQLSMALLINT decimal_digits = 0;
-                        SQLSMALLINT nullable = 0;
+                    SQLCHAR col_name[128] = {0};
+                    SQLSMALLINT col_name_len = 0;
+                    SQLSMALLINT data_type = 0;
+                    SQLULEN col_size = 0;
+                    SQLSMALLINT decimal_digits = 0;
+                    SQLSMALLINT nullable = 0;
 
-                        SQLRETURN rc = SQLDescribeCol(
-                            stmt.get_handle(), 0,
-                            col_name, sizeof(col_name), &col_name_len,
-                            &data_type, &col_size, &decimal_digits, &nullable
-                        );
+                    SQLRETURN rc = SQLDescribeCol(
+                        stmt.get_handle(), 0,
+                        col_name, sizeof(col_name), &col_name_len,
+                        &data_type, &col_size, &decimal_digits, &nullable
+                    );
 
-                        // A21: both branches used to PASS — SQL_ERROR without
-                        // reading the state, and plain SQL_SUCCESS. The spec is
-                        // specific: with SQL_ATTR_USE_BOOKMARKS at its default
-                        // SQL_UB_OFF, ColumnNumber 0 is 07009 (invalid
-                        // descriptor index), not "some error" and certainly not
-                        // success.
-                        if (rc == SQL_ERROR) {
-                            const std::string state =
-                                first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
-                            if (state == "07009") {
-                                r.status = TestStatus::PASS;
-                                r.actual = "07009 for column 0 with bookmarks off";
-                            } else {
-                                r.status = TestStatus::FAIL;
-                                r.actual = "Column 0 rejected with " +
-                                           (state.empty() ? std::string("no SQLSTATE")
-                                                          : state) +
-                                           "; the spec requires 07009";
-                                r.severity = Severity::WARNING;
-                            }
-                        } else if (SQL_SUCCEEDED(rc)) {
+                    // A21: both branches used to PASS — SQL_ERROR without
+                    // reading the state, and plain SQL_SUCCESS. The spec is
+                    // specific: with SQL_ATTR_USE_BOOKMARKS at its default
+                    // SQL_UB_OFF, ColumnNumber 0 is 07009 (invalid
+                    // descriptor index), not "some error" and certainly not
+                    // success.
+                    if (rc == SQL_ERROR) {
+                        const std::string state =
+                            first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
+                        if (state == "07009") {
+                            r.status = TestStatus::PASS;
+                            r.actual = "07009 for column 0 with bookmarks off";
+                        } else {
                             r.status = TestStatus::FAIL;
-                            r.actual = "Column 0 described successfully even though "
-                                       "SQL_ATTR_USE_BOOKMARKS is SQL_UB_OFF";
+                            r.actual = "Column 0 rejected with " +
+                                       (state.empty() ? std::string("no SQLSTATE")
+                                                      : state) +
+                                       "; the spec requires 07009";
                             r.severity = Severity::WARNING;
-                            r.suggestion =
-                                "Column 0 is the bookmark column. With bookmarks "
-                                "disabled, SQLDescribeCol must return SQL_ERROR "
-                                "with SQLSTATE 07009.";
                         }
-
-                        success = true;
-                        break;
-                    } catch (const core::OdbcError&) {
-                        continue;
+                    } else if (SQL_SUCCEEDED(rc)) {
+                        r.status = TestStatus::FAIL;
+                        r.actual = "Column 0 described successfully even though "
+                                   "SQL_ATTR_USE_BOOKMARKS is SQL_UB_OFF";
+                        r.severity = Severity::WARNING;
+                        r.suggestion =
+                            "Column 0 is the bookmark column. With bookmarks "
+                            "disabled, SQLDescribeCol must return SQL_ERROR "
+                            "with SQLSTATE 07009.";
                     }
-                }
+
+                    success = true;
+                    break;                } while (false);
 
                 if (!success) {
                     r.status = TestStatus::SKIP_INCONCLUSIVE;

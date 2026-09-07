@@ -146,39 +146,41 @@ TestResult SqlstateTests::test_getdata_col0_no_bookmark() {
                 std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
                 bool success = false;
 
-                for (const auto& query : queries) {
-                    try {
-                        stmt.execute(query);
-                        if (stmt.fetch()) {
-                            // Now try SQLGetData with column 0 (bookmark) when bookmarks aren't enabled
-                            SQLINTEGER value = 0;
-                            SQLLEN indicator = 0;
-                            SQLRETURN rc = SQLGetData(stmt.get_handle(), 0, SQL_C_SLONG,
-                                                     &value, sizeof(value), &indicator);
+                auto attempt = execute_first_working(stmt, queries);
+                if (!attempt) {
+                    // C2: nothing executed. Say what each variant failed with,
+                    // instead of leaving the report to shrug.
+                    r.diagnostic = attempt.format_failures();
+                } else do {
+                    // do/while(false): the body still uses `break` to mean
+                    // "stop here", which is what it meant when this was a
+                    // loop over dialect variants.
+                    if (stmt.fetch()) {
+                        // Now try SQLGetData with column 0 (bookmark) when bookmarks aren't enabled
+                        SQLINTEGER value = 0;
+                        SQLLEN indicator = 0;
+                        SQLRETURN rc = SQLGetData(stmt.get_handle(), 0, SQL_C_SLONG,
+                                                 &value, sizeof(value), &indicator);
 
-                            if (rc == SQL_ERROR) {
-                                std::string state = get_stmt_sqlstate(stmt.get_handle());
-                                if (state == "07009") {
-                                    r.status = TestStatus::PASS;
-                                    r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 0";
-                                } else {
-                                    r.status = TestStatus::FAIL;
-                                    r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 07009)";
-                                    r.severity = Severity::WARNING;
-                                }
+                        if (rc == SQL_ERROR) {
+                            std::string state = get_stmt_sqlstate(stmt.get_handle());
+                            if (state == "07009") {
+                                r.status = TestStatus::PASS;
+                                r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 0";
                             } else {
                                 r.status = TestStatus::FAIL;
-                                r.actual = "SQLGetData(col=0) did not return SQL_ERROR (rc=" + std::to_string(rc) + ")";
+                                r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 07009)";
                                 r.severity = Severity::WARNING;
-                                r.suggestion = "Driver should return 07009 for column 0 unless bookmarks are enabled";
                             }
-                            success = true;
-                            break;
+                        } else {
+                            r.status = TestStatus::FAIL;
+                            r.actual = "SQLGetData(col=0) did not return SQL_ERROR (rc=" + std::to_string(rc) + ")";
+                            r.severity = Severity::WARNING;
+                            r.suggestion = "Driver should return 07009 for column 0 unless bookmarks are enabled";
                         }
-                    } catch (const core::OdbcError&) {
-                        continue;
-                    }
-                }
+                        success = true;
+                        break;
+                    }                } while (false);
 
                 if (!success) {
                     r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -204,38 +206,40 @@ TestResult SqlstateTests::test_getdata_col_out_of_range() {
                 std::vector<std::string> queries = {"SELECT 1", "SELECT 1 FROM RDB$DATABASE"};
                 bool success = false;
 
-                for (const auto& query : queries) {
-                    try {
-                        stmt.execute(query);
-                        if (stmt.fetch()) {
-                            // Try a column way beyond what exists
-                            SQLINTEGER value = 0;
-                            SQLLEN indicator = 0;
-                            SQLRETURN rc = SQLGetData(stmt.get_handle(), 999, SQL_C_SLONG,
-                                                     &value, sizeof(value), &indicator);
+                auto attempt = execute_first_working(stmt, queries);
+                if (!attempt) {
+                    // C2: nothing executed. Say what each variant failed with,
+                    // instead of leaving the report to shrug.
+                    r.diagnostic = attempt.format_failures();
+                } else do {
+                    // do/while(false): the body still uses `break` to mean
+                    // "stop here", which is what it meant when this was a
+                    // loop over dialect variants.
+                    if (stmt.fetch()) {
+                        // Try a column way beyond what exists
+                        SQLINTEGER value = 0;
+                        SQLLEN indicator = 0;
+                        SQLRETURN rc = SQLGetData(stmt.get_handle(), 999, SQL_C_SLONG,
+                                                 &value, sizeof(value), &indicator);
 
-                            if (rc == SQL_ERROR) {
-                                std::string state = get_stmt_sqlstate(stmt.get_handle());
-                                if (state == "07009") {
-                                    r.status = TestStatus::PASS;
-                                    r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 999";
-                                } else {
-                                    r.status = TestStatus::FAIL;
-                                    r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 07009)";
-                                    r.severity = Severity::WARNING;
-                                }
+                        if (rc == SQL_ERROR) {
+                            std::string state = get_stmt_sqlstate(stmt.get_handle());
+                            if (state == "07009") {
+                                r.status = TestStatus::PASS;
+                                r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 999";
                             } else {
                                 r.status = TestStatus::FAIL;
-                                r.actual = "SQLGetData(col=999) did not return SQL_ERROR";
+                                r.actual = "SQL_ERROR but SQLSTATE=" + state + " (expected 07009)";
                                 r.severity = Severity::WARNING;
                             }
-                            success = true;
-                            break;
+                        } else {
+                            r.status = TestStatus::FAIL;
+                            r.actual = "SQLGetData(col=999) did not return SQL_ERROR";
+                            r.severity = Severity::WARNING;
                         }
-                    } catch (const core::OdbcError&) {
-                        continue;
-                    }
-                }
+                        success = true;
+                        break;
+                    }                } while (false);
 
                 if (!success) {
                     r.status = TestStatus::SKIP_INCONCLUSIVE;
