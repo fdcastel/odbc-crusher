@@ -58,9 +58,14 @@ TestResult MetadataTests::test_tables_catalog() {
                 r.actual = oss.str();
                 r.status = TestStatus::PASS;
             } else {
-                r.actual = "SQLTables not supported or failed";
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "SQLTables call did not succeed; check driver catalog support";
+                // B1: was SKIP_INCONCLUSIVE - "not supported or failed",
+                // which conflates the two. SQLTables is Core; every driver
+                // must implement it, and an empty catalog is reported by
+                // returning no rows rather than by failing the call. B3 reads
+                // the SQLSTATE so a driver that genuinely says HYC00 still
+                // gets a skip, and anything else is the failure it is.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLTables");
             }
         });
 }
@@ -203,6 +208,11 @@ TestResult MetadataTests::test_columns_catalog() {
                 r.status = TestStatus::PASS;
             } else {
                 r.actual = "SQLColumns callable but no system tables accessible";
+                // B1: kept as a skip, but for the right reason. SQLColumns
+                // succeeded and returned nothing, which is a statement about
+                // the *catalog* this account can see, not about the driver -
+                // there is nothing to fail. The Core-ness of SQLColumns is
+                // covered by the call itself succeeding above.
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.suggestion = "SQLColumns executed but no columns found in tested system tables";
             }
@@ -260,9 +270,14 @@ TestResult MetadataTests::test_primary_keys() {
             }
 
             if (!callable) {
-                r.actual = "SQLPrimaryKeys not supported by driver";
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.suggestion = "SQLPrimaryKeys is a Level 1 function and may not be implemented";
+                // B1/B4: was an unconditional SKIP_UNSUPPORTED, which said
+                // "not supported" for every possible failure - a permissions
+                // error, a malformed catalog, a driver bug. `stmt` is still
+                // alive here, so B3 can read what the last attempt actually
+                // returned: HYC00 or IM001 still skip, anything else is the
+                // failure it is.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLPrimaryKeys");
             } else if (r.actual.empty()) {
                 r.actual = "SQLPrimaryKeys callable (no PKs in queried tables)";
                 r.status = TestStatus::PASS;
@@ -322,9 +337,14 @@ TestResult MetadataTests::test_statistics() {
             }
 
             if (!callable) {
-                r.actual = "SQLStatistics not supported by driver";
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.suggestion = "SQLStatistics is a Level 1 function and may not be implemented";
+                // B1/B4: was an unconditional SKIP_UNSUPPORTED, which said
+                // "not supported" for every possible failure - a permissions
+                // error, a malformed catalog, a driver bug. `stmt` is still
+                // alive here, so B3 can read what the last attempt actually
+                // returned: HYC00 or IM001 still skip, anything else is the
+                // failure it is.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLStatistics");
             }
         });
 }
@@ -426,9 +446,14 @@ TestResult MetadataTests::test_special_columns() {
             }
 
             if (!callable) {
-                r.actual = "SQLSpecialColumns not supported by driver";
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.suggestion = "SQLSpecialColumns is a Level 1 function and may not be implemented";
+                // B1/B4: was an unconditional SKIP_UNSUPPORTED, which said
+                // "not supported" for every possible failure - a permissions
+                // error, a malformed catalog, a driver bug. `stmt` is still
+                // alive here, so B3 can read what the last attempt actually
+                // returned: HYC00 or IM001 still skip, anything else is the
+                // failure it is.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLSpecialColumns");
             }
         });
 }
@@ -543,14 +568,34 @@ TestResult MetadataTests::test_foreign_keys() {
                     r.actual = "SQLForeignKeys callable (no foreign keys in database)";
                     r.status = TestStatus::PASS;
                 } else {
-                    r.actual = "SQLForeignKeys not supported";
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.suggestion = "SQLForeignKeys is a Level 1 function; some drivers don't implement foreign key metadata";
+                // B1/B4: was an unconditional SKIP_UNSUPPORTED, which said
+                // "not supported" for every possible failure - a permissions
+                // error, a malformed catalog, a driver bug. `stmt` is still
+                // alive here, so B3 can read what the last attempt actually
+                // returned: HYC00 or IM001 still skip, anything else is the
+                // failure it is.
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLForeignKeys");
                 }
-            } catch (const core::OdbcError&) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Foreign keys not supported by driver";
-                r.suggestion = "SQLForeignKeys is a Level 1 function; this is normal for simple drivers";
+            } catch (const core::OdbcError& e) {
+                // B1/B4: an exception here is not evidence of an unimplemented
+                // function either. run_test's own OdbcError handler would set
+                // ERR; this keeps the SQLSTATE-based classification instead,
+                // which is the only thing that can tell "declined" from
+                // "broken".
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = std::string("SQLForeignKeys threw: ") + e.what();
+                r.diagnostic = e.format_diagnostics();
+                // The statement is scoped inside the try, so the SQLSTATE has
+                // to come from the exception rather than from a handle.
+                const std::string state = e.diagnostics().empty()
+                                        ? std::string()
+                                        : e.diagnostics()[0].sqlstate;
+                if (state == "HYC00" || state == "IM001") {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQLForeignKeys is not implemented (" + state + ")";
+                }
             }
         });
 }
@@ -584,14 +629,31 @@ TestResult MetadataTests::test_table_privileges() {
                     r.actual = oss.str();
                     r.status = TestStatus::PASS;
                 } else {
-                    r.actual = "SQLTablePrivileges not supported";
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.suggestion = "SQLTablePrivileges is a Level 2 function; many drivers don't implement privilege metadata";
+                // B1/B4: was an unconditional SKIP_UNSUPPORTED, which said
+                // "not supported" for every possible failure - a permissions
+                // error, a malformed catalog, a driver bug. `stmt` is still
+                // alive here, so B3 can read what the last attempt actually
+                // returned: HYC00 or IM001 still skip, anything else is the
+                // failure it is.
+                    report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                                   "SQLTablePrivileges");
                 }
-            } catch (const core::OdbcError&) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Table privileges not supported by driver";
-                r.suggestion = "SQLTablePrivileges is a Level 2 function; this is normal for basic ODBC drivers";
+            } catch (const core::OdbcError& e) {
+                // B1/B4 - see test_foreign_keys.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = std::string("SQLTablePrivileges threw: ") + e.what();
+                r.diagnostic = e.format_diagnostics();
+                // The statement is scoped inside the try, so the SQLSTATE has
+                // to come from the exception rather than from a handle.
+                const std::string state = e.diagnostics().empty()
+                                        ? std::string()
+                                        : e.diagnostics()[0].sqlstate;
+                if (state == "HYC00" || state == "IM001") {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQLTablePrivileges is not implemented (" +
+                               state + ")";
+                }
             }
         });
 }

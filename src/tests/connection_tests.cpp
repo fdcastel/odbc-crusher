@@ -42,9 +42,21 @@ TestResult ConnectionTests::test_connection_info() {
                                 std::to_string(dbname_len) + ")";
                 }
             } else {
-                r.actual = "Could not retrieve database name";
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "SQLGetInfo succeeded but database name unavailable";
+                // B1: was SKIP_INCONCLUSIVE, and the suggestion even said
+                // "SQLGetInfo succeeded" on the branch where it had not.
+                // SQLGetInfo is Core and SQL_DATABASE_NAME is one of the
+                // info types every driver must answer; a driver that cannot
+                // is a finding. (An *empty* name is fine and lands in the
+                // branch above - this is the call failing outright.)
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLGetInfo(SQL_DATABASE_NAME) returned " +
+                           std::to_string(ret) + " [" +
+                           first_sqlstate(SQL_HANDLE_DBC, conn_.get_handle(),
+                                          "no diagnostic") + "]";
+                r.suggestion =
+                    "SQL_DATABASE_NAME is a Core information type. Returning "
+                    "an empty string is allowed; failing the call is not.";
             }
         });
 }
@@ -103,9 +115,22 @@ TestResult ConnectionTests::test_connection_attributes() {
                 oss << "Autocommit: " << (autocommit == SQL_AUTOCOMMIT_ON ? "ON" : "OFF");
                 r.actual = oss.str();
             } else {
-                r.actual = "Could not retrieve autocommit status";
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "SQLGetConnectAttr call did not succeed for SQL_ATTR_AUTOCOMMIT";
+                // B1: SQLGetConnectAttr is Core and SQL_ATTR_AUTOCOMMIT is
+                // not optional - every connection has one, and the whole
+                // transaction category depends on being able to read it.
+                // A14 is what happens downstream when this call fails and
+                // nobody notices.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLGetConnectAttr(SQL_ATTR_AUTOCOMMIT) returned " +
+                           std::to_string(ret) + " [" +
+                           first_sqlstate(SQL_HANDLE_DBC, conn_.get_handle(),
+                                          "no diagnostic") + "]";
+                r.suggestion =
+                    "SQL_ATTR_AUTOCOMMIT is a Core connection attribute and "
+                    "must be readable. An application that cannot read it "
+                    "cannot restore it, and will leave the connection in "
+                    "whatever mode the last operation chose.";
             }
         });
 }
@@ -120,6 +145,11 @@ TestResult ConnectionTests::test_connection_timeout() {
             SQLRETURN ret = SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_CONNECTION_TIMEOUT,
                                               &timeout, 0, nullptr);
             if (SQL_SUCCEEDED(ret)) {
+                // B1/B2: any timeout is legal, including 0 for "no timeout",
+                // so there is nothing here to grade - the probe records what
+                // the driver is configured with. Scoring it as PASS gave a
+                // free point to every driver that answers the attribute.
+                r.status = TestStatus::INFORMATIONAL;
                 std::ostringstream oss;
                 oss << "Connection timeout: " << timeout << " seconds";
                 r.actual = oss.str();
@@ -161,6 +191,10 @@ TestResult ConnectionTests::test_connection_pooling() {
                         oss << "Unknown (" << pooling_mode << ")";
                         break;
                 }
+                // B1/B2: every pooling mode is legal, and pooling is the
+                // driver manager's setting rather than the driver's, so
+                // there is nothing about the driver to grade here.
+                r.status = TestStatus::INFORMATIONAL;
                 r.actual = oss.str();
             } else {
                 // Many drivers don't support connection pooling query
