@@ -53,6 +53,25 @@ DialectFailure make_failure(const std::string& query, const core::OdbcError& e) 
 
 }  // namespace
 
+std::vector<std::string> TestBase::literal_select_variants(const std::string& sql) {
+    // Bare form first: it is what most engines want, and trying it first keeps
+    // the common case a single round trip.
+    return {sql,
+            sql + " FROM RDB$DATABASE",   // Firebird
+            sql + " FROM DUAL"};          // Oracle, and MySQL accepts it too
+}
+
+std::string TestBase::execute_literal_select(core::OdbcStatement& stmt,
+                                             const std::string& sql) {
+    auto attempt = execute_first_working(stmt, literal_select_variants(sql));
+    if (!attempt) {
+        std::string msg = "No dialect variant of `" + sql + "` executed:\n" +
+                          attempt.format_failures();
+        throw core::OdbcError(msg);
+    }
+    return attempt.query;
+}
+
 DialectAttempt TestBase::try_first_working(
     const std::vector<std::string>& queries,
     const std::function<void(const std::string&)>& body) {

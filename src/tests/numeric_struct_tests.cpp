@@ -91,7 +91,7 @@ TestResult NumericStructTests::test_numeric_struct_binding() {
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8, SQL_C_NUMERIC",
         [&](TestResult& r) {
             core::OdbcStatement stmt(conn_);
-            stmt.execute("SELECT 12345");
+            execute_literal_select(stmt, "SELECT 12345");
 
             SQLRETURN ret = SQLFetch(stmt.get_handle());
             if (!SQL_SUCCEEDED(ret)) {
@@ -136,7 +136,7 @@ TestResult NumericStructTests::test_numeric_struct_precision_scale() {
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8, SQL_C_NUMERIC",
         [&](TestResult& r) {
             core::OdbcStatement stmt(conn_);
-            stmt.execute("SELECT 123.45");
+            execute_literal_select(stmt, "SELECT 123.45");
 
             SQLRETURN ret = SQLFetch(stmt.get_handle());
             if (!SQL_SUCCEEDED(ret)) {
@@ -180,7 +180,7 @@ TestResult NumericStructTests::test_numeric_positive_negative() {
             // Test positive value
             {
                 core::OdbcStatement stmt(conn_);
-                stmt.execute("SELECT 42");
+                execute_literal_select(stmt, "SELECT 42");
                 SQLRETURN ret = SQLFetch(stmt.get_handle());
                 if (!SQL_SUCCEEDED(ret)) {
                     r.status = TestStatus::FAIL;
@@ -210,7 +210,7 @@ TestResult NumericStructTests::test_numeric_positive_negative() {
             // Test negative value
             {
                 core::OdbcStatement stmt(conn_);
-                stmt.execute("SELECT -42");
+                execute_literal_select(stmt, "SELECT -42");
                 SQLRETURN ret = SQLFetch(stmt.get_handle());
                 if (!SQL_SUCCEEDED(ret)) {
                     r.status = TestStatus::FAIL;
@@ -252,7 +252,7 @@ TestResult NumericStructTests::test_numeric_zero_and_extremes() {
             // Test zero
             {
                 core::OdbcStatement stmt(conn_);
-                stmt.execute("SELECT 0");
+                execute_literal_select(stmt, "SELECT 0");
                 SQLRETURN ret = SQLFetch(stmt.get_handle());
                 if (!SQL_SUCCEEDED(ret)) {
                     r.status = TestStatus::FAIL;
@@ -283,7 +283,7 @@ TestResult NumericStructTests::test_numeric_zero_and_extremes() {
             // Test large value
             {
                 core::OdbcStatement stmt(conn_);
-                stmt.execute("SELECT 999999999");
+                execute_literal_select(stmt, "SELECT 999999999");
                 SQLRETURN ret = SQLFetch(stmt.get_handle());
                 if (!SQL_SUCCEEDED(ret)) {
                     r.status = TestStatus::FAIL;

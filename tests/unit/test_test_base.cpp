@@ -314,3 +314,47 @@ TEST_F(RunTestFixture, FirstSqlstateFallsBackWhenNoDiagnosticPosted) {
     EXPECT_EQ(tests::TestBase::first_sqlstate(SQL_HANDLE_DBC, conn_->get_handle()),
               "");
 }
+
+// ── literal_select_variants — IMPROVEMENT_PLAN.md A2 ───────────────────────
+//
+// 58 bare `SELECT <expr>` statements across four probe files had no Firebird
+// variant, which made the whole 20-probe Escape Sequence category, all of
+// Numeric Struct and all of Cursor Stress unusable against the driver family
+// this repository sits inside. Rather than duplicate 58 string literals, the
+// variants are built from the bare form — so this is the one place the rule
+// lives, and the one place a regression could happen.
+
+TEST(LiteralSelectVariantsTest, BareFormComesFirst) {
+    const auto v = tests::TestBase::literal_select_variants("SELECT 42");
+    ASSERT_FALSE(v.empty());
+    EXPECT_EQ(v.front(), "SELECT 42")
+        << "the bare form is what most engines want; trying it first keeps the "
+           "common case to a single round trip";
+}
+
+TEST(LiteralSelectVariantsTest, CoversFirebirdAndOracle) {
+    const auto v = tests::TestBase::literal_select_variants("SELECT 42");
+    EXPECT_NE(std::find(v.begin(), v.end(), "SELECT 42 FROM RDB$DATABASE"),
+              v.end())
+        << "Firebird requires a FROM clause — this is the whole point of A2";
+    EXPECT_NE(std::find(v.begin(), v.end(), "SELECT 42 FROM DUAL"), v.end())
+        << "Oracle requires one too, and MySQL accepts DUAL";
+}
+
+// The escape-sequence probes pass whole `{fn ...}` expressions through here,
+// so the suffix must be appended rather than the statement rebuilt.
+TEST(LiteralSelectVariantsTest, PreservesTheExpressionVerbatim) {
+    const auto v = tests::TestBase::literal_select_variants("SELECT {fn UCASE('a')}");
+    for (const auto& q : v) {
+        EXPECT_EQ(q.compare(0, 22, "SELECT {fn UCASE('a')}"), 0)
+            << "variant mangled the expression: " << q;
+    }
+}
+
+TEST(LiteralSelectVariantsTest, EveryVariantIsDistinct) {
+    auto v = tests::TestBase::literal_select_variants("SELECT 1");
+    const auto before = v.size();
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+    EXPECT_EQ(v.size(), before) << "a duplicated variant is a wasted round trip";
+}

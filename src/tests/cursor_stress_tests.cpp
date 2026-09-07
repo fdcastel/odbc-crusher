@@ -36,12 +36,33 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
             std::chrono::microseconds first_10_duration{0};
             std::chrono::microseconds last_10_duration{0};
 
+            // A2: this file executed bare `SELECT 1`, which Firebird rejects
+            // for want of a FROM clause. The throw was swallowed by the catch
+            // below, `successful` stayed 0, and the probe reported FAIL
+            // "cursor exhaustion issues" — blaming the driver for a query the
+            // probe should never have sent. Resolve the working variant once,
+            // outside the loop, so the iterations time the cursor rather than
+            // the dialect probing.
+            std::string select_one;
+            {
+                core::OdbcStatement probe(conn_);
+                auto attempt = execute_first_working(
+                    probe, literal_select_variants("SELECT 1"));
+                if (!attempt) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = "No dialect variant of SELECT 1 executed";
+                    r.diagnostic = attempt.format_failures();
+                    return;
+                }
+                select_one = attempt.query;
+            }
+
             for (int i = 0; i < iterations; ++i) {
                 auto iter_start = std::chrono::high_resolution_clock::now();
 
                 try {
                     core::OdbcStatement stmt(conn_);
-                    stmt.execute("SELECT 1");
+                    stmt.execute(select_one);
 
                     SQLRETURN ret = SQLFetch(stmt.get_handle());
                     if (!SQL_SUCCEEDED(ret)) continue;
@@ -118,10 +139,11 @@ TestResult CursorStressTests::test_concurrent_statements() {
                 stmts.push_back(std::make_unique<core::OdbcStatement>(conn_));
             }
 
-            // Execute independent queries on each
+            // Execute independent queries on each. A2: each is a bare literal
+            // SELECT, so it needs the same dialect treatment.
             for (size_t i = 0; i < num_stmts; ++i) {
-                std::string sql = "SELECT " + std::to_string(i + 1);
-                stmts[i]->execute(sql);
+                execute_literal_select(*stmts[i],
+                                       "SELECT " + std::to_string(i + 1));
             }
 
             // Fetch results in interleaved order
@@ -173,6 +195,23 @@ TestResult CursorStressTests::test_open_close_hammer_loop() {
             // degraded to an unconditional PASS exactly where a close-path
             // regression would show. Timings are nanoseconds now and totals
             // are compared directly, so there is no division to truncate.
+            // A2: resolve the dialect variant once — inside a 500-iteration
+            // timing loop it would otherwise be measured as part of the open
+            // phase.
+            std::string select_one;
+            {
+                core::OdbcStatement probe(conn_);
+                auto attempt = execute_first_working(
+                    probe, literal_select_variants("SELECT 1"));
+                if (!attempt) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = "No dialect variant of SELECT 1 executed";
+                    r.diagnostic = attempt.format_failures();
+                    return;
+                }
+                select_one = attempt.query;
+            }
+
             constexpr int kIterations = 500;
             std::vector<long long> open_ns;
             std::vector<long long> close_ns;
@@ -187,7 +226,7 @@ TestResult CursorStressTests::test_open_close_hammer_loop() {
                                               conn_.get_handle(), &hstmt);
                 if (!SQL_SUCCEEDED(rc)) continue;
                 rc = SQLExecDirect(hstmt,
-                    reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT 1")),
+                    reinterpret_cast<SQLCHAR*>(const_cast<char*>(select_one.c_str())),
                     SQL_NTS);
                 auto open_end = std::chrono::high_resolution_clock::now();
 
@@ -311,6 +350,21 @@ TestResult CursorStressTests::test_handle_reuse_no_leak() {
             // that legitimately posts two warnings on one statement. What
             // matters is whether the count *grows*, so the early and late
             // iterations are compared instead of testing an absolute number.
+            // A2: as above.
+            std::string select_one;
+            {
+                core::OdbcStatement probe(conn_);
+                auto attempt = execute_first_working(
+                    probe, literal_select_variants("SELECT 1"));
+                if (!attempt) {
+                    r.status = TestStatus::SKIP_INCONCLUSIVE;
+                    r.actual = "No dialect variant of SELECT 1 executed";
+                    r.diagnostic = attempt.format_failures();
+                    return;
+                }
+                select_one = attempt.query;
+            }
+
             constexpr int kIterations = 500;
             constexpr int kWindow = kIterations / 10;   // first/last 10%
             core::OdbcStatement stmt(conn_);
@@ -347,7 +401,7 @@ TestResult CursorStressTests::test_handle_reuse_no_leak() {
                 }
 
                 SQLRETURN rc = SQLExecDirect(stmt.get_handle(),
-                    reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT 1")),
+                    reinterpret_cast<SQLCHAR*>(const_cast<char*>(select_one.c_str())),
                     SQL_NTS);
                 if (!SQL_SUCCEEDED(rc)) continue;
                 SQLCloseCursor(stmt.get_handle());

@@ -585,7 +585,7 @@ TestResult TransactionTests::test_rollback_with_open_cursor() {
                 // (iv) Connection still usable — execute another statement.
                 {
                     core::OdbcStatement post(conn_);
-                    post.execute("SELECT 1");
+                    execute_literal_select(post, "SELECT 1");
                     SQLRETURN ok_rc = SQLFetch(post.get_handle());
                     actual << "post_select_rc=" << ok_rc;
                     if (!SQL_SUCCEEDED(ok_rc)) {

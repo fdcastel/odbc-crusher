@@ -80,7 +80,11 @@ std::optional<std::string> EscapeSequenceTests::call_native_sql(const std::strin
 std::optional<std::string> EscapeSequenceTests::exec_scalar(const std::string& sql) {
     try {
         core::OdbcStatement stmt(conn_);
-        stmt.execute(sql);
+        // A2: every caller passes a bare `SELECT <expr>`, which Firebird
+        // rejects — it requires a FROM clause. All 46 call sites in this file
+        // are fixed here rather than in 46 string literals.
+        auto attempt = execute_first_working(stmt, literal_select_variants(sql));
+        if (!attempt) return std::nullopt;
         SQLRETURN ret = SQLFetch(stmt.get_handle());
         if (!SQL_SUCCEEDED(ret)) return std::nullopt;
         SQLCHAR buf[1024] = {0};

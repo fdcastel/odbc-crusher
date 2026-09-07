@@ -567,7 +567,12 @@ python mock-driver/tools/check_entry_guards.py      # every entry point wrapped
 # G1 — the documented pipe usage
 build/src/Debug/odbc-crusher.exe "Driver={Mock ODBC Driver};Mode=Success;" -o json | python -c "import sys,json; json.load(sys.stdin)"
 
-# A2 — bare SELECTs with no Firebird fallback, per file
+# A2 — NOTE: this command is obsolete since A2 landed. The bare literals are
+# still in the source, but they are now arguments to
+# TestBase::literal_select_variants(), which appends the FROM RDB$DATABASE and
+# FROM DUAL forms. Grep for a bare `stmt.execute("SELECT ` instead — that is
+# the shape that bypasses the helper.
+# Original command, kept for the record:
 cd src/tests && for f in *_tests.cpp; do
   bare=$(grep -oE '"SELECT [^"]*"' "$f" | grep -vi ' FROM ' | wc -l)
   fb=$(grep -c 'RDB\$DATABASE' "$f")

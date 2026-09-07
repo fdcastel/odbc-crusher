@@ -141,6 +141,27 @@ public:
     DialectAttempt prepare_first_working(core::OdbcStatement& stmt,
                                          const std::vector<std::string>& queries);
 
+    // Dialect variants of a literal SELECT — A2.
+    //
+    // 15 of the 23 probe files carried a "... FROM RDB$DATABASE" variant by
+    // hand. Four did not, and the consequence differed by file rather than
+    // being obviously absent: numeric_struct threw, so 4 probes reported
+    // ERROR; cursor_stress swallowed the throw and reported FAIL "cursor
+    // exhaustion issues"; the escape probes reported a value of 'NULL'. The
+    // whole 20-probe Escape Sequence category, all of Numeric Struct and all
+    // of Cursor Stress were unusable against Firebird — the driver family this
+    // repository sits inside — and the report did not say so.
+    //
+    // Built from the bare form rather than duplicating 58 string literals.
+    static std::vector<std::string> literal_select_variants(const std::string& sql);
+
+    // Execute a literal SELECT, trying those variants. Throws OdbcError when
+    // none of them works — a drop-in for `stmt.execute("SELECT ...")` in
+    // probes that already rely on run_test's catch for their error path.
+    // Returns the variant that worked.
+    std::string execute_literal_select(core::OdbcStatement& stmt,
+                                       const std::string& sql);
+
     // The general form both of the above are written in terms of: run `body`
     // for each query until one completes without throwing OdbcError.
     //
