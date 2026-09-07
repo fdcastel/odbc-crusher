@@ -9,6 +9,22 @@
 
 namespace odbc_crusher::tests {
 
+namespace {
+
+// First SQLSTATE on a handle, or "" when the driver posted nothing.
+// Local copy; **C5** (Phase 3) replaces the several variants of this shape
+// across the tree with one helper.
+std::string first_sqlstate(SQLSMALLINT handle_type, SQLHANDLE handle) {
+    try {
+        auto err = core::OdbcError::from_handle(handle_type, handle, "");
+        if (!err.diagnostics().empty()) return err.diagnostics()[0].sqlstate;
+    } catch (...) {
+    }
+    return "";
+}
+
+}  // namespace
+
 std::vector<TestResult> NumericStructTests::run() {
     return {
         test_numeric_struct_binding(),
@@ -291,8 +307,8 @@ TestResult NumericStructTests::test_numeric_zero_and_extremes() {
 //
 // We INSERT a literal positive value into a DECIMAL(p, s) column and read it
 // back as SQL_C_NUMERIC. The probe is scale-relative: we trust the driver's
-// reported `got.scale` and compute the expected mantissa as
-// round(literal_value × 10^got.scale). Then memcmp val[] against the
+// reported `got.scale` and rescale the decimal literal to that scale,
+// truncating rather than rounding (A13). Then memcmp val[] against the
 // little-endian encoding of that mantissa. Drivers legitimately differ on
 // the *declared* scale they report (some return the column's, some the
 // value's); but for any reported scale the mantissa is uniquely determined.
@@ -307,7 +323,8 @@ struct DecimalShape {
     SQLCHAR    precision;      // Column-declared precision, used in DDL only.
     SQLCHAR    scale;          // Column-declared scale, used in DDL + ARD setup.
     const char* literal;       // SQL literal to INSERT, e.g. "12345.67"
-    double     literal_value;  // Same value as a double, for mantissa recomputation.
+    // A13 removed a `double literal_value` field here: the expected mantissa
+    // is rescaled from `literal` as text now, so no double is involved.
 };
 
 // Encode an unsigned 64-bit mantissa little-endian into a SQL_NUMERIC_STRUCT.val[].
@@ -332,23 +349,72 @@ std::string val_to_hex(const SQLCHAR* val) {
 } // namespace
 
 TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
+    // A13. The expected mantissa used to be std::llround(literal * 10^scale),
+    // which is wrong twice over.
+    //
+    // First, the ODBC conversion rule for a narrowing scale is *truncate*, not
+    // round: a driver may legally report a smaller got.scale than the column
+    // declares (returning SQL_SUCCESS_WITH_INFO + 01S07, fractional
+    // truncation), and for 12345.67 at scale 0 a compliant driver returns
+    // 12345 while the probe demanded 12346.
+    //
+    // Second, going through a double at all is unnecessary. The literal is
+    // already an exact decimal string, so rescaling it as text is exact for
+    // every precision the spec allows, with no floating point in the path.
+    struct Rescaled {
+        uint64_t mantissa = 0;
+        bool     dropped_nonzero = false;   // digits lost that were not zeros
+    };
+
+    const auto mantissa_for_scale = [](const std::string& literal,
+                                       int scale) -> Rescaled {
+        std::string digits;
+        int frac_digits = 0;
+        bool seen_point = false;
+        for (char c : literal) {
+            if (c == '.') { seen_point = true; continue; }
+            if (c < '0' || c > '9') continue;      // sign or spacing
+            digits.push_back(c);
+            if (seen_point) ++frac_digits;
+        }
+
+        Rescaled out;
+        if (scale >= frac_digits) {
+            digits.append(static_cast<size_t>(scale - frac_digits), '0');
+        } else {
+            // Truncate, per the spec. Never round.
+            const size_t drop = static_cast<size_t>(frac_digits - scale);
+            const std::string lost = digits.substr(digits.size() - drop);
+            out.dropped_nonzero =
+                lost.find_first_not_of('0') != std::string::npos;
+            digits.erase(digits.size() - drop);
+        }
+        for (char c : digits) {
+            out.mantissa = out.mantissa * 10u + static_cast<uint64_t>(c - '0');
+        }
+        return out;
+    };
+
     return run_test(
         "test_numeric_struct_roundtrip_byte_equality", "SQLGetData(SQL_C_NUMERIC)",
         "INSERT decimal literal, SELECT back as SQL_C_NUMERIC, val[] bytes match",
         Severity::ERR, ConformanceLevel::CORE,
         "ODBC 3.8, SQL_C_NUMERIC: val[] is little-endian mantissa, sign 1=positive 0=negative",
         [&](TestResult& r) {
-            // Three shapes — reports the first one that fails. Mantissas chosen
-            // to fit in 32 bits so doubles can represent them exactly (avoids
-            // false positives on drivers that store DECIMAL via double internally).
-            // Literal values chosen so round(value * 10^scale) fits in 32 bits
-            // for every reasonable scale a driver might report — keeps the
-            // mantissa exactly representable in IEEE 754 double during the
-            // recomputation, no false positives from FP rounding.
+            // Three shapes — reports the first one that fails.
+            //
+            // A13: the comment here used to claim these mantissas "fit in 32
+            // bits so doubles can represent them exactly". That was false —
+            // variant 3 at scale 10 is 1,234,567,890,000, which needs 41 bits
+            // — and it no longer matters either way, because the expected
+            // mantissa is now rescaled from the literal text rather than
+            // computed through a double. Mantissas must still fit in the
+            // uint64_t that encode_val_le() takes, which all three do with
+            // room to spare.
             const DecimalShape shapes[] = {
-                { 10,  2, "12345.67",    12345.67    },
-                { 19,  0, "1234567890",  1234567890.0 },
-                { 38, 10, "123.4567890", 123.4567890 },
+                { 10,  2, "12345.67"    },
+                { 19,  0, "1234567890"  },
+                { 38, 10, "123.4567890" },
             };
 
             std::ostringstream summary;
@@ -411,12 +477,44 @@ TestResult NumericStructTests::test_numeric_struct_roundtrip_byte_equality() {
                     return;
                 }
 
-                // Recompute expected mantissa using the scale the driver reports —
-                // the spec lets a driver pick a different scale than the column
-                // declares, so trust got.scale and verify val[] matches it.
-                const uint64_t expected_mantissa = static_cast<uint64_t>(
-                    std::llround(shape.literal_value *
-                                 std::pow(10.0, static_cast<int>(got.scale))));
+                // Recompute the expected mantissa using the scale the driver
+                // reports — the spec lets a driver pick a different scale than
+                // the column declares, so trust got.scale and verify val[]
+                // matches it. A13: rescaled from the literal *text* by
+                // truncation, which is the spec's conversion rule, rather than
+                // llround() through a double.
+                const Rescaled expected =
+                    mantissa_for_scale(shape.literal, static_cast<int>(got.scale));
+
+                // A13, second half. Accepting the driver's scale unconditionally
+                // would make this probe blind to the corruption it exists to
+                // catch: a driver that stores 12345.67 as 12345 and then reports
+                // scale=0 would match a truncated expectation exactly. Dropping
+                // *trailing zeros* is lossless and normal — the mock reports
+                // scale 6 for 123.4567890 — but dropping a non-zero digit is
+                // data loss, and the spec requires the driver to say so with
+                // SQL_SUCCESS_WITH_INFO and 01S07 (fractional truncation).
+                if (expected.dropped_nonzero) {
+                    const bool announced =
+                        (ret == SQL_SUCCESS_WITH_INFO) &&
+                        (first_sqlstate(SQL_HANDLE_STMT, sel.get_handle()) == "01S07");
+                    if (!announced) {
+                        r.status = TestStatus::FAIL;
+                        r.severity = Severity::CRITICAL;
+                        r.actual = std::string("variant ") +
+                                   std::to_string(variant_idx) + " (" +
+                                   shape.literal + "): driver reported scale=" +
+                                   std::to_string(got.scale) +
+                                   ", silently dropping significant digits";
+                        r.suggestion =
+                            "Reducing the scale below the value's significant "
+                            "digits loses data. A driver may do it, but must "
+                            "return SQL_SUCCESS_WITH_INFO with SQLSTATE 01S07 "
+                            "so the application knows.";
+                        return;
+                    }
+                }
+                const uint64_t expected_mantissa = expected.mantissa;
                 SQL_NUMERIC_STRUCT exp;
                 std::memset(&exp, 0, sizeof(exp));
                 exp.sign      = 1;  // positive literal

@@ -88,11 +88,18 @@ TestResult DiagnosticDepthTests::test_diagfield_record_count() {
                 return;
             }
 
-            // Get diagnostic record count (header field, rec number = 0)
-            SQLLEN diag_count = 0;
+            // Get diagnostic record count (header field, rec number = 0).
+            //
+            // A25: this was an SQLLEN, which is 8 bytes on LP64 and LLP64
+            // while SQL_DIAG_NUMBER is an SQLINTEGER header field — 4. The
+            // driver wrote 4 bytes into an 8-byte slot, and it worked only
+            // because the variable was zero-initialised and the platform is
+            // little-endian. A big-endian build, or a driver that does not
+            // pre-clear, would have read garbage in the high half.
+            SQLINTEGER diag_count = 0;
             SQLSMALLINT len = 0;
             SQLRETURN diag_ret = SQLGetDiagFieldW(SQL_HANDLE_STMT, stmt.get_handle(),
-                0, SQL_DIAG_NUMBER, &diag_count, 0, &len);
+                0, SQL_DIAG_NUMBER, &diag_count, SQL_IS_INTEGER, &len);
 
             if (SQL_SUCCEEDED(diag_ret)) {
                 std::ostringstream actual;

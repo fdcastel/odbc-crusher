@@ -2,6 +2,7 @@
 #include "core/odbc_statement.hpp"
 #include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
@@ -468,14 +469,22 @@ TestResult UnicodeTests::test_string_truncation_wchar() {
 
 namespace {
 
-// Build a UTF-16 buffer (vector<SQLWCHAR>) from a list of explicit
-// codepoints. Codepoints in the BMP (≤ 0xFFFF) become one SQLWCHAR;
-// supplementary codepoints (> 0xFFFF) become a surrogate pair. NUL-terminated.
+// Build an SQLWCHAR buffer from a list of explicit codepoints, encoded for
+// *this build's* SQLWCHAR width. NUL-terminated.
+//
+// A10. This used to emit a UTF-16 surrogate pair for every supplementary
+// codepoint regardless of width. SQLWCHAR is 2 bytes on Windows, but on a
+// unixODBC build where SQLWCHAR is wchar_t it is 4, and there a "surrogate
+// pair" is two lone surrogates — ill-formed UTF-32 that iconv rejects or
+// replaces. A correct driver was therefore FAILed on those platforms for
+// refusing to round-trip data that was invalid to begin with.
+//
+// With a 4-byte unit the encoding is simply the scalar value.
 std::vector<SQLWCHAR> make_wchar_buf(std::initializer_list<uint32_t> codepoints) {
     std::vector<SQLWCHAR> out;
     out.reserve(codepoints.size() + 2);
     for (uint32_t cp : codepoints) {
-        if (cp <= 0xFFFFu) {
+        if (sizeof(SQLWCHAR) >= 4 || cp <= 0xFFFFu) {
             out.push_back(static_cast<SQLWCHAR>(cp));
         } else {
             // UTF-16 surrogate pair encoding
@@ -486,6 +495,21 @@ std::vector<SQLWCHAR> make_wchar_buf(std::initializer_list<uint32_t> codepoints)
     }
     out.push_back(0);
     return out;
+}
+
+// How U+1F600 must come back in this build's SQLWCHAR width, and a
+// description of it for the report. A10: the probe below asserted the
+// two-unit UTF-16 answer unconditionally.
+std::vector<SQLWCHAR> expected_emoji_units() {
+    auto v = make_wchar_buf({0x1F600u});
+    v.pop_back();   // drop the terminator
+    return v;
+}
+
+std::string expected_emoji_description() {
+    return sizeof(SQLWCHAR) >= 4
+               ? std::string("scalar [U+1F600] in a 4-byte SQLWCHAR")
+               : std::string("surrogate pair [U+D83D U+DE00] in a 2-byte SQLWCHAR");
 }
 
 // INSERT a WCHAR parameter into ODBC_TEST_NVARCHAR via SQLBindParameter +
@@ -666,8 +690,8 @@ TestResult UnicodeTests::test_wchar_roundtrip_non_ascii() {
 TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
     return run_test(
         "test_wchar_surrogate_pair_preserved", "SQLBindParameter+SQLGetData(SQL_C_WCHAR)",
-        "Supplementary-plane codepoint U+1F600 round-trips as a UTF-16 "
-        "surrogate pair (0xD83D, 0xDE00)",
+        "Supplementary-plane codepoint U+1F600 round-trips intact in this "
+        "build's SQLWCHAR width",
         Severity::WARNING, ConformanceLevel::CORE,
         "ODBC 3.8 SQL_C_WCHAR — UTF-16 includes surrogate pairs for non-BMP",
         [&](TestResult& r) {
@@ -706,16 +730,20 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
                 }
                 size_t out_chars = 0;
                 while (out_chars < 7 && out[out_chars] != 0) ++out_chars;
-                if (out_chars != 2 || out[0] != 0xD83Du || out[1] != 0xDE00u) {
+                const auto want = expected_emoji_units();
+                if (out_chars != want.size() ||
+                    !std::equal(want.begin(), want.end(), out)) {
                     r.status = TestStatus::FAIL;
-                    r.actual = "expected surrogate pair [U+D83D U+DE00] got ["
+                    r.actual = "expected " + expected_emoji_description() + " got ["
                              + wchars_to_hex(out, out_chars) + "]";
                     r.suggestion = "Driver dropped or normalized the supplementary "
-                                   "codepoint. SQL_C_WCHAR is UTF-16 — surrogate "
-                                   "pairs are part of the contract.";
+                                   "codepoint. SQL_C_WCHAR must preserve every "
+                                   "codepoint in the platform's UTF-16 or UTF-32 "
+                                   "encoding.";
                     return;
                 }
-                r.actual = "VARCHAR fallback: surrogate pair preserved";
+                r.actual = "VARCHAR fallback: " + expected_emoji_description() +
+                           " preserved";
                 return;
             }
 
@@ -745,16 +773,19 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
             }
             size_t out_chars = 0;
             while (out_chars < 7 && out[out_chars] != 0) ++out_chars;
-            if (out_chars != 2 || out[0] != 0xD83Du || out[1] != 0xDE00u) {
+            const auto want = expected_emoji_units();
+            if (out_chars != want.size() ||
+                !std::equal(want.begin(), want.end(), out)) {
                 r.status = TestStatus::FAIL;
-                r.actual = "expected surrogate pair [U+D83D U+DE00] got ["
+                r.actual = "expected " + expected_emoji_description() + " got ["
                          + wchars_to_hex(out, out_chars) + "]";
                 r.suggestion = "Driver dropped or normalized the supplementary "
-                               "codepoint. SQL_C_WCHAR is UTF-16 — surrogate "
-                               "pairs are part of the contract.";
+                               "codepoint. SQL_C_WCHAR must preserve every "
+                               "codepoint in the platform's UTF-16 or UTF-32 "
+                               "encoding.";
                 return;
             }
-            r.actual = "surrogate pair preserved (U+D83D U+DE00 = U+1F600)";
+            r.actual = expected_emoji_description() + " preserved (U+1F600)";
         });
 }
 
