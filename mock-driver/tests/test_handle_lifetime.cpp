@@ -194,3 +194,41 @@ TEST(CatalogSharing, SecondConnectKeepsTheFirstConnectionsTables) {
     SQLFreeHandle(SQL_HANDLE_DBC, a);
     SQLFreeHandle(SQL_HANDLE_ENV, henv);
 }
+
+// ── D47: the catalog must not outlive the last connection ────────────────
+//
+// D6 stopped a concurrent connect from wiping a live connection's tables by
+// making initialize() a no-op for an already-loaded preset. Nothing then ever
+// reset the process-global catalog, so a connection opened after the previous
+// one had closed inherited its user-created tables and CREATE TABLE failed
+// with "already exists". Ten of the eleven DmlTest cases failed this way when
+// the suite ran on Windows, where the driver manager keeps the DLL - and its
+// statics - loaded across connections.
+TEST(CatalogSharing, ClosingTheLastConnectionResetsTheCatalog) {
+    SQLHENV henv = SQL_NULL_HENV;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv), SQL_SUCCESS);
+    ASSERT_EQ(SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0), SQL_SUCCESS);
+
+    auto create_once = [&]() -> SQLRETURN {
+        SQLHDBC dbc = SQL_NULL_HDBC;
+        EXPECT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &dbc), SQL_SUCCESS);
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLDriverConnect(
+            dbc, NULL, (SQLCHAR*)kConn, SQL_NTS, NULL, 0, NULL,
+            SQL_DRIVER_NOPROMPT)));
+        SQLHSTMT stmt = SQL_NULL_HSTMT;
+        EXPECT_EQ(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt), SQL_SUCCESS);
+        SQLRETURN rc = SQLExecDirect(
+            stmt, (SQLCHAR*)"CREATE TABLE D47_FRESH (ID INTEGER)", SQL_NTS);
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        SQLDisconnect(dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        return rc;
+    };
+
+    EXPECT_TRUE(SQL_SUCCEEDED(create_once()));
+    EXPECT_TRUE(SQL_SUCCEEDED(create_once()))
+        << "the second connection inherited the first one's schema";
+
+    SQLFreeHandle(SQL_HANDLE_ENV, henv);
+}

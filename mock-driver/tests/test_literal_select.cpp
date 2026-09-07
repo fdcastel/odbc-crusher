@@ -195,3 +195,32 @@ TEST_F(LiteralSelectTest, DescribeParamFallsBackForAnUnparsedStatement) {
     EXPECT_EQ(size, 255u);
     SQLCloseCursor(hstmt);
 }
+
+// ── D10: parameter numbering in a literal SELECT counts markers ──────────
+//
+// substitute_params advanced param_idx once per select-list *expression*, so
+// `SELECT 'a', ?` looked up parameter 2 while SQLBindParameter had bound
+// parameter 1. Every probe that existed used a list made only of markers,
+// where expression number and parameter number happen to coincide - which is
+// why an off-by-one on every mixed list went unnoticed.
+TEST_F(LiteralSelectTest, MarkerAfterAConstantUsesParameterOne) {
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"SELECT 'lit', ?", SQL_NTS)));
+
+    SQLINTEGER v = 42;
+    SQLLEN ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindParameter(
+        hstmt, 1, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0,
+        &v, 0, &ind)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecute(hstmt)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+
+    char c1[64] = {0}, c2[64] = {0};
+    SQLLEN n1 = 0, n2 = 0;
+    EXPECT_TRUE(SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, c1, sizeof(c1), &n1)));
+    EXPECT_TRUE(SQL_SUCCEEDED(SQLGetData(hstmt, 2, SQL_C_CHAR, c2, sizeof(c2), &n2)));
+    SQLCloseCursor(hstmt);
+
+    EXPECT_STREQ(c1, "lit");
+    EXPECT_STREQ(c2, "42") << "the marker was looked up as parameter 2";
+}

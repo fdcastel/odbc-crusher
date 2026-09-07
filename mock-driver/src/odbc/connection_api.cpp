@@ -73,7 +73,7 @@ SQLRETURN SQL_API SQLConnect(
 
     // D6 makes this a no-op when the preset is already loaded, so a second
     // connect no longer empties the first connection's tables.
-    MockCatalog::instance().initialize(config.catalog);
+    MockCatalog::instance().attach(config.catalog);   // D47
 
     conn->connected_ = true;
     return SQL_SUCCESS;
@@ -132,7 +132,7 @@ SQLRETURN SQL_API SQLDriverConnect(
     BehaviorController::instance().set_config(config);
     
     // Initialize catalog
-    MockCatalog::instance().initialize(config.catalog);
+    MockCatalog::instance().attach(config.catalog);   // D47
     
     // Set up transaction mode
     if (config.transaction_mode == "ReadOnly") {
@@ -187,6 +187,10 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC hdbc) MOCK_ENTRY_TRY {
     }
     
     conn->connected_ = false;
+    // D47: the last connection out resets the process-global catalog,
+    // so the next connect starts from the preset rather than from
+    // whatever the previous connection left behind.
+    MockCatalog::instance().detach();
     conn->connection_string_.clear();
     conn->dsn_.clear();
     conn->uid_.clear();

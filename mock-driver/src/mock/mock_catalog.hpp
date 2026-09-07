@@ -2,6 +2,7 @@
 
 #include "../driver/common.hpp"
 #include <functional>
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -114,6 +115,20 @@ public:
     // Initialize catalog based on preset
     void initialize(const std::string& preset);
 
+    // Connection bookkeeping - D47.
+    //
+    // The catalog is a process-global singleton, so its lifetime has to
+    // be tied to something. D6 tied it to the preset, which stopped a
+    // concurrent connect from wiping a live connection's tables but also
+    // meant nothing ever reset it: a second connection opened after the
+    // first had closed inherited the first one's schema, and CREATE TABLE
+    // failed with 'already exists'. attach()/detach() tie it to the set of
+    // *open* connections instead - shared while any are open, reset when
+    // the last one closes.
+    void attach(const std::string& preset);
+    void detach();
+    int live_connections() const { return live_connections_.load(); }
+
     // Table operations
     //
     // `tables()` and `inserted_data()` return references for backward-compat
@@ -192,6 +207,7 @@ private:
     // no-op rather than a wipe.
     bool initialized_ = false;
     std::string loaded_preset_;
+    std::atomic<int> live_connections_{0};   // D47
 
     std::vector<MockTable> tables_;
     std::vector<MockIndex> indexes_;

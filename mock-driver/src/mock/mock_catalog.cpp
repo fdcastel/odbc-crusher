@@ -21,6 +21,30 @@ MockCatalog& MockCatalog::instance() {
     return instance;
 }
 
+void MockCatalog::attach(const std::string& preset) {
+    initialize(preset);
+    live_connections_.fetch_add(1);
+}
+
+void MockCatalog::detach() {
+    // Only the last connection out resets. fetch_sub returns the value
+    // *before* the decrement, so > 1 means someone else is still open.
+    const int before = live_connections_.fetch_sub(1);
+    if (before <= 0) {
+        live_connections_.store(0);   // unbalanced detach; do not go negative
+        return;
+    }
+    if (before > 1) return;
+
+    std::lock_guard<std::mutex> g(mu_);
+    tables_.clear();
+    indexes_.clear();
+    inserted_data_.clear();
+    procedures_.clear();
+    initialized_ = false;
+    loaded_preset_.clear();
+}
+
 void MockCatalog::initialize(const std::string& preset) {
     std::lock_guard<std::mutex> g(mu_);
 

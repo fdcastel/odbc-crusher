@@ -502,10 +502,34 @@ static std::function<bool(const MockRow&)> make_where_predicate(
     auto parse_literal = [](const std::string& v) -> CellValue {
         std::string s = trim(v);
         if (s.size() >= 2 && s.front() == '\'' && s.back() == '\'') {
-            return s.substr(1, s.size() - 2);
+            // D13: the inner text was taken verbatim, so a doubled quote -
+            // the SQL escape for a literal apostrophe - stayed doubled and
+            // `WHERE V = 'it''s'` never matched the stored value `it's`.
+            const std::string inner = s.substr(1, s.size() - 2);
+            std::string out;
+            out.reserve(inner.size());
+            for (size_t i = 0; i < inner.size(); ++i) {
+                out += inner[i];
+                if (inner[i] == '\'' && i + 1 < inner.size()
+                    && inner[i + 1] == '\'') {
+                    ++i;   // skip the second of the pair
+                }
+            }
+            return out;
         }
-        try { return static_cast<long long>(std::stoll(s)); } catch (...) {}
-        try { return std::stod(s); } catch (...) {}
+        // D12: stoll/stod without checking how much they consumed accepted
+        // `1 AND b = 2` as the number 1 and silently dropped the rest of the
+        // predicate. A literal has to be the *whole* token or it is a string.
+        try {
+            size_t used = 0;
+            const long long n = std::stoll(s, &used);
+            if (used == s.size()) return n;
+        } catch (...) {}
+        try {
+            size_t used = 0;
+            const double d = std::stod(s, &used);
+            if (used == s.size()) return d;
+        } catch (...) {}
         return s;
     };
 
@@ -552,9 +576,29 @@ static std::function<bool(const MockRow&)> make_where_predicate(
         std::string col_name = trim(trimmed.substr(0, pos));
         std::string val_str  = trim(trimmed.substr(pos + std::strlen(tok.s)));
         if (col_name.empty() || val_str.empty()) continue;
-        int col_idx = resolve_col(col_name);
-        if (col_idx < 0) return [](const MockRow&) { return true; };
         CellValue lit = parse_literal(val_str);
+        int col_idx = resolve_col(col_name);
+        if (col_idx < 0) {
+            // D41/D13: `WHERE 1=0` has no column on the left. The deleted
+            // SELECT engine evaluated it; this one skipped the filter and
+            // returned every row - the opposite of what the predicate asks
+            // for, and the shape the table-existence probe depends on.
+            const CellValue left = parse_literal(col_name);
+            const bool is_literal_left =
+                !std::holds_alternative<std::string>(left) ||
+                (col_name.size() >= 2 && col_name.front() == '\'');
+            if (is_literal_left) {
+                const bool eq = (left == lit);
+                const bool want = (tok.op == EQ) ? eq
+                                : (tok.op == NE) ? !eq
+                                : false;   // ordering on constants: not needed
+                return [want](const MockRow&) { return want; };
+            }
+            // An unresolved *name* is a malformed predicate, not a constant.
+            // Matching everything is the historical behaviour and is what
+            // the catalog walks rely on; D12 owns turning it into 42S22.
+            return [](const MockRow&) { return true; };
+        }
         Op op = tok.op;
         return [col_idx, lit, op](const MockRow& row) -> bool {
             if (col_idx >= static_cast<int>(row.size())) return false;
@@ -1562,94 +1606,26 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 result.data = generate_mock_data(*table, result_set_size);
             }
             
-            // ── Basic WHERE filtering ──
-            // Supports: "column IN (v1, v2, ...)" and "column = value"
+            // D13: this used to re-implement WHERE filtering rather than
+            // call make_where_predicate, and the copy was weaker in three
+            // ways that mattered. It supported only `=` and `IN`; its
+            // `find("=")` matched inside `<=`, `>=` and `!=`, so
+            // `WHERE ID >= 5` resolved a column named "ID >" and returned
+            // **every** row unfiltered; and it parsed string literals without
+            // un-doubling embedded quotes, so `WHERE V = \'it\'\'s\'` matched
+            // nothing. One predicate builder, used by SELECT, UPDATE and
+            // DELETE alike.
             if (!query.where_clause.empty() && !result.data.empty()) {
-                std::string wc = trim(query.where_clause);
-                std::string wcu = to_upper(wc);
-                
-                // Find the target column index
-                auto in_pos = wcu.find(" IN ");
-                auto eq_pos = wcu.find(" = ");
-                auto eq2_pos = wcu.find("=");
-                
-                std::string filter_col;
-                std::vector<CellValue> filter_values;
-                
-                if (in_pos != std::string::npos) {
-                    // "COLUMN IN (v1, v2, ...)"
-                    filter_col = to_upper(trim(wc.substr(0, in_pos)));
-                    auto paren_open = wc.find('(', in_pos);
-                    auto paren_close = wc.find(')', paren_open);
-                    if (paren_open != std::string::npos && paren_close != std::string::npos) {
-                        auto val_list = split_expressions(
-                            wc.substr(paren_open + 1, paren_close - paren_open - 1));
-                        for (auto& v : val_list) {
-                            std::string tv = trim(v);
-                            if (tv.empty()) continue;
-                            if (tv.front() == '\'' && tv.back() == '\'') {
-                                filter_values.push_back(tv.substr(1, tv.size() - 2));
-                            } else {
-                                try { filter_values.push_back(static_cast<long long>(std::stoll(tv))); }
-                                catch (...) { filter_values.push_back(tv); }
-                            }
-                        }
-                    }
-                } else if (eq_pos != std::string::npos || eq2_pos != std::string::npos) {
-                    // "COLUMN = value"
-                    auto pos = (eq_pos != std::string::npos) ? eq_pos : eq2_pos;
-                    filter_col = to_upper(trim(wc.substr(0, pos)));
-                    std::string val = trim(wc.substr(pos + ((eq_pos != std::string::npos) ? 3 : 1)));
-                    if (val.front() == '\'' && val.back() == '\'') {
-                        filter_values.push_back(val.substr(1, val.size() - 2));
-                    } else {
-                        try { filter_values.push_back(static_cast<long long>(std::stoll(val))); }
-                        catch (...) { filter_values.push_back(val); }
-                    }
+                auto pred = make_where_predicate(*table, query.where_clause);
+                std::vector<MockRow> filtered;
+                filtered.reserve(result.data.size());
+                for (const auto& r : result.data) {
+                    if (pred(r)) filtered.push_back(r);
                 }
-                
-                if (!filter_col.empty() && !filter_values.empty()) {
-                    // Find column index in table
-                    int col_idx = -1;
-                    for (size_t ci = 0; ci < table->columns.size(); ++ci) {
-                        if (to_upper(table->columns[ci].name) == filter_col) {
-                            col_idx = static_cast<int>(ci);
-                            break;
-                        }
-                    }
-                    // D41: a constant predicate. `WHERE 1=0` has no column on
-                    // the left, so the filter below was skipped entirely and
-                    // the statement returned every row - which is the opposite
-                    // of what it asks for. It is the predicate the existence
-                    // probe in both create_test_table() helpers uses precisely
-                    // because it should match nothing.
-                    if (col_idx < 0) {
-                        SelectLiteral left = parse_select_literal(filter_col);
-                        if (left.is_literal) {
-                            bool matched = false;
-                            for (const auto& fv : filter_values) {
-                                if (left.value == fv) { matched = true; break; }
-                            }
-                            if (!matched) result.data.clear();
-                        }
-                    }
-                    if (col_idx >= 0) {
-                        std::vector<MockRow> filtered;
-                        for (const auto& row : result.data) {
-                            if (col_idx < static_cast<int>(row.size())) {
-                                for (const auto& fv : filter_values) {
-                                    if (row[col_idx] == fv) {
-                                        filtered.push_back(row);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        result.data = std::move(filtered);
-                    }
-                }
+                result.data.swap(filtered);
             }
-            
+
+
             // ── Basic ORDER BY ──
             // Supports: "ORDER BY column [ASC|DESC]"
             {

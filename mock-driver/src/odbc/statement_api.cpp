@@ -10,6 +10,7 @@
 #include "utils/c_types.hpp"
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 #include <cmath>
 #include <cctype>
 #include "driver/entry_guard.hpp"
@@ -176,10 +177,14 @@ static CellValue read_param_value(
             // walk until 0x0000. Drives the PORT plan port 7 round-trip
             // probe; correct conversion preserves non-ASCII codepoints.
             const SQLWCHAR* wsrc = reinterpret_cast<const SQLWCHAR*>(data_ptr);
-            SQLLEN bytes = pb.buffer_length;
-            if (ind_ptr && *ind_ptr != SQL_NTS) {
-                bytes = *ind_ptr;
-            }
+            // D48: `bytes` started at buffer_length and was only overwritten
+            // when the indicator held something other than SQL_NTS - so
+            // SQL_NTS *with* a buffer_length fell through to the fixed-length
+            // path and took the whole buffer, terminator included. Per
+            // SQLBindParameter, a null indicator pointer means the same thing
+            // as SQL_NTS for character data.
+            const bool is_nts = !ind_ptr || *ind_ptr == SQL_NTS;
+            SQLLEN bytes = is_nts ? SQL_NTS : *ind_ptr;
             constexpr size_t kSafetyCapChars = 1 << 19;  // 512 K SQLWCHARs
             SQLINTEGER char_count;
             if (bytes == SQL_NTS || bytes < 0) {
@@ -196,10 +201,15 @@ static CellValue read_param_value(
         }
         case SQL_C_CHAR:
         default: {
-            SQLLEN len = pb.buffer_length;
-            if (ind_ptr && *ind_ptr != SQL_NTS) {
-                len = *ind_ptr;
-            }
+            // D48: this used to seed `len` from buffer_length and replace it
+            // only when the indicator was not SQL_NTS. SQL_NTS with a
+            // buffer_length therefore meant "the whole buffer" rather than
+            // "up to the terminator", so binding `"it's"` out of a `char[5]`
+            // produced the 5-byte value `it's `, which matched nothing and
+            // reported no error. A null indicator pointer means null-terminated
+            // too - SQLBindParameter says so explicitly.
+            const bool is_nts = !ind_ptr || *ind_ptr == SQL_NTS;
+            SQLLEN len = is_nts ? SQL_NTS : *ind_ptr;
             // Guard against unbounded strlen on a non-NUL-terminated buffer:
             // cap the walk at buffer_length when it is set. Without this a
             // malformed caller that passes SQL_NTS with a raw byte buffer
@@ -363,6 +373,76 @@ static void apply_proc_output_writeback(
     }
 }
 
+// Render a bound value as the SQL literal text a WHERE clause expects - D10.
+// Strings are single-quoted with embedded quotes doubled; NULL becomes the
+// keyword, which the predicate builder already understands.
+static std::string param_as_sql_literal(const CellValue& v) {
+    if (std::holds_alternative<std::monostate>(v)) return "NULL";
+    if (std::holds_alternative<long long>(v)) {
+        return std::to_string(std::get<long long>(v));
+    }
+    if (std::holds_alternative<double>(v)) {
+        return std::to_string(std::get<double>(v));
+    }
+    const std::string& s = std::get<std::string>(v);
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') out += "''";
+        else out += c;
+    }
+    return out + "'";
+}
+
+// Replace each `?` in `clause` with the next bound value, continuing the
+// statement's parameter numbering from `next_param` - D10.
+//
+// Markers inside string literals are not markers; the scan tracks quoting for
+// the same reason the parser does.
+static void substitute_where_markers(
+    std::string& clause,
+    const std::unordered_map<SQLUSMALLINT, StatementHandle::ParameterBinding>& bindings,
+    SQLULEN row,
+    SQLULEN param_bind_type,
+    SQLUSMALLINT& next_param)
+{
+    if (clause.find('?') == std::string::npos) return;
+    fprintf(stderr, "[T] before='%s'\n", clause.c_str());
+
+    std::string out;
+    out.reserve(clause.size() + 16);
+    bool in_quote = false;
+    for (size_t i = 0; i < clause.size(); ++i) {
+        const char c = clause[i];
+        if (c == '\'') {
+            // A doubled quote inside a literal is an escaped quote.
+            if (in_quote && i + 1 < clause.size() && clause[i + 1] == '\'') {
+                out += "''";
+                ++i;
+                continue;
+            }
+            in_quote = !in_quote;
+            out += c;
+            continue;
+        }
+        if (c == '?' && !in_quote) {
+            ++next_param;
+            auto it = bindings.find(next_param);
+            if (it != bindings.end()) {
+                out += param_as_sql_literal(
+                    read_param_value(it->second, row, param_bind_type));
+            } else {
+                // Unbound marker: leave it, so the predicate builder fails to
+                // match rather than matching the literal text "?".
+                out += c;
+            }
+            continue;
+        }
+        out += c;
+    }
+    clause.swap(out);
+    fprintf(stderr, "[T] after='%s'\n", clause.c_str());
+}
+
 // Substitute bound parameter values into a ParsedQuery for param-set 'row'.
 // Handles both INSERT (insert_values) and literal SELECT (literal_exprs).
 static void substitute_params(
@@ -372,6 +452,22 @@ static void substitute_params(
     SQLULEN param_bind_type)
 {
     if (bindings.empty() || parsed.param_count == 0) return;
+
+    // D10: a table SELECT, UPDATE or DELETE matched none of the three
+    // branches below, so its `?` survived into `where_clause` and was
+    // compared as the literal two-character string "?" - `DELETE FROM t
+    // WHERE id = ?` matched nothing and reported 0 rows affected, with no
+    // error anywhere. The markers in the WHERE are substituted first for
+    // SELECT and DELETE, where they are the only ones; for UPDATE the SET
+    // clause's markers come first in the numbering, and the mock has no SET
+    // evaluator yet, so its WHERE numbering is left alone rather than
+    // guessed at.
+    if (parsed.query_type == ParsedQuery::QueryType::Select ||
+        parsed.query_type == ParsedQuery::QueryType::Delete) {
+        SQLUSMALLINT where_param = 0;
+        substitute_where_markers(parsed.where_clause, bindings, row,
+                                 param_bind_type, where_param);
+    }
 
     // INSERT parameter substitution — only substitute for '?' markers
     if (parsed.query_type == ParsedQuery::QueryType::Insert) {
@@ -411,8 +507,14 @@ static void substitute_params(
     if (parsed.is_literal_select) {
         SQLUSMALLINT param_idx = 0;
         for (auto& lit : parsed.literal_exprs) {
-            param_idx++;
+            // D10: `param_idx++` used to happen for *every* select-list
+            // expression, so `SELECT 'a', 'b', ?` looked for parameter 3 when
+            // SQLBindParameter had bound parameter 1. Parameter numbers count
+            // markers, not expressions, and the two coincide only when every
+            // expression is a marker - which is exactly the shape the
+            // existing probes use, and why this survived.
             if (lit.is_parameter_marker) {
+                param_idx++;
                 auto it = bindings.find(param_idx);
                 if (it != bindings.end()) {
                     CellValue cv = read_param_value(it->second, row, param_bind_type);

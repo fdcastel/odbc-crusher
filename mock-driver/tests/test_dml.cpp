@@ -172,3 +172,174 @@ TEST_F(DmlTest, MultiTupleInsertParameterisedPersistsAllRows) {
     SQLCloseCursor(hstmt);
     EXPECT_STREQ(buf, "bar");
 }
+
+// ── D10: parameter markers in a WHERE clause ──────────────────────────────
+//
+// substitute_params had three branches — Insert, Call, is_literal_select — so
+// a table SELECT, UPDATE or DELETE matched none of them and its `?` survived
+// into where_clause, where it was compared as the literal two-character
+// string "?". `DELETE FROM t WHERE ID = ?` matched nothing, reported 0 rows
+// affected, and raised no error at all: the worst shape a driver bug can take.
+
+TEST_F(DmlTest, DeleteWithABoundParameterDeletesTheRow) {
+    Seed(3);
+    ASSERT_EQ(CountRows(), 3);
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"DELETE FROM T WHERE ID = ?", SQL_NTS)));
+
+    SQLINTEGER id = 2;
+    SQLLEN ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindParameter(
+        hstmt, 1, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0,
+        &id, 0, &ind)));
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecute(hstmt)));
+    SQLLEN affected = -1;
+    SQLRowCount(hstmt, &affected);
+    SQLCloseCursor(hstmt);
+
+    EXPECT_EQ(affected, 1) << "the bound value never reached the WHERE clause";
+    EXPECT_EQ(CountRows(), 2);
+}
+
+TEST_F(DmlTest, SelectWithABoundParameterFiltersTheRows) {
+    Seed(3);
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"SELECT V FROM T WHERE ID = ?", SQL_NTS)));
+
+    SQLINTEGER id = 2;
+    SQLLEN ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindParameter(
+        hstmt, 1, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0,
+        &id, 0, &ind)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecute(hstmt)));
+
+    int rows = 0;
+    std::string got;
+    while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
+        char buf[32] = {0};
+        SQLLEN n = 0;
+        SQLGetData(hstmt, 1, SQL_C_CHAR, buf, sizeof(buf), &n);
+        got = buf;
+        ++rows;
+    }
+    SQLCloseCursor(hstmt);
+
+    EXPECT_EQ(rows, 1) << "an unsubstituted ? matches nothing, or everything";
+    EXPECT_EQ(got, "b");
+}
+
+// A string parameter has to be quoted on the way into the clause, and an
+// embedded quote doubled, or the predicate is malformed rather than wrong.
+TEST_F(DmlTest, StringParameterIsQuotedIntoTheWhereClause) {
+    Exec("INSERT INTO T (ID, V) VALUES (1, 'it''s')");
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"SELECT ID FROM T WHERE V = ?", SQL_NTS)));
+
+    char value[] = "it's";
+    SQLLEN ind = SQL_NTS;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindParameter(
+        hstmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR, 16, 0,
+        value, sizeof(value), &ind)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecute(hstmt)));
+
+    int rows = 0;
+    while (SQL_SUCCEEDED(SQLFetch(hstmt))) ++rows;
+    SQLCloseCursor(hstmt);
+    EXPECT_EQ(rows, 1);
+}
+
+// ── D48: SQL_NTS in the indicator, with a buffer_length set ──────────────
+//
+// read_param_value seeded the length from buffer_length and replaced it only
+// when the indicator was *not* SQL_NTS, so SQL_NTS took the whole buffer -
+// terminator included. The value went in as `abc ` and no literal ever
+// matched it, with no diagnostic anywhere.
+TEST_F(DmlTest, NtsCharParameterStopsAtTheTerminator) {
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"INSERT INTO T (ID, V) VALUES (7, ?)", SQL_NTS)));
+
+    char value[64] = "abc";        // 64 bytes of buffer, 3 bytes of string
+    SQLLEN ind = SQL_NTS;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindParameter(
+        hstmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR, 64, 0,
+        value, sizeof(value), &ind)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecute(hstmt)));
+    SQLCloseCursor(hstmt);
+
+    // Read it back and measure it. A trailing NUL shows up as length 4.
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT V FROM T WHERE ID = 7", SQL_NTS)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+    char got[64] = {0};
+    SQLLEN n = -1;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, got, sizeof(got), &n)));
+    SQLCloseCursor(hstmt);
+
+    EXPECT_EQ(n, 3) << "SQL_NTS took the whole buffer, terminator included";
+    EXPECT_STREQ(got, "abc");
+}
+
+// The same defect sat in the SQL_C_WCHAR branch, spelled the same way.
+TEST_F(DmlTest, NtsWideParameterStopsAtTheTerminator) {
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"INSERT INTO T (ID, V) VALUES (8, ?)", SQL_NTS)));
+
+    SQLWCHAR wvalue[64] = {0};
+    const char* src = "wide";
+    for (int i = 0; src[i]; ++i) wvalue[i] = (SQLWCHAR)src[i];
+    SQLLEN ind = SQL_NTS;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindParameter(
+        hstmt, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR, 64, 0,
+        wvalue, sizeof(wvalue), &ind)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecute(hstmt)));
+    SQLCloseCursor(hstmt);
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT V FROM T WHERE ID = 8", SQL_NTS)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+    char got[64] = {0};
+    SQLLEN n = -1;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, got, sizeof(got), &n)));
+    SQLCloseCursor(hstmt);
+
+    EXPECT_EQ(n, 4) << "SQL_NTS took the whole wide buffer";
+    EXPECT_STREQ(got, "wide");
+}
+
+// ── D13: SELECT had its own, weaker WHERE engine ─────────────────────────
+//
+// The SELECT executor re-implemented filtering instead of calling
+// make_where_predicate. The copy knew only `=` and `IN`, and its find("=")
+// matched the `=` inside `>=`, so it resolved a column named "ID >", failed,
+// and fell back to "match everything" - `WHERE ID >= 3` returned all four
+// rows. UPDATE and DELETE, which used the shared builder, got it right.
+TEST_F(DmlTest, SelectGreaterOrEqualFiltersRows) {
+    Exec("INSERT INTO T (ID, V) VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')");
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT ID FROM T WHERE ID >= 3", SQL_NTS)));
+    int rows = 0;
+    while (SQL_SUCCEEDED(SQLFetch(hstmt))) ++rows;
+    SQLCloseCursor(hstmt);
+    EXPECT_EQ(rows, 2) << "SELECT ignored >= and returned the whole table";
+}
+
+// The same clause through DELETE always worked; the point is that both now
+// answer the same question the same way.
+TEST_F(DmlTest, SelectAndDeleteAgreeOnTheSamePredicate) {
+    Exec("INSERT INTO T (ID, V) VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')");
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT ID FROM T WHERE ID <= 2", SQL_NTS)));
+    int selected = 0;
+    while (SQL_SUCCEEDED(SQLFetch(hstmt))) ++selected;
+    SQLCloseCursor(hstmt);
+
+    const SQLLEN deleted = ExecWithRowCount("DELETE FROM T WHERE ID <= 2");
+    EXPECT_EQ(static_cast<SQLLEN>(selected), deleted);
+    EXPECT_EQ(deleted, 2);
+}
