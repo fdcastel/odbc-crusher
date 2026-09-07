@@ -205,20 +205,77 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
         SQLRETURN exec_ret = SQLExecute(stmt.get_handle());
         
         std::ostringstream actual;
-        if (SQL_SUCCEEDED(exec_ret)) {
-            actual << "Array execution with PARAMSET_SIZE=" << ARRAY_SIZE << " succeeded (ret=" << exec_ret << ")";
-        } else {
+        if (!SQL_SUCCEEDED(exec_ret)) {
             actual << "Array execution returned " << exec_ret;
             r.status = TestStatus::FAIL;
             r.suggestion = "Driver should execute the statement once per parameter set "
                                "when SQL_ATTR_PARAMSET_SIZE > 1. Per ODBC spec, drivers can "
                                "emulate this by executing the SQL once per parameter set.";
+            r.actual = actual.str();
+            SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+            return;
         }
-        r.actual = actual.str();
-        
-        // Reset paramset size to 1 for cleanup
+
+        actual << "Array execution with PARAMSET_SIZE=" << ARRAY_SIZE
+               << " succeeded (ret=" << exec_ret << ")";
+
+        // A20: the probe used to stop here, having looked only at exec_ret.
+        // A driver that ran one parameter set instead of three, or wrote
+        // "Alice" three times, or advanced the integer array correctly while
+        // reusing the first string, passed all the same - and the string axis
+        // is exactly what this file's own header warns about, because a
+        // char[3][N] array is where row-wise offset arithmetic goes wrong.
+        // Read the rows back and compare both columns.
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
             reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+
+        RowVerification v = verify_rows_persisted(
+            "ODBC_TEST_ARRAY", "ID", "NAME",
+            static_cast<long>(ARRAY_SIZE));
+        if (!v.ok) {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::CRITICAL;
+            r.actual = actual.str() + ", but the rows are not there: " +
+                       v.diagnostic;
+            r.suggestion =
+                "SQLExecute with SQL_ATTR_PARAMSET_SIZE = 3 must insert three "
+                "rows. Returning success and inserting fewer is the silent "
+                "shape this category exists to find.";
+            return;
+        }
+
+        static const char* const kExpected[] = {"Alice", "Bob", "Charlie"};
+        std::string mismatches;
+        for (size_t i = 0; i < ARRAY_SIZE; ++i) {
+            const std::string got = v.display(i);
+            // CHAR-style padding is the engine's business; compare trimmed.
+            std::string trimmed = got;
+            while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+            if (trimmed != kExpected[i]) {
+                if (!mismatches.empty()) mismatches += ", ";
+                mismatches += "row " + std::to_string(i + 1) + ": expected '" +
+                              kExpected[i] + "' got '" + got + "'";
+            }
+        }
+        if (!mismatches.empty()) {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::CRITICAL;
+            r.actual = actual.str() + "; string axis wrong: " + mismatches;
+            r.suggestion =
+                "Each parameter set must take the next element of the bound "
+                "character array. Repeating one element is the classic "
+                "column-wise offset bug, and it corrupts data without "
+                "failing a single call.";
+            return;
+        }
+
+        actual << "; all " << ARRAY_SIZE
+               << " rows persisted with the right strings";
+        r.actual = actual.str();
+        // The paramset reset already happened above, before the rows
+        // were read back - it has to, or verify_rows_persisted runs with
+        // PARAMSET_SIZE still at 3.
         });
 }
 

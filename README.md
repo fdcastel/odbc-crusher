@@ -252,8 +252,8 @@ odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
 - **Scrollable cursors** (static cursors with SQL_FETCH_FIRST/LAST/PRIOR/ABSOLUTE/RELATIVE)
 - **Parameter binding** (SQLBindParameter with value substitution in literal SELECTs)
 
-Against `Mode=Success` the mock driver scores **178/178 scored probes (100%)**, with
-17 further probes reported as `INFORMATIONAL` — 195 results in total. Nine of those
+Against `Mode=Success` the mock driver scores **185/185 scored probes (100%)**, with
+17 further probes reported as `INFORMATIONAL` — 202 results in total. Nine of those
 record what the driver answered where the spec leaves no right answer to grade (an
 optional attribute's value, a `SQLGetInfo` bitmask, the type `COUNT(*)` comes back
 as). The other eight are enforced by the **driver manager** rather than the driver:

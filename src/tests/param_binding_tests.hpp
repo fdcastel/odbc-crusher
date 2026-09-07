@@ -55,6 +55,19 @@ private:
     TestResult test_bindparam_int_to_char_roundtrip();
     TestResult test_bindparam_int_to_wvarchar_roundtrip();
 
+    // A20: the cells prior work left out. The unsigned C types are the
+    // reason this matters - a driver that reaches for a signed conversion
+    // on an unsigned buffer produces a wrong value and still returns
+    // SQL_SUCCESS, which is the shape verify_rows_persisted exists to
+    // catch. The CHAR and WVARCHAR axes had only SQL_C_SLONG.
+    TestResult test_bindparam_utinyint_to_varchar_roundtrip();
+    TestResult test_bindparam_ushort_to_varchar_roundtrip();
+    TestResult test_bindparam_ulong_to_varchar_roundtrip();
+    TestResult test_bindparam_ubigint_to_varchar_roundtrip();
+    TestResult test_bindparam_bigint_to_char_roundtrip();
+    TestResult test_bindparam_double_to_char_roundtrip();
+    TestResult test_bindparam_bigint_to_wvarchar_roundtrip();
+
     // Shared roundtrip helpers — defined in the .cpp; only invoked from this
     // class's own test methods, so implicit instantiation is sufficient.
     template <typename CType>

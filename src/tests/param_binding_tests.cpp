@@ -31,6 +31,14 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_bindparam_double_to_varchar_fractional_roundtrip());
     results.push_back(test_bindparam_int_to_char_roundtrip());
     results.push_back(test_bindparam_int_to_wvarchar_roundtrip());
+    // A20: the cells prior work left out.
+    results.push_back(test_bindparam_utinyint_to_varchar_roundtrip());
+    results.push_back(test_bindparam_ushort_to_varchar_roundtrip());
+    results.push_back(test_bindparam_ulong_to_varchar_roundtrip());
+    results.push_back(test_bindparam_ubigint_to_varchar_roundtrip());
+    results.push_back(test_bindparam_bigint_to_char_roundtrip());
+    results.push_back(test_bindparam_double_to_char_roundtrip());
+    results.push_back(test_bindparam_bigint_to_wvarchar_roundtrip());
     results.push_back(test_sqldescribeparam_varchar());
     results.push_back(test_sqldescribeparam_integer());
     results.push_back(test_sqldescribeparam_decimal());
@@ -738,6 +746,76 @@ TestResult ParameterBindingTests::test_bindparam_int_to_wvarchar_roundtrip() {
     return run_int_to_string_roundtrip<SQLINTEGER>(
         "test_bindparam_int_to_wvarchar_roundtrip",
         SQL_C_SLONG, "SQL_C_SLONG",
+        SQL_WVARCHAR, "SQL_WVARCHAR",
+        "ODBC_TEST_ROUNDTRIP_WCHAR", "NVARCHAR(20)", 20, false);
+}
+
+// ── A20: the rest of the numeric-C -> character-SQL matrix ────────────────
+//
+// Unsigned C types first. SQL_C_UTINYINT through SQL_C_UBIGINT are separate
+// conversions in the spec's table, and a driver that quietly routes them
+// through the signed path gets small values right and large ones wrong - so
+// these use the same 1..10 values as their signed twins, which proves the
+// conversion is wired up at all, and leave the boundary values to the
+// boundary category.
+
+TestResult ParameterBindingTests::test_bindparam_utinyint_to_varchar_roundtrip() {
+    return run_int_to_string_roundtrip<SQLCHAR>(
+        "test_bindparam_utinyint_to_varchar_roundtrip",
+        SQL_C_UTINYINT, "SQL_C_UTINYINT",
+        SQL_VARCHAR, "SQL_VARCHAR",
+        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+}
+
+TestResult ParameterBindingTests::test_bindparam_ushort_to_varchar_roundtrip() {
+    return run_int_to_string_roundtrip<SQLUSMALLINT>(
+        "test_bindparam_ushort_to_varchar_roundtrip",
+        SQL_C_USHORT, "SQL_C_USHORT",
+        SQL_VARCHAR, "SQL_VARCHAR",
+        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+}
+
+TestResult ParameterBindingTests::test_bindparam_ulong_to_varchar_roundtrip() {
+    return run_int_to_string_roundtrip<SQLUINTEGER>(
+        "test_bindparam_ulong_to_varchar_roundtrip",
+        SQL_C_ULONG, "SQL_C_ULONG",
+        SQL_VARCHAR, "SQL_VARCHAR",
+        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+}
+
+TestResult ParameterBindingTests::test_bindparam_ubigint_to_varchar_roundtrip() {
+    return run_int_to_string_roundtrip<SQLUBIGINT>(
+        "test_bindparam_ubigint_to_varchar_roundtrip",
+        SQL_C_UBIGINT, "SQL_C_UBIGINT",
+        SQL_VARCHAR, "SQL_VARCHAR",
+        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+}
+
+// The CHAR and WVARCHAR axes had only SQL_C_SLONG, so a driver could get
+// the 32-bit case right and the 64-bit or floating case wrong on those
+// column types without anything noticing.
+
+TestResult ParameterBindingTests::test_bindparam_bigint_to_char_roundtrip() {
+    return run_int_to_string_roundtrip<SQLBIGINT>(
+        "test_bindparam_bigint_to_char_roundtrip",
+        SQL_C_SBIGINT, "SQL_C_SBIGINT",
+        SQL_CHAR, "SQL_CHAR",
+        "ODBC_TEST_ROUNDTRIP_CHAR", "CHAR(20)", 20, true);
+}
+
+TestResult ParameterBindingTests::test_bindparam_double_to_char_roundtrip() {
+    return run_float_to_string_roundtrip<SQLDOUBLE>(
+        "test_bindparam_double_to_char_roundtrip",
+        SQL_C_DOUBLE, "SQL_C_DOUBLE",
+        SQL_CHAR, "SQL_CHAR",
+        "ODBC_TEST_ROUNDTRIP_CHAR", "CHAR(40)", 40,
+        /*value_offset=*/0.5);
+}
+
+TestResult ParameterBindingTests::test_bindparam_bigint_to_wvarchar_roundtrip() {
+    return run_int_to_string_roundtrip<SQLBIGINT>(
+        "test_bindparam_bigint_to_wvarchar_roundtrip",
+        SQL_C_SBIGINT, "SQL_C_SBIGINT",
         SQL_WVARCHAR, "SQL_WVARCHAR",
         "ODBC_TEST_ROUNDTRIP_WCHAR", "NVARCHAR(20)", 20, false);
 }
