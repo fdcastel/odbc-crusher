@@ -506,11 +506,15 @@ public:
     // project tries INTEGER first then INT, so keep that ordering here.
     static const std::vector<std::string>& default_id_ddl_variants();
 
+    // `val_column` names the value column — C4. It is "VAL" everywhere
+    // except ArrayParamTests, whose table has always called it NAME; making
+    // it a parameter is what let that third reimplementation go.
     RoundTripTableGuard(
         core::OdbcConnection& conn,
         std::string table_name,
         std::string val_ddl,
-        const std::vector<std::string>& id_ddl_variants = default_id_ddl_variants());
+        const std::vector<std::string>& id_ddl_variants = default_id_ddl_variants(),
+        std::string val_column = "VAL");
 
     ~RoundTripTableGuard();
 
@@ -540,20 +544,31 @@ public:
         core::OdbcConnection& conn,
         const std::string& table_name,
         const std::vector<std::string>& val_ddl_variants,
-        const std::vector<std::string>& id_ddl_variants = default_id_ddl_variants());
+        const std::vector<std::string>& id_ddl_variants = default_id_ddl_variants(),
+        std::string val_column = "VAL");
 
     bool ok() const { return ok_; }
     const std::string& name() const { return table_name_; }
     const std::string& last_error() const { return last_error_; }
+
+    // True when the table already existed and was reused rather than created
+    // — C4. The three helpers this guard replaces all probed for the table
+    // first, so that a run against a database where the user has no CREATE
+    // TABLE privilege can still work against one an earlier run left behind.
+    // A reused table is emptied before it is handed over (**A15**).
+    bool was_reused() const { return reused_; }
     // Which val-column DDL was accepted — useful when create_first_working()
     // picked a fallback and the report should say which (C10).
     const std::string& val_ddl() const { return val_ddl_; }
+    const std::string& val_column() const { return val_column_; }
 
 private:
     core::OdbcConnection& conn_;
     std::string table_name_;
     std::string val_ddl_;
+    std::string val_column_;
     bool ok_ = false;
+    bool reused_ = false;
     std::string last_error_;
 };
 

@@ -2,6 +2,8 @@
 
 #include "test_base.hpp"
 
+#include <optional>
+
 namespace odbc_crusher::tests {
 
 // Transaction tests (Phase 8)
@@ -27,6 +29,11 @@ private:
 
     // Stores the last DDL error message for reporting in skip suggestions
     std::string last_ddl_error_;
+
+    // C4: the table's lifetime. RoundTripTableGuard is RAII, but these probes
+    // create and drop it across several functions, so it is held here and
+    // drop_test_table() resets it.
+    std::optional<RoundTripTableGuard> table_;
 
 protected:
     // Table lifecycle. `protected` rather than `private` so a test can

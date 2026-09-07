@@ -2,6 +2,8 @@
 
 #include "test_base.hpp"
 
+#include <optional>
+
 namespace odbc_crusher::tests {
 
 // Array Parameter Tests (Phase 16)
@@ -25,6 +27,9 @@ protected:
 private:
     // Stores the last DDL error message for reporting in skip suggestions
     std::string last_ddl_error_;
+
+    // C4 — see transaction_tests.hpp.
+    std::optional<RoundTripTableGuard> table_;
     
     TestResult test_column_wise_array_binding();
     TestResult test_row_wise_array_binding();

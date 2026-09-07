@@ -17,106 +17,22 @@ namespace odbc_crusher::tests {
 // ── Table lifecycle ──────────────────────────────────────────────────────────
 
 bool ArrayParamTests::create_test_table() {
-    try {
-        // A14: this was the fifth copy of the save/restore, and it kept the
-        // bug the others had - `old_ac = 0` with the read's return code
-        // ignored, and SQL_AUTOCOMMIT_OFF *is* 0. It was missed in A14's
-        // first sweep because the search stopped at transaction_tests.
-        ScopedAutocommitOn ac(conn_.get_handle());
-
-        // Strategy 0: Check if the test table already exists from a prior run.
-        // This avoids needing DDL privileges when the table is already there.
-        {
-            try {
-                core::OdbcStatement probe(conn_);
-                probe.execute("SELECT 1 FROM ODBC_TEST_ARRAY WHERE 1=0");
-
-                // A15: reusing the table also reused its rows. The row-wise
-                // binding probes insert IDs 9990-9992 and never delete them,
-                // and one of them asserts that
-                // `WHERE ID IN (9991, 9992)` returns exactly two rows - so a
-                // second run against the same database saw four and failed a
-                // correct driver for the previous run's leftovers.
-                try {
-                    core::OdbcStatement clear(conn_);
-                    clear.execute("DELETE FROM ODBC_TEST_ARRAY");
-                } catch (...) {
-                    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(),
-                               SQL_ROLLBACK);
-                }
-                return true;
-            } catch (...) {
-                // Table doesn't exist — try to create it
-            }
-        }
-
-        // Strategy: CREATE first.  If it fails with "table already exists",
-        // DROP + rollback + retry CREATE.  This avoids corrupting the
-        // connection-level transaction state on Firebird when DROP fails for
-        // a table that doesn't exist.
-        std::vector<std::string> ddl = {
-            "CREATE TABLE ODBC_TEST_ARRAY (ID INTEGER, NAME VARCHAR(50))",
-            "CREATE TABLE ODBC_TEST_ARRAY (ID INT, NAME VARCHAR(50))"
-        };
-
-        // Attempt 1: try CREATE directly
-        for (const auto& sql : ddl) {
-            try {
-                core::OdbcStatement stmt(conn_);
-                stmt.execute(sql);
-                return true;
-            } catch (const core::OdbcError& e) {
-                last_ddl_error_ = e.format_diagnostics();
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-                continue;
-            } catch (...) {
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-                continue;
-            }
-        }
-
-        // Attempt 2: table probably exists — DROP then re-CREATE
-        try {
-            core::OdbcStatement drop_stmt(conn_);
-            drop_stmt.execute("DROP TABLE ODBC_TEST_ARRAY");
-        } catch (...) {
-            SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-        }
-
-        for (const auto& sql : ddl) {
-            try {
-                core::OdbcStatement stmt(conn_);
-                stmt.execute(sql);
-                return true;
-            } catch (const core::OdbcError& e) {
-                last_ddl_error_ = e.format_diagnostics();
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-                continue;
-            } catch (...) {
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-                continue;
-            }
-        }
-
-        return false;   // A14: ScopedAutocommitOn restores on the way out.
-    } catch (...) {
+    // C4 - see TransactionTests::create_test_table. This copy was 96 lines.
+    // Its value column is called NAME rather than VAL, which is why the
+    // guard takes the column name as a parameter.
+    table_.reset();
+    table_.emplace(conn_, "ODBC_TEST_ARRAY", "VARCHAR(50)",
+                   RoundTripTableGuard::default_id_ddl_variants(), "NAME");
+    if (!table_->ok()) {
+        last_ddl_error_ = table_->last_error();
+        table_.reset();
         return false;
     }
+    return true;
 }
 
 void ArrayParamTests::drop_test_table() {
-    try {
-        // A14: this used to set autocommit ON and never put it back, so every
-        // probe that ran afterwards inherited the change. The guard restores
-        // whatever was there — and treats a failed read as ON rather than as
-        // SQL_AUTOCOMMIT_OFF, which is 0.
-        ScopedAutocommitOn ac(conn_.get_handle());
-        core::OdbcStatement stmt(conn_);
-        stmt.execute("DROP TABLE ODBC_TEST_ARRAY");
-    } catch (...) {
-        // Rollback to clean up connection state after failed DDL
-        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-    }
+    table_.reset();   // C4
 }
 
 // ── run() ────────────────────────────────────────────────────────────────────

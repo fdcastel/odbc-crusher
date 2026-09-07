@@ -58,51 +58,28 @@ bool ParameterBindingTests::create_roundtrip_table(
     const std::string& table_name,
     const std::string& val_ddl)
 {
-    // A14: another copy of the save/restore that treated a failed read as
-    // SQL_AUTOCOMMIT_OFF. Missed in A14's first sweep.
-    ScopedAutocommitOn ac(conn_.get_handle());
-
-    const std::vector<std::string> ddl = {
-        "CREATE TABLE " + table_name + " (ID INTEGER, VAL " + val_ddl + ")",
-        "CREATE TABLE " + table_name + " (ID INT, VAL " + val_ddl + ")"
-    };
-
-    auto try_create = [&]() -> bool {
-        for (const auto& sql : ddl) {
-            try {
-                core::OdbcStatement s(conn_);
-                s.execute(sql);
-                return true;
-            } catch (const core::OdbcError& e) {
-                last_ddl_error_ = e.format_diagnostics();
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-            } catch (...) {
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-            }
-        }
+    // C4 - see TransactionTests::create_test_table. This copy was 63 lines
+    // and, unlike the other two, had no reuse probe at all: a run without
+    // CREATE TABLE privilege could not use these probes even when the table
+    // was already there. Adopting the guard adds that.
+    //
+    // Keyed by name because this file uses several tables (ODBC_TEST_ROUNDTRIP
+    // and the per-type tables the round-trip matrix builds), and a probe may
+    // hold one open while creating another.
+    tables_.erase(table_name);
+    auto [it, inserted] = tables_.try_emplace(
+        table_name, conn_, table_name, val_ddl);
+    (void)inserted;
+    if (!it->second.ok()) {
+        last_ddl_error_ = it->second.last_error();
+        tables_.erase(it);
         return false;
-    };
-
-    if (try_create()) return true;
-
-    try {
-        core::OdbcStatement drop_stmt(conn_);
-        drop_stmt.execute("DROP TABLE " + table_name);
-    } catch (...) {
-        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
     }
-
-    return try_create();
+    return true;
 }
 
 void ParameterBindingTests::drop_roundtrip_table(const std::string& table_name) {
-    ScopedAutocommitOn ac(conn_.get_handle());   // A14
-    try {
-        core::OdbcStatement s(conn_);
-        s.execute("DROP TABLE " + table_name);
-    } catch (...) {
-        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-    }
+    tables_.erase(table_name);   // C4
 }
 
 TestResult ParameterBindingTests::test_bindparam_wchar_input() {

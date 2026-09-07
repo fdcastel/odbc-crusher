@@ -500,17 +500,59 @@ RoundTripTableGuard::RoundTripTableGuard(
     core::OdbcConnection& conn,
     std::string table_name,
     std::string val_ddl,
-    const std::vector<std::string>& id_ddl_variants)
+    const std::vector<std::string>& id_ddl_variants,
+    std::string val_column)
     : conn_(conn),
       table_name_(std::move(table_name)),
-      val_ddl_(std::move(val_ddl))
+      val_ddl_(std::move(val_ddl)),
+      val_column_(std::move(val_column))
 {
     ScopedAutocommitOn ac(conn_.get_handle());
+
+    // C4: reuse an existing table rather than insisting on DDL privileges.
+    //
+    // All three helpers this guard replaces began this way, and for a good
+    // reason: this tool is pointed at other people's databases, where the
+    // connected user often cannot CREATE TABLE. If the table is already there
+    // — left by an earlier run — use it.
+    //
+    // A15: empty it first. The crash guard in main.cpp keeps the process
+    // alive past an abort, so the cleanup DROP is skipped and the rows
+    // survive; probes that assert exact counts then fail a correct driver on
+    // the strength of yesterday's data.
+    {
+        bool exists = false;
+        try {
+            core::OdbcStatement probe(conn_);
+            probe.execute("SELECT 1 FROM " + table_name_ + " WHERE 1=0");
+            exists = true;
+        } catch (...) {
+            SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+        }
+        if (exists) {
+            try {
+                core::OdbcStatement clear(conn_);
+                clear.execute("DELETE FROM " + table_name_);
+            } catch (...) {
+                // Not fatal. A probe that cannot empty the table will report
+                // a count mismatch, which is the honest outcome.
+                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
+            }
+            ok_ = true;
+            reused_ = true;
+            // The requested DDL was not what created this table, and probes
+            // print val_ddl() into their report ("... in a NVARCHAR(64)
+            // column"). Say what is true instead of what was asked for.
+            val_ddl_ = "pre-existing " + table_name_ + " column";
+            return;
+        }
+    }
 
     auto try_create_all = [&]() -> bool {
         for (const auto& id_ddl : id_ddl_variants) {
             const std::string sql = "CREATE TABLE " + table_name_ +
-                                    " (ID " + id_ddl + ", VAL " + val_ddl_ + ")";
+                                    " (ID " + id_ddl + ", " + val_column_ +
+                                    " " + val_ddl_ + ")";
             try {
                 core::OdbcStatement s(conn_);
                 s.execute(sql);
@@ -542,7 +584,9 @@ RoundTripTableGuard::RoundTripTableGuard(RoundTripTableGuard&& other) noexcept
     : conn_(other.conn_),
       table_name_(std::move(other.table_name_)),
       val_ddl_(std::move(other.val_ddl_)),
+      val_column_(std::move(other.val_column_)),
       ok_(other.ok_),
+      reused_(other.reused_),
       last_error_(std::move(other.last_error_)) {
     // The moved-from guard must not drop the table the new one now owns.
     other.ok_ = false;
@@ -552,21 +596,23 @@ RoundTripTableGuard RoundTripTableGuard::create_first_working(
     core::OdbcConnection& conn,
     const std::string& table_name,
     const std::vector<std::string>& val_ddl_variants,
-    const std::vector<std::string>& id_ddl_variants) {
+    const std::vector<std::string>& id_ddl_variants,
+    std::string val_column) {
     if (val_ddl_variants.empty()) {
-        return RoundTripTableGuard(conn, table_name, "VARCHAR(64)", id_ddl_variants);
+        return RoundTripTableGuard(conn, table_name, "VARCHAR(64)",
+                                   id_ddl_variants, val_column);
     }
     // Try every variant but the last, returning as soon as one works.
     for (size_t i = 0; i + 1 < val_ddl_variants.size(); ++i) {
         RoundTripTableGuard guard(conn, table_name, val_ddl_variants[i],
-                                  id_ddl_variants);
+                                  id_ddl_variants, val_column);
         if (guard.ok()) return guard;
     }
     // The last variant's guard is returned whether or not it worked, so a
     // caller that finds !ok() sees a real last_error() rather than one
     // synthesised from an extra attempt.
     return RoundTripTableGuard(conn, table_name, val_ddl_variants.back(),
-                               id_ddl_variants);
+                               id_ddl_variants, std::move(val_column));
 }
 
 RoundTripTableGuard::~RoundTripTableGuard() {

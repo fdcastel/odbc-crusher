@@ -17,104 +17,31 @@ std::vector<TestResult> TransactionTests::run() {
 }
 
 bool TransactionTests::create_test_table() {
-    try {
-        // A14: this hand-rolled the save/restore with `SQLUINTEGER old_ac = 0`
-        // and an ignored return code — and SQL_AUTOCOMMIT_OFF *is* 0, so a
-        // driver that declined the read got autocommit switched OFF for every
-        // later category. ScopedAutocommitOn treats a failed read as ON, and
-        // restores on every exit path rather than only the ones that
-        // remembered to.
-        ScopedAutocommitOn ac(conn_.get_handle());
-
-        // Strategy 0: Check if the test table already exists from a prior run.
-        // This avoids needing DDL privileges when the table is already there.
-        {
-            try {
-                core::OdbcStatement probe(conn_);
-                probe.execute("SELECT 1 FROM ODBC_TEST_TXN WHERE 1=0");
-
-                // A15: the table survives a crashed run - main.cpp's crash
-                // guard keeps the process alive past an abort, so the DROP
-                // never happens - and this path reused it *with its rows*.
-                // The commit probe then asserts COUNT(*) == 1 and the
-                // rollback probe COUNT(*) == 0, so yesterday's leftovers
-                // fail a correct driver today. Clear it before handing it
-                // back. A DELETE that fails is not fatal: the probes will
-                // report a count mismatch, which is the honest outcome when
-                // the table cannot be emptied.
-                try {
-                    core::OdbcStatement clear(conn_);
-                    clear.execute("DELETE FROM ODBC_TEST_TXN");
-                } catch (...) {
-                    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(),
-                               SQL_ROLLBACK);
-                }
-                return true;
-            } catch (...) {
-                // Table doesn't exist — try to create it
-            }
-        }
-
-        // Strategy: CREATE first.  If it fails with "table already exists",
-        // DROP + rollback + retry CREATE.  This avoids corrupting the
-        // connection-level transaction state on Firebird when DROP fails for
-        // a table that doesn't exist.
-        std::vector<std::string> create_queries = {
-            "CREATE TABLE ODBC_TEST_TXN (ID INTEGER, VAL VARCHAR(50))",
-            "CREATE TABLE ODBC_TEST_TXN (ID INT, VAL VARCHAR(50))"
-        };
-
-        // Attempt 1: try CREATE directly
-        for (const auto& query : create_queries) {
-            try {
-                core::OdbcStatement create_stmt(conn_);
-                create_stmt.execute(query);
-                return true;
-            } catch (const core::OdbcError& e) {
-                last_ddl_error_ = e.format_diagnostics();
-                // Rollback to clean up connection state after failed DDL
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-                continue;
-            }
-        }
-
-        // Attempt 2: table probably exists — DROP then re-CREATE
-        try {
-            core::OdbcStatement drop_stmt(conn_);
-            drop_stmt.execute("DROP TABLE ODBC_TEST_TXN");
-        } catch (...) {
-            SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-        }
-
-        for (const auto& query : create_queries) {
-            try {
-                core::OdbcStatement create_stmt(conn_);
-                create_stmt.execute(query);
-                return true;
-            } catch (const core::OdbcError& e) {
-                last_ddl_error_ = e.format_diagnostics();
-                SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-                continue;
-            }
-        }
-
-        return false;
-    } catch (...) {
+    // C4: this was a 90-line reimplementation of RoundTripTableGuard - the
+    // same reuse probe, the same INTEGER-then-INT ladder, the same
+    // DROP-and-retry, the same autocommit dance. It is the guard's job now,
+    // and the two behaviours that used to live only here (reuse when the
+    // user cannot CREATE, and A15's clear-on-reuse) moved into it with the
+    // rest.
+    //
+    // The guard is RAII, but these probes create and drop across several
+    // functions, so it lives in an optional member and drop_test_table()
+    // resets it. Restructuring each probe around a scoped guard is a
+    // separate change and is not what C4 asks for.
+    table_.reset();
+    table_.emplace(conn_, "ODBC_TEST_TXN", "VARCHAR(50)");
+    if (!table_->ok()) {
+        last_ddl_error_ = table_->last_error();
+        table_.reset();
         return false;
     }
+    return true;
 }
 
 void TransactionTests::drop_test_table() {
-    try {
-        // DDL cleanup with autocommit ON
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
-        core::OdbcStatement stmt(conn_);
-        stmt.execute("DROP TABLE ODBC_TEST_TXN");
-    } catch (...) {
-        // Rollback to clean up connection state after failed DDL
-        SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
-    }
+    // C4. A14: this used to force autocommit ON and never put it back - the
+    // last copy of that bug. The guard's destructor uses ScopedAutocommitOn.
+    table_.reset();
 }
 
 TestResult TransactionTests::test_autocommit_on() {

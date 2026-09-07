@@ -2,6 +2,9 @@
 
 #include "test_base.hpp"
 
+#include <map>
+#include <string>
+
 namespace odbc_crusher::tests {
 
 // Parameter Binding Tests (Phase 15.2e)
@@ -14,9 +17,9 @@ public:
     std::string category_name() const override { return "Parameter Binding Tests"; }
 
 private:
-    // Table lifecycle for round-trip tests. Uses autocommit-on during DDL
-    // so a failed DROP doesn't poison the transaction on Firebird-style drivers.
-    // Defaults match the original (ODBC_TEST_ROUNDTRIP, VARCHAR(32)).
+    // Table lifecycle for round-trip tests — thin adapters over
+    // RoundTripTableGuard since C4. Defaults match the original
+    // (ODBC_TEST_ROUNDTRIP, VARCHAR(32)).
     bool create_roundtrip_table(
         const std::string& table_name = "ODBC_TEST_ROUNDTRIP",
         const std::string& val_ddl = "VARCHAR(32)");
@@ -25,6 +28,14 @@ private:
 
     // Stores the last DDL error for SKIP suggestions.
     std::string last_ddl_error_;
+
+    // C4: live tables, keyed by name. A map rather than a single optional
+    // because the round-trip matrix builds a table per type and a probe may
+    // hold one open while creating another. `std::map` rather than
+    // `unordered_map` because the guard is move-constructible but not
+    // move-assignable (it holds a connection reference), and map's node-based
+    // storage never needs to reassign an element.
+    std::map<std::string, RoundTripTableGuard> tables_;
 
     TestResult test_bindparam_wchar_input();
     TestResult test_bindparam_null_indicator();

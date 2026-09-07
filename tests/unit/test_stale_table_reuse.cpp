@@ -20,6 +20,7 @@
 #include "core/odbc_environment.hpp"
 #include "core/odbc_statement.hpp"
 #include "tests/array_param_tests.hpp"
+#include "tests/test_base.hpp"
 #include "tests/transaction_tests.hpp"
 
 #include <memory>
@@ -71,7 +72,17 @@ protected:
         }
     }
 
+    // -1 when the table is not there at all: the SELECT throws, and "gone"
+    // is a state these tests assert on.
     long count(const std::string& table) {
+        try {
+            return count_or_throw(table);
+        } catch (...) {
+            return -1;
+        }
+    }
+
+    long count_or_throw(const std::string& table) {
         core::OdbcStatement stmt(*conn_);
         stmt.execute("SELECT COUNT(*) FROM " + table);
         if (!SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) return -1;
@@ -141,4 +152,60 @@ TEST_F(StaleTableFixture, FreshTransactionTableIsCreatedAndEmpty) {
     EXPECT_EQ(count("ODBC_TEST_TXN"), 0);
 
     probe.drop_test_table();
+}
+
+// ── The guard itself — C4 ─────────────────────────────────────────────────
+//
+// After C4 the three create_test_table()/create_roundtrip_table() helpers are
+// thin adapters over RoundTripTableGuard, so the reuse-and-clear behaviour
+// they used to carry each has to live in the guard. These pin it there.
+
+TEST_F(StaleTableFixture, GuardReusesAnExistingTableAndEmptiesIt) {
+    try_exec("DROP TABLE ODBC_TEST_A15G");
+    exec("CREATE TABLE ODBC_TEST_A15G (ID INTEGER, VAL VARCHAR(50))");
+    exec("INSERT INTO ODBC_TEST_A15G (ID, VAL) VALUES (1, 'left over')");
+    ASSERT_EQ(count("ODBC_TEST_A15G"), 1) << "staging did not take";
+
+    {
+        tests::RoundTripTableGuard g(*conn_, "ODBC_TEST_A15G", "VARCHAR(50)");
+        ASSERT_TRUE(g.ok()) << g.last_error();
+        EXPECT_TRUE(g.was_reused())
+            << "the table was already there; the guard should not have "
+               "needed DDL privileges";
+        EXPECT_EQ(count("ODBC_TEST_A15G"), 0)
+            << "a reused table must not arrive with the previous run's rows";
+        // The requested DDL is not what made this table, and probes print
+        // val_ddl() into their report, so it must not claim otherwise.
+        EXPECT_NE(g.val_ddl(), "VARCHAR(50)");
+    }
+    // The guard drops on scope exit, reused or not.
+    EXPECT_EQ(count("ODBC_TEST_A15G"), -1)
+        << "the table should be gone after the guard went out of scope";
+}
+
+TEST_F(StaleTableFixture, GuardCreatesWhenTheTableIsAbsent) {
+    try_exec("DROP TABLE ODBC_TEST_A15G");
+
+    tests::RoundTripTableGuard g(*conn_, "ODBC_TEST_A15G", "VARCHAR(50)");
+    ASSERT_TRUE(g.ok()) << g.last_error();
+    EXPECT_FALSE(g.was_reused());
+    EXPECT_EQ(g.val_ddl(), "VARCHAR(50)");
+    EXPECT_EQ(count("ODBC_TEST_A15G"), 0);
+}
+
+// ArrayParamTests' table calls its value column NAME, which is the reason the
+// guard takes the column name at all. A wrong name here would make every
+// array probe's INSERT fail.
+TEST_F(StaleTableFixture, GuardHonoursTheValueColumnName) {
+    try_exec("DROP TABLE ODBC_TEST_A15G");
+
+    tests::RoundTripTableGuard g(
+        *conn_, "ODBC_TEST_A15G", "VARCHAR(50)",
+        tests::RoundTripTableGuard::default_id_ddl_variants(), "NAME");
+    ASSERT_TRUE(g.ok()) << g.last_error();
+    EXPECT_EQ(g.val_column(), "NAME");
+
+    // Provable rather than assumed: the column exists under that name.
+    exec("INSERT INTO ODBC_TEST_A15G (ID, NAME) VALUES (1, 'x')");
+    EXPECT_EQ(count("ODBC_TEST_A15G"), 1);
 }
