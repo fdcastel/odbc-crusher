@@ -364,8 +364,22 @@ TestResult ErrorQueueTests::test_iteration() {
                     std::string state((char*)sqlstate);
                     sqlstates.push_back(state);
                 } else {
-                    // Unexpected error
-                    break;
+                    // B1: this broke out of the loop and fell into an
+                    // unconditional PASS, so a driver whose SQLGetDiagRec
+                    // failed part way through the queue was reported as
+                    // having iterated it successfully.
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::ERR;
+                    r.actual = "SQLGetDiagRec(record " + std::to_string(i) +
+                               ") returned " + std::to_string(diag_rc) +
+                               " while walking the diagnostic queue; only "
+                               "SQL_NO_DATA ends it";
+                    r.suggestion =
+                        "Records are numbered from 1 with no gaps, and the "
+                        "queue ends with SQL_NO_DATA. An application walking "
+                        "it cannot tell 'end of queue' from 'the call broke' "
+                        "otherwise.";
+                    return;
                 }
             }
 

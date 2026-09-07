@@ -252,7 +252,15 @@ odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
 - **Scrollable cursors** (static cursors with SQL_FETCH_FIRST/LAST/PRIOR/ABSOLUTE/RELATIVE)
 - **Parameter binding** (SQLBindParameter with value substitution in literal SELECTs)
 
-The mock driver achieves **191/195 tests passing** (97.9%) when run with `Mode=Success`. The four remaining failures are tracked mock-driver shortcomings — real probe contracts that reveal real mock gaps, not crusher bugs.
+Against `Mode=Success` the mock driver scores **186/186 scored probes (100%)**, with
+9 further probes reported as `INFORMATIONAL` — 195 results in total. Those 9 record
+what the driver answered where the spec leaves no right answer to grade (an optional
+attribute's value, a `SQLGetInfo` bitmask, the type `COUNT(*)` comes back as), so
+they are deliberately outside the pass rate rather than counted as free passes.
+
+This number is a property of the reference driver, not a target: the point of the
+mock is that every probe which *can* fail does fail when the driver is misconfigured,
+which is what the fault-injection knobs and the e2e scenarios exercise.
 
 ## CLI Reference
 

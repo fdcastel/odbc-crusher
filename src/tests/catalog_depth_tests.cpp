@@ -161,8 +161,12 @@ TestResult CatalogDepthTests::test_procedures_result() {
                 SqlWcharBuf("%").ptr(), SQL_NTS);
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "SQLProcedures not supported by driver";
+                // B1/B4: "not supported" for any failure. SQLProcedures is
+                // Level 1 and a driver may genuinely not have it, but that
+                // has to come from the SQLSTATE - a permissions error is not
+                // a missing feature.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLProcedures");
                 return;
             }
 
@@ -227,8 +231,12 @@ TestResult CatalogDepthTests::test_privileges_result() {
             r.actual = actual.str();
 
             if (!tbl_priv_ok && !col_priv_ok) {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.suggestion = "Privilege catalog functions are Level 2 and may not be supported";
+                // B1/B4: "may not be supported" for any failure of either
+                // call. Both are Level 2 and a driver may genuinely lack
+                // them, but that has to come from the SQLSTATE. The last
+                // attempt's diagnostics are still on the handle.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLTablePrivileges / SQLColumnPrivileges");
             }
         });
 }

@@ -427,9 +427,20 @@ TestResult TransactionTests::test_transaction_isolation_levels() {
             );
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.actual = "Transaction isolation level query not supported";
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.suggestion = "Driver does not support querying SQL_ATTR_TXN_ISOLATION";
+                // B1: SQL_ATTR_TXN_ISOLATION is a Core connection attribute
+                // with a defined default - every connection is running at
+                // *some* isolation level, so it can always be reported.
+                // Which levels are *settable* is what varies.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLGetConnectAttr(SQL_ATTR_TXN_ISOLATION) "
+                           "returned " + std::to_string(ret) + " [" +
+                           first_sqlstate(SQL_HANDLE_DBC, conn_.get_handle(),
+                                          "no diagnostic") + "]";
+                r.suggestion =
+                    "Every connection has a current isolation level, so this "
+                    "read must succeed. Supporting more than one level is the "
+                    "optional part.";
             } else {
                 std::ostringstream oss;
                 oss << "Current isolation: ";

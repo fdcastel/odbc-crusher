@@ -470,9 +470,31 @@ TestResult AdvancedTests::test_fetch_scroll_first_last() {
                                  sqlstate, &native, msg, sizeof(msg), &msg_len);
                     std::string state(reinterpret_cast<char*>(sqlstate));
 
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "SQLFetchScroll(SQL_FETCH_FIRST) not supported (SQLSTATE=" + state + ")";
-                    r.suggestion = "Scrollable cursors (SQL_FETCH_FIRST/LAST) are a Level 2 feature";
+                    // B1: any SQL_ERROR was reported as "not supported",
+                    // whatever the state said - the probe read the SQLSTATE
+                    // and then ignored it. HY106 ("fetch type out of range")
+                    // is a driver declining a Level 2 feature; anything else
+                    // is a failure of a call it accepted.
+                    if (state == "HY106" || state == "HYC00" ||
+                        state == "S1106" || state == "IM001") {
+                        r.status = TestStatus::SKIP_UNSUPPORTED;
+                        r.actual = "SQLFetchScroll(SQL_FETCH_FIRST) declined "
+                                   "with SQLSTATE=" + state;
+                        r.suggestion = "Scrollable cursors (SQL_FETCH_FIRST/"
+                                       "LAST) are a Level 2 feature";
+                    } else {
+                        r.status = TestStatus::FAIL;
+                        r.severity = Severity::ERR;
+                        r.actual = "SQLFetchScroll(SQL_FETCH_FIRST) failed "
+                                   "with SQLSTATE=" +
+                                   (state.empty() ? "(none)" : state) +
+                                   ", which is not how a driver says it does "
+                                   "not support scrollable cursors";
+                        r.suggestion =
+                            "Decline the fetch type with HY106. Any other "
+                            "state means the driver accepted the request and "
+                            "then failed it.";
+                    }
                     success = true;
                     break;
                 }            } while (false);
@@ -518,9 +540,28 @@ TestResult AdvancedTests::test_fetch_scroll_absolute() {
                     success = true;
                     break;
                 } else if (rc == SQL_ERROR) {
-                    r.status = TestStatus::SKIP_UNSUPPORTED;
-                    r.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE) not supported";
-                    r.suggestion = "Absolute positioning is a Level 2 cursor feature";
+                    // B1 - see test_fetch_scroll_first_last. HY106 is how a
+                    // driver declines a fetch type; anything else means it
+                    // accepted the request and then failed it.
+                    const std::string state = first_sqlstate(
+                        SQL_HANDLE_STMT, stmt.get_handle(), "");
+                    if (state == "HY106" || state == "HYC00" ||
+                        state == "S1106" || state == "IM001") {
+                        r.status = TestStatus::SKIP_UNSUPPORTED;
+                        r.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE) "
+                                   "declined with SQLSTATE=" + state;
+                        r.suggestion = "Absolute positioning is a Level 2 "
+                                       "cursor feature";
+                    } else {
+                        r.status = TestStatus::FAIL;
+                        r.severity = Severity::ERR;
+                        r.actual = "SQLFetchScroll(SQL_FETCH_ABSOLUTE, 1) "
+                                   "failed with SQLSTATE=" +
+                                   (state.empty() ? "(none)" : state);
+                        r.suggestion =
+                            "Decline the fetch type with HY106 rather than "
+                            "failing the call for another reason.";
+                    }
                     success = true;
                     break;
                 }            } while (false);
@@ -553,9 +594,30 @@ TestResult AdvancedTests::test_cursor_scrollable_attr() {
                 r.status = TestStatus::PASS;
                 r.actual = "SQL_ATTR_CURSOR_SCROLLABLE set to SQL_SCROLLABLE";
             } else {
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "SQL_ATTR_CURSOR_SCROLLABLE not supported";
-                r.suggestion = "Scrollable cursors are a Level 2 feature per ODBC 3.x";
+                // B1: SQL_ATTR_CURSOR_SCROLLABLE is optional, so declining it
+                // is legal - but the driver has to decline it the way the
+                // spec says, with HYC00 or 01S02, so an application can tell
+                // "I will not" from "I broke".
+                const std::string state = first_sqlstate(
+                    SQL_HANDLE_STMT, stmt.get_handle(), "");
+                if (state == "HYC00" || state == "01S02" ||
+                    state == "HY092" || state == "IM001") {
+                    r.status = TestStatus::SKIP_UNSUPPORTED;
+                    r.actual = "SQL_ATTR_CURSOR_SCROLLABLE declined with "
+                               "SQLSTATE=" + state;
+                    r.suggestion = "Scrollable cursors are a Level 2 feature "
+                                   "per ODBC 3.x";
+                } else {
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::ERR;
+                    r.actual = "SQLSetStmtAttr(SQL_ATTR_CURSOR_SCROLLABLE) "
+                               "failed with SQLSTATE=" +
+                               (state.empty() ? "(none)" : state);
+                    r.suggestion =
+                        "An optional statement attribute is declined with "
+                        "HYC00, or substituted with 01S02. Any other state "
+                        "reports a failure rather than a refusal.";
+                }
             }
         });
 }

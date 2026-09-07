@@ -655,9 +655,28 @@ TestResult ArrayParamTests::test_array_with_null_values() {
             actual << "Array execution with NULL in row 1 succeeded (ret=" << exec_ret << ")";
         } else {
             actual << "Array execution with NULL returned " << exec_ret;
-            // Not necessarily a failure — some drivers may reject NULLs depending on constraints
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.suggestion = "Driver may reject NULL values due to column constraints";
+            // B1: the excuse was "some drivers may reject NULLs depending on
+            // column constraints" - but this probe creates its own table,
+            // whose NAME column has no NOT NULL constraint, so there is no
+            // constraint to blame. A driver that cannot insert SQL_NULL_DATA
+            // through an array-bound parameter has a real defect, and the
+            // SQLSTATE says which: 23000 would be an actual constraint
+            // violation and still deserves a skip.
+            const std::string state = first_sqlstate(
+                SQL_HANDLE_STMT, stmt.get_handle(), "no diagnostic");
+            actual << " [" << state << "]";
+            if (state == "23000") {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.suggestion = "Integrity constraint violation - the test "
+                               "table appears to disallow NULL in this column.";
+            } else {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.suggestion =
+                    "SQL_NULL_DATA in a bound parameter array must insert "
+                    "SQL NULL. The column this probe creates is nullable, so "
+                    "there is no constraint to explain the rejection.";
+            }
         }
         r.actual = actual.str();
         

@@ -170,10 +170,13 @@ TestResult DiagnosticDepthTests::test_diagfield_row_count() {
             r.actual = actual.str();
 
             // Row count may be -1 or 0 for SELECT — this is driver-defined
-            // Just verify the call succeeded
+            // B1: the excuse was "may not be available for all statement
+            // types", but the statement here is an executed SELECT, which is
+            // exactly the case the header field is defined for. A driver that
+            // cannot answer it is failing a Core diagnostic read.
             if (!SQL_SUCCEEDED(diag_ret)) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.suggestion = "SQL_DIAG_ROW_COUNT may not be available for all statement types";
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLGetDiagField(SQL_DIAG_ROW_COUNT)");
             }
         });
 }

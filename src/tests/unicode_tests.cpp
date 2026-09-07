@@ -341,9 +341,13 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
                 SqlWcharBuf("%").ptr(), SQL_NTS);
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "SQLColumnsW call did not succeed";
-                r.suggestion = "Verify driver supports Unicode catalog functions";
+                // B1: the suggestion told the *reader* to go and verify
+                // something the probe had just measured. SQLColumnsW is the
+                // Unicode entry point of a Core catalog function; a driver
+                // that exports it and then fails it is a finding, and one
+                // that says IM001 is declining - B3 tells them apart.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLColumnsW");
                 return;
             }
 

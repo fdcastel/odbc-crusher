@@ -142,9 +142,15 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
                 actual << "; execute returned " << exec_ret;
             }
         } else {
+            // B1: "may not support" was a guess. SQL_C_WCHAR is a Core C type
+            // and every Unicode driver binds it; B3 reads the SQLSTATE, so a
+            // driver that answers HYC00 still skips and anything else is the
+            // failure it is.
             actual << "SQLBindParameter with SQL_C_WCHAR returned " << ret;
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.suggestion = "Driver may not support SQL_C_WCHAR parameter binding";
+            r.actual = actual.str();
+            report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                           "SQLBindParameter(SQL_C_WCHAR)");
+            return;
         }
         r.actual = actual.str();
         });
@@ -1266,6 +1272,14 @@ TestResult ParameterBindingTests::test_param_reexecute_requires_close() {
                     "intervening SQL_CLOSE. Bulk-insert consumers must close between "
                     "iterations or rebind per-row. This is the DuckDB ODBC behaviour.";
             } else if (SQL_SUCCEEDED(exec1) && SQL_SUCCEEDED(exec2)) {
+                // B1/B2: both answers are conformant. The spec does not say
+                // whether a prepared statement may be re-executed without an
+                // intervening SQLFreeStmt(SQL_CLOSE), and the two behaviours
+                // are what a bulk-insert consumer needs to plan around - so
+                // this records which one the driver does rather than grading
+                // it. (The first-execute failure below is still a skip: there
+                // the probe never reached the question.)
+                result.status = TestStatus::INFORMATIONAL;
                 actual << "  (driver does NOT require close between executes)";
             } else if (!SQL_SUCCEEDED(exec1)) {
                 actual << "  (first SQLExecute itself failed; result inconclusive)";

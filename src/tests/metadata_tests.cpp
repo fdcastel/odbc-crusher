@@ -820,6 +820,12 @@ TestResult MetadataTests::test_count_star_result_metadata() {
                 return;
             }
 
+            // B1/B2: the row B2 names by name. What COUNT(*) is typed as is
+            // left to the engine - SQL_INTEGER, SQL_BIGINT and SQL_NUMERIC
+            // are all in use, with whatever precision goes with them - so
+            // there is no right answer to grade, only an answer worth
+            // recording so a consumer can size its buffer.
+            r.status = TestStatus::INFORMATIONAL;
             std::ostringstream actual;
             actual << "Table=" << target_table
                    << " sql_type=" << sql_type

@@ -152,8 +152,18 @@ TestResult StateMachineTests::test_state_reset() {
             }
 
             if (!success) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not complete state reset test with available query patterns";
+                // B1: execute -> fetch -> SQLCloseCursor -> execute -> fetch
+                // is Core, and the dialect variants cover the engines this
+                // tool targets. A driver that cannot do it on any of them
+                // forces a fresh statement handle per query.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "Could not execute, fetch, close and re-execute on "
+                           "one statement handle with any dialect variant";
+                r.suggestion =
+                    "SQLCloseCursor returns the statement to the prepared "
+                    "state so it can be executed again. Without it every "
+                    "query costs a handle allocation.";
             }
         });
 }

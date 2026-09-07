@@ -135,13 +135,43 @@ TestResult CursorBehaviorTests::test_fetchscroll_first_forward_only() {
             r.actual = actual.str();
 
             if (ret == SQL_ERROR) {
-                // Expected: driver correctly rejects backward scrolling on forward-only cursor
-                r.status = TestStatus::PASS;
-                r.actual += " (correctly rejected)";
+                // The spec names the state: SQL_FETCH_FIRST on a
+                // forward-only cursor is HY106, "Fetch type out of range".
+                // B1: this branch passed on any error at all, so a driver
+                // failing for an unrelated reason scored the same as one
+                // getting it right.
+                const std::string state = first_sqlstate(
+                    SQL_HANDLE_STMT, stmt.get_handle(), "no diagnostic");
+                if (state == "HY106") {
+                    r.status = TestStatus::PASS;
+                    r.actual += " (correctly rejected with HY106)";
+                } else {
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::WARNING;
+                    r.actual += " (rejected, but with " + state +
+                                " rather than HY106)";
+                    r.suggestion =
+                        "SQLFetchScroll with SQL_FETCH_FIRST on a "
+                        "forward-only cursor must return HY106 so the "
+                        "application can tell 'wrong fetch type' from a real "
+                        "error.";
+                }
             } else if (SQL_SUCCEEDED(ret)) {
-                // Some drivers silently support it — not a failure but notable
-                r.status = TestStatus::PASS;
-                r.actual += " (driver supports scrolling despite forward-only cursor type)";
+                // B1: this was the second PASS. Scrolling backwards on a
+                // cursor the application declared forward-only is a
+                // conformance deviation, even though it gives the caller
+                // more than it asked for: code that works here breaks on the
+                // conforming driver next to it. WARNING, not ERR - nothing
+                // is corrupted, and it is common.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::WARNING;
+                r.actual += " (driver scrolled a forward-only cursor instead "
+                            "of returning HY106)";
+                r.suggestion =
+                    "SQL_ATTR_CURSOR_TYPE was SQL_CURSOR_FORWARD_ONLY, so "
+                    "SQLFetchScroll(SQL_FETCH_FIRST) must return HY106. "
+                    "Accepting it lets an application depend on behaviour a "
+                    "conforming driver will refuse.";
             }
         });
 }
@@ -161,8 +191,11 @@ TestResult CursorBehaviorTests::test_cursor_type_attribute() {
                 &cursor_type, 0, nullptr);
 
             if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not get SQL_ATTR_CURSOR_TYPE";
+                // B1: every statement has a cursor type, defaulting to
+                // SQL_CURSOR_FORWARD_ONLY. Reading it is Core - supporting
+                // other *values* is what is optional.
+                report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                               "SQLGetStmtAttr(SQL_ATTR_CURSOR_TYPE)");
                 return;
             }
 
