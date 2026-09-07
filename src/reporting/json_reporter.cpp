@@ -83,17 +83,29 @@ void JsonReporter::report_category(const std::string& category_name,
 
 void JsonReporter::report_summary(size_t total_tests, size_t passed, size_t failed,
                                   size_t skipped, size_t errors,
+                                  size_t informational,
                                   std::chrono::microseconds total_duration) {
+    // B2: `scored` is the pass rate's denominator - every result except the
+    // informational ones, which are reported but have no right answer to
+    // grade. Consumers reading `pass_rate` keep working; one that recomputed
+    // it as passed/total_tests will now disagree with us, which is exactly
+    // why `scored` and `informational` are published rather than left for a
+    // reader to infer.
+    const size_t scored = total_tests > informational
+                        ? total_tests - informational : 0;
+
     nlohmann::json summary;
     summary["total_tests"] = total_tests;
     summary["passed"] = passed;
     summary["failed"] = failed;
     summary["skipped"] = skipped;
     summary["errors"] = errors;
+    summary["informational"] = informational;
+    summary["scored"] = scored;
     summary["total_duration_us"] = total_duration.count();
-    
-    if (total_tests > 0) {
-        summary["pass_rate"] = (passed * 100.0) / total_tests;
+
+    if (scored > 0) {
+        summary["pass_rate"] = (passed * 100.0) / scored;
     } else {
         summary["pass_rate"] = 0.0;
     }

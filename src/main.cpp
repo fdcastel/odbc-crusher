@@ -42,7 +42,7 @@ namespace {
 void tally_results(const std::vector<tests::TestResult>& results,
                    size_t& total_tests, size_t& total_passed,
                    size_t& total_failed, size_t& total_skipped,
-                   size_t& total_errors) {
+                   size_t& total_errors, size_t& total_informational) {
     for (const auto& r : results) {
         total_tests++;
         switch (r.status) {
@@ -51,6 +51,8 @@ void tally_results(const std::vector<tests::TestResult>& results,
             case tests::TestStatus::SKIP_UNSUPPORTED:
             case tests::TestStatus::SKIP_INCONCLUSIVE: total_skipped++; break;
             case tests::TestStatus::ERR:  total_errors++; break;
+            // B2: reported, and deliberately not scored.
+            case tests::TestStatus::INFORMATIONAL: total_informational++; break;
         }
     }
 }
@@ -58,7 +60,7 @@ void tally_results(const std::vector<tests::TestResult>& results,
 void run_test_category(tests::TestBase& test_suite, reporting::Reporter& reporter,
                        size_t& total_tests, size_t& total_passed,
                        size_t& total_failed, size_t& total_skipped,
-                       size_t& total_errors) {
+                       size_t& total_errors, size_t& total_informational) {
     std::vector<tests::TestResult> results;
 
     auto guard = core::execute_with_crash_guard([&]() {
@@ -84,7 +86,7 @@ void run_test_category(tests::TestBase& test_suite, reporting::Reporter& reporte
 
     reporter.report_category(test_suite.category_name(), results);
     tally_results(results, total_tests, total_passed, total_failed,
-                  total_skipped, total_errors);
+                  total_skipped, total_errors, total_informational);
     std::cout << std::flush;
 }
 
@@ -190,6 +192,7 @@ int main(int argc, char** argv) {
         size_t total_failed = 0;
         size_t total_skipped = 0;
         size_t total_errors = 0;
+        size_t total_informational = 0;   // B2
         auto overall_start = std::chrono::high_resolution_clock::now();
         
         // Registered test categories. Order is preserved in the report.
@@ -221,7 +224,8 @@ int main(int argc, char** argv) {
 
         for (auto& category : categories) {
             run_test_category(*category, *reporter, total_tests, total_passed,
-                              total_failed, total_skipped, total_errors);
+                              total_failed, total_skipped, total_errors,
+                              total_informational);
         }
         
         auto overall_end = std::chrono::high_resolution_clock::now();
@@ -230,7 +234,8 @@ int main(int argc, char** argv) {
         
         // Report summary
         reporter->report_summary(total_tests, total_passed, total_failed,
-                                total_skipped, total_errors, total_duration);
+                                total_skipped, total_errors,
+                                total_informational, total_duration);
         
         reporter->report_end();
         

@@ -93,16 +93,23 @@ void ConsoleReporter::report_category(const std::string& category_name,
 
 void ConsoleReporter::report_summary(size_t total_tests, size_t passed, size_t failed,
                                      size_t skipped, size_t errors,
+                                     size_t informational,
                                      std::chrono::microseconds total_duration) {
+    // B2: informational results are reported but not scored, so the pass rate
+    // is taken over what was actually graded. Dividing by total_tests put a
+    // fixed floor under every driver's score.
+    const size_t scored = total_tests > informational
+                        ? total_tests - informational : 0;
+
     out_ << "SUMMARY:\n";
     out_ << "  Total Tests:  " << total_tests << "\n";
     out_ << "  Passed:       " << passed;
-    if (total_tests > 0) {
-        out_ << " (" << std::fixed << std::setprecision(1) 
-             << (passed * 100.0 / total_tests) << "%)";
+    if (scored > 0) {
+        out_ << " (" << std::fixed << std::setprecision(1)
+             << (passed * 100.0 / scored) << "% of " << scored << " scored)";
     }
     out_ << "\n";
-    
+
     if (failed > 0) {
         out_ << "  Failed:       " << failed << "\n";
     }
@@ -111,6 +118,10 @@ void ConsoleReporter::report_summary(size_t total_tests, size_t passed, size_t f
     }
     if (errors > 0) {
         out_ << "  Errors:       " << errors << "\n";
+    }
+    if (informational > 0) {
+        out_ << "  Informational: " << informational
+             << " (reported, not scored)\n";
     }
     
     out_ << "  Total Time:   " << format_duration(total_duration) << "\n";
@@ -162,6 +173,10 @@ std::string ConsoleReporter::status_icon(tests::TestStatus status) const {
         case tests::TestStatus::SKIP_UNSUPPORTED: return "[NOT ]";
         case tests::TestStatus::SKIP_INCONCLUSIVE: return "[ ?? ]";
         case tests::TestStatus::ERR:  return "[ERR!]";
+        // B2. Deliberately distinct from [PASS]: the point of the status is
+        // that nothing was graded, and a reader scanning the column has to
+        // be able to see that without reading the text.
+        case tests::TestStatus::INFORMATIONAL: return "[INFO]";
         default: return "[????]";
     }
 }

@@ -19,7 +19,23 @@ enum class TestStatus {
     FAIL,
     SKIP_UNSUPPORTED,   // Driver doesn't support this optional feature
     SKIP_INCONCLUSIVE,  // Test couldn't determine result
-    ERR                 // Changed from ERROR to avoid Windows macro conflict
+    ERR,                // Changed from ERROR to avoid Windows macro conflict
+
+    // Reported, but not scored — B2.
+    //
+    // Some probes cannot fail, and should not: they record what the driver
+    // said (a SQLGetInfo bitmask, a raw byte layout, a row count the spec
+    // leaves to the engine) so a reader can compare drivers, without there
+    // being a right answer to grade. Expressing that as PASS put a fixed
+    // floor under every driver's score — about 13% of the suite — and made
+    // the headline number mean less the more of them there were.
+    //
+    // INFORMATIONAL results appear in the report exactly like any other, and
+    // are excluded from the pass rate's denominator rather than being counted
+    // as passes. A probe that *can* fail must never use this: the point of
+    // the status is that there was nothing to grade, not that grading was
+    // inconvenient.
+    INFORMATIONAL
 };
 
 // Severity level
@@ -590,6 +606,7 @@ inline const char* status_to_string(TestStatus status) {
         case TestStatus::SKIP_UNSUPPORTED: return "SKIP_UNSUPPORTED";
         case TestStatus::SKIP_INCONCLUSIVE: return "SKIP_INCONCLUSIVE";
         case TestStatus::ERR: return "ERROR";
+        case TestStatus::INFORMATIONAL: return "INFORMATIONAL";
         default: return "UNKNOWN";
     }
 }

@@ -39,17 +39,18 @@ std::string summary_of(const std::vector<tests::TestResult>& results) {
     std::ostringstream out;
     reporting::ConsoleReporter rep(out, /*verbose=*/false);
     rep.report_category("Cat", results);
-    size_t failed = 0, errors = 0, skipped = 0, passed = 0;
+    size_t failed = 0, errors = 0, skipped = 0, passed = 0, informational = 0;
     for (const auto& r : results) {
         switch (r.status) {
             case tests::TestStatus::PASS: ++passed; break;
             case tests::TestStatus::FAIL: ++failed; break;
             case tests::TestStatus::ERR: ++errors; break;
+            case tests::TestStatus::INFORMATIONAL: ++informational; break;  // B2
             default: ++skipped; break;
         }
     }
     rep.report_summary(results.size(), passed, failed, skipped, errors,
-                       std::chrono::microseconds(100));
+                       informational, std::chrono::microseconds(100));
     rep.report_end();
     return out.str();
 }
@@ -113,7 +114,7 @@ TEST(ConsoleReporterTest, FailuresAccumulateAcrossCategories) {
                                        tests::Severity::ERR)});
     rep.report_category("Second", {make("f2", tests::TestStatus::ERR,
                                         tests::Severity::CRITICAL)});
-    rep.report_summary(2, 0, 1, 0, 1, std::chrono::microseconds(1));
+    rep.report_summary(2, 0, 1, 0, 1, 0, std::chrono::microseconds(1));
     rep.report_end();
 
     const auto text = out.str();
@@ -143,4 +144,34 @@ TEST(ConsoleReporterTest, OverlongCategoryNameDoesNotWrapThePadding) {
     const auto eol = text.find('\n', start);
     ASSERT_NE(eol, std::string::npos);
     EXPECT_LT(eol - start, 1024u) << "padding line looks wrong";
+}
+
+// ── B2: reported, but not scored ──────────────────────────────────────────
+
+TEST(ConsoleReporterTest, InformationalResultsAreNamedAndKeptOutOfThePassRate) {
+    auto text = summary_of({
+        make("scored_pass", tests::TestStatus::PASS, tests::Severity::INFO),
+        make("not_scored", tests::TestStatus::INFORMATIONAL, tests::Severity::INFO),
+    });
+
+    // The percentage is over what was graded — one of one, not one of two.
+    EXPECT_NE(text.find("100.0% of 1 scored"), std::string::npos) << text;
+    EXPECT_NE(text.find("Informational: 1 (reported, not scored)"),
+              std::string::npos) << text;
+
+    // And it is not a failure: a run of passes and informationals is clean.
+    EXPECT_NE(text.find("ALL TESTS PASSED"), std::string::npos) << text;
+}
+
+// The per-result tag has to be distinguishable at a glance from PASS, or the
+// status changes nothing for someone reading the console output.
+TEST(ConsoleReporterTest, InformationalHasItsOwnTag) {
+    std::ostringstream out;
+    reporting::ConsoleReporter rep(out, /*verbose=*/true);
+    rep.report_category("Cat",
+                        {make("i", tests::TestStatus::INFORMATIONAL,
+                              tests::Severity::INFO)});
+    const auto text = out.str();
+    EXPECT_NE(text.find("[INFO]"), std::string::npos) << text;
+    EXPECT_EQ(text.find("[PASS]"), std::string::npos) << text;
 }

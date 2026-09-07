@@ -311,6 +311,11 @@ The document is versioned:
 - **[NOT ]** — The test was skipped because the driver does not support this feature (SKIP_UNSUPPORTED).
 - **[ ?? ]** — The test result was inconclusive (SKIP_INCONCLUSIVE) — the driver may or may not support the feature.
 - **[ERR!]** — An unexpected exception occurred during the test.
+- **[INFO]** — Reported, but not scored (`INFORMATIONAL`). Some probes record what the driver said — a `SQLGetInfo` bitmask, a raw byte layout, a row count the spec leaves to the engine — where there is no right answer to grade. They are excluded from the pass rate rather than counted as passes.
+
+The pass rate is `passed / scored`, where `scored` is every result except the
+informational ones. The JSON summary publishes `scored` and `informational`
+alongside `total_tests` so a consumer never has to infer the denominator.
 
 In verbose mode (`-v`), each test also shows:
 - The **expected** vs **actual** behavior

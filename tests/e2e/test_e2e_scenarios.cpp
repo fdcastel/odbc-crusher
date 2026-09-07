@@ -141,6 +141,26 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
            "baseline (kMaxSkipped=" << kMaxSkipped << ").\n"
            "  Skipped probes: " << skipped_names;
 
+    // B2: the pass rate is taken over what was graded, not over every result.
+    // The reporter's own unit tests cover the arithmetic; this covers the
+    // wiring - main.cpp's tally has to reach the report for the published
+    // numbers to be self-consistent.
+    ASSERT_TRUE(summary.contains("informational"))
+        << "summary is missing the informational count (B2)";
+    ASSERT_TRUE(summary.contains("scored"))
+        << "summary is missing the scored count (B2)";
+    EXPECT_EQ(summary.value("scored", -1),
+              summary.value("total_tests", 0) -
+                  summary.value("informational", 0))
+        << "scored must be every result that was graded";
+    if (summary.value("scored", 0) > 0) {
+        EXPECT_NEAR(summary.value("pass_rate", -1.0),
+                    summary.value("passed", 0) * 100.0 /
+                        summary.value("scored", 1),
+                    0.05)
+            << "pass_rate must be passed/scored, not passed/total_tests";
+    }
+
 #ifdef __linux__
     // Improvement detector — when one of the §8 gaps gets fixed and the count
     // drops below baseline, surface a notice so the bound can be tightened.

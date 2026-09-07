@@ -34,6 +34,7 @@ public:
                         const std::vector<tests::TestResult>& results) override;
     void report_summary(size_t total_tests, size_t passed, size_t failed,
                        size_t skipped, size_t errors,
+                        size_t informational,
                        std::chrono::microseconds total_duration) override;
     void report_end() override;
     

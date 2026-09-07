@@ -108,7 +108,7 @@ TEST_F(JsonReporterFixture, FinalReportIsMarkedCompleteAndCarriesEverything) {
     rep.report_start("Driver={X}");
     rep.report_category("First", {make("t1", tests::TestStatus::PASS)});
     rep.report_category("Second", {make("t2", tests::TestStatus::FAIL)});
-    rep.report_summary(2, 1, 1, 0, 0, std::chrono::microseconds(42));
+    rep.report_summary(2, 1, 1, 0, 0, 0, std::chrono::microseconds(42));
     rep.report_end();
 
     const auto j = read_back();
@@ -127,7 +127,7 @@ TEST_F(JsonReporterFixture, LeavesNoPartialFileBehind) {
     rep.report_start("Driver={X}");
     rep.report_category("First", {make("t1", tests::TestStatus::PASS)});
     EXPECT_FALSE(partial_exists()) << "the .partial should have been renamed away";
-    rep.report_summary(1, 1, 0, 0, 0, std::chrono::microseconds(1));
+    rep.report_summary(1, 1, 0, 0, 0, 0, std::chrono::microseconds(1));
     rep.report_end();
     EXPECT_FALSE(partial_exists());
 }
@@ -160,7 +160,7 @@ TEST_F(JsonReporterFixture, StdoutModeWritesNoFile) {
         reporting::JsonReporter rep("");   // empty path => stdout
         rep.report_start("Driver={X}");
         rep.report_category("First", {make("t1", tests::TestStatus::PASS)});
-        rep.report_summary(1, 1, 0, 0, 0, std::chrono::microseconds(1));
+        rep.report_summary(1, 1, 0, 0, 0, 0, std::chrono::microseconds(1));
         rep.report_end();
     }
     const auto out = testing::internal::GetCapturedStdout();
@@ -185,7 +185,7 @@ TEST_F(JsonReporterFixture, UnwritablePathIsReportedOnceAndDoesNotThrow) {
             rep.report_category("Cat" + std::to_string(i),
                                 {make("t", tests::TestStatus::PASS)});
         }
-        rep.report_summary(5, 5, 0, 0, 0, std::chrono::microseconds(1));
+        rep.report_summary(5, 5, 0, 0, 0, 0, std::chrono::microseconds(1));
         rep.report_end();
     });
     const auto err = testing::internal::GetCapturedStderr();
@@ -198,4 +198,56 @@ TEST_F(JsonReporterFixture, UnwritablePathIsReportedOnceAndDoesNotThrow) {
     EXPECT_EQ(errors, 1u) << "stderr was:" << err;
     // And it must not claim success.
     EXPECT_EQ(err.find("JSON report written to:"), std::string::npos) << err;
+}
+
+// ── B2: reported, but not scored ──────────────────────────────────────────
+//
+// Some probes cannot fail and should not: they record what the driver said
+// without there being a right answer to grade. Expressing that as PASS put a
+// fixed floor of about 13% under every driver's score. INFORMATIONAL results
+// are reported like any other and excluded from the pass rate's denominator.
+
+TEST_F(JsonReporterFixture, InformationalResultsAreReportedButNotScored) {
+    reporting::JsonReporter rep(path_.string());
+    rep.report_start("Driver={X}");
+    rep.report_category("Cat", {
+        make("scored_pass", tests::TestStatus::PASS),
+        make("scored_fail", tests::TestStatus::FAIL),
+        make("not_scored", tests::TestStatus::INFORMATIONAL),
+        make("also_not_scored", tests::TestStatus::INFORMATIONAL),
+    });
+    rep.report_summary(4, 1, 1, 0, 0, 2, std::chrono::microseconds(1));
+    rep.report_end();
+
+    const auto j = read_back();
+    const auto& s = j["summary"];
+
+    // Every result is still in the report and still counted in the total.
+    EXPECT_EQ(s["total_tests"], 4);
+    ASSERT_EQ(j["categories"][0]["tests"].size(), 4u);
+    EXPECT_EQ(j["categories"][0]["tests"][2]["status"], "INFORMATIONAL");
+
+    // ...but only two of the four were graded.
+    EXPECT_EQ(s["informational"], 2);
+    EXPECT_EQ(s["scored"], 2);
+
+    // 1 of 2 scored is 50%. Over total_tests it would have been 25%, and
+    // counting the informational two as passes would have been 75% — the
+    // floor this status exists to remove.
+    EXPECT_DOUBLE_EQ(s["pass_rate"].get<double>(), 50.0);
+}
+
+// A run that is nothing but informational results has nothing to grade. It
+// must not report 100%, and it must not divide by zero either.
+TEST_F(JsonReporterFixture, AnEntirelyInformationalRunHasNoPassRate) {
+    reporting::JsonReporter rep(path_.string());
+    rep.report_start("Driver={X}");
+    rep.report_category("Cat", {make("i", tests::TestStatus::INFORMATIONAL)});
+    rep.report_summary(1, 0, 0, 0, 0, 1, std::chrono::microseconds(1));
+    rep.report_end();
+
+    const auto j = read_back();
+    const auto& s = j["summary"];
+    EXPECT_EQ(s["scored"], 0);
+    EXPECT_DOUBLE_EQ(s["pass_rate"].get<double>(), 0.0);
 }

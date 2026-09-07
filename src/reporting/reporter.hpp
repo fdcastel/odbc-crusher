@@ -30,8 +30,13 @@ public:
                                  const std::vector<tests::TestResult>& results) = 0;
 
     // Report the final summary
+    // `informational` results are reported but excluded from the pass
+    // rate's denominator — B2. Passing it separately rather than folding it
+    // into `skipped` keeps "the driver could not be asked" distinct from
+    // "there was nothing to grade".
     virtual void report_summary(size_t total_tests, size_t passed, size_t failed,
                                 size_t skipped, size_t errors,
+                                size_t informational,
                                 std::chrono::microseconds total_duration) = 0;
 
     // Report the end of testing
