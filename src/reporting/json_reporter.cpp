@@ -1,13 +1,37 @@
 #include "json_reporter.hpp"
+#include <ctime>
 #include <iostream>
 #include <iomanip>
 
 namespace odbc_crusher::reporting {
 
+namespace {
+
+// G4: ISO-8601 UTC, e.g. "2026-09-07T13:14:15Z". The report used to carry a
+// raw std::time_t integer, which every consumer had to know was epoch seconds.
+std::string iso8601_utc(std::time_t t) {
+    std::tm tm_buf{};
+#ifdef _WIN32
+    if (gmtime_s(&tm_buf, &t) != 0) return {};
+#else
+    if (gmtime_r(&t, &tm_buf) == nullptr) return {};
+#endif
+    char buf[32];
+    if (std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm_buf) == 0) return {};
+    return buf;
+}
+
+}  // namespace
+
 void JsonReporter::report_start(const std::string& connection_string) {
     root_ = nlohmann::json::object();
+    // G4: version the output contract. Integer, matching the convention
+    // .github/drivers.json already uses. Bump it whenever an existing key
+    // changes meaning, is renamed or is removed; purely additive changes keep
+    // the number. Consumers should reject a version they do not know.
+    root_["schema_version"] = kSchemaVersion;
     root_["connection_string"] = connection_string;
-    root_["timestamp"] = std::time(nullptr);
+    root_["timestamp"] = iso8601_utc(std::time(nullptr));
     categories_ = nlohmann::json::array();
 }
 
@@ -82,7 +106,9 @@ void JsonReporter::report_end() {
         std::ofstream file(output_file_);
         if (file.is_open()) {
             file << std::setw(2) << root_ << std::endl;
-            std::cout << "JSON report written to: " << output_file_ << std::endl;
+            // G1: this is progress chatter, not report data. On stderr so that
+            // `-o json -f report.json` leaves stdout completely empty.
+            std::cerr << "JSON report written to: " << output_file_ << std::endl;
         } else {
             std::cerr << "Error: Could not write to " << output_file_ << std::endl;
         }

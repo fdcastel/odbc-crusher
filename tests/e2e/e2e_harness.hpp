@@ -21,6 +21,7 @@ struct CrusherRun {
     int exit_code = -1;
     nlohmann::json report;          // The parsed JSON output (empty on failure)
     std::string raw_stderr;         // Captured for diagnostics
+    std::string raw_stdout;         // Only populated by run_crusher_stdout()
     bool launched = false;          // false iff the binary couldn't be invoked
 };
 
@@ -28,6 +29,13 @@ struct CrusherRun {
 // `-o json -f <tmp>` and reads the report back from the temp file.
 // Returns CrusherRun{launched=false} if the binary itself cannot run.
 CrusherRun run_crusher(const std::string& connection_string);
+
+// Same, but with `-o json` and NO `-f`: the report is captured from stdout.
+// This is the invocation the README documents for piping into jq, and the
+// only way to test G1 — that no progress chatter is written to stdout.
+// `raw_stdout` carries the bytes verbatim so a scenario can assert on what
+// preceded the JSON, not merely that a parse succeeded.
+CrusherRun run_crusher_stdout(const std::string& connection_string);
 
 // Probe whether the mock driver is loadable on this host. Skips
 // scenarios with GTEST_SKIP() when false. Caches the result.

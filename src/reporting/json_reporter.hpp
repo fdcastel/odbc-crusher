@@ -12,6 +12,15 @@ namespace odbc_crusher::reporting {
 // JSON reporter for structured output
 class JsonReporter : public Reporter {
 public:
+    // G4: version of the report contract, emitted as the top-level
+    // "schema_version" key. Bump it whenever an existing key changes meaning,
+    // is renamed or is removed; purely additive changes keep the number.
+    //
+    //   1 — initial versioned schema. Same shape as the unversioned reports
+    //       that preceded it, except "timestamp" is now an ISO-8601 UTC
+    //       string rather than a raw epoch integer.
+    static constexpr int kSchemaVersion = 1;
+
     explicit JsonReporter(const std::string& output_file = "")
         : output_file_(output_file) {}
     

@@ -178,7 +178,11 @@ int main(int argc, char** argv) {
             }
         }
         
-        std::cout << "Phase 2: Running ODBC tests...\n\n" << std::flush;
+        // G1: progress chatter goes to stderr, never stdout. stdout is the
+        // data channel — with `-o json` and no `-f`, the report is the only
+        // thing on it, so `odbc-crusher ... -o json | jq` works as the README
+        // documents. This line used to make that pipe unparseable.
+        std::cerr << "Phase 2: Running ODBC tests...\n\n" << std::flush;
         
         // Track overall statistics
         size_t total_tests = 0;

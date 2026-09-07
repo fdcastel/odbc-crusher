@@ -288,6 +288,20 @@ odbc-crusher "Driver={...}" -o json -f report.json
 
 The JSON includes driver information, type support, function support, all test results with status/duration/diagnostics, and a summary object.
 
+Progress output goes to **stderr**, so stdout carries nothing but the report and
+the pipe form works as written:
+
+```bash
+odbc-crusher "Driver={...}" -o json | jq '.summary'
+```
+
+The document is versioned:
+
+| Key | Type | Notes |
+|---|---|---|
+| `schema_version` | integer | Currently `1`. Bumped whenever an existing key changes meaning, is renamed or is removed; purely additive changes keep the number. Consumers should reject a version they do not know. |
+| `timestamp` | string | ISO-8601 UTC, e.g. `2026-09-07T13:28:29Z`. |
+
 ## Interpreting Results
 
 - **[PASS]** — The driver behaves correctly for this test.

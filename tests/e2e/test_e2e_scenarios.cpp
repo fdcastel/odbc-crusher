@@ -469,3 +469,80 @@ TEST_F(CrusherE2EFixture, SilentCorruptionNullAsEmptyTripsNullVsEmptyContrast) {
     EXPECT_EQ(t_num->value("status", std::string{}), "PASS")
         << "NullAsEmpty must not affect SQL_C_NUMERIC fetches.";
 }
+
+// ── Output contract: stdout is machine-readable, and the report is versioned ─
+//
+// G1: `odbc-crusher "..." -o json | jq '.summary'` is documented in README.md
+// and did not work — main.cpp wrote "Phase 2: Running ODBC tests..." to stdout
+// unconditionally, so the pipe fed a JSON parser a bare word. Progress chatter
+// now goes to stderr and stdout carries nothing but the report.
+//
+// G4: the report carries a schema_version so downstream consumers (the triage
+// skill, these tests, anything a driver project writes) can reject a shape they
+// do not understand, and an ISO-8601 timestamp instead of a raw epoch integer.
+
+TEST_F(CrusherE2EFixture, JsonToStdoutIsParseableWithNoProgressChatter) {
+    auto run = run_crusher_stdout(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched) << "Failed to launch crusher binary";
+    ASSERT_FALSE(run.raw_stdout.empty()) << "stderr: " << run.raw_stderr;
+
+    // The first non-whitespace byte on stdout must open the JSON document.
+    // Asserting on the parse alone would not catch chatter, because nlohmann
+    // would simply fail; asserting on the first byte says *why* it failed.
+    const auto first = run.raw_stdout.find_first_not_of(" \t\r\n");
+    ASSERT_NE(first, std::string::npos);
+    EXPECT_EQ(run.raw_stdout[first], '{')
+        << "stdout must contain only the JSON report. It begins with:\n"
+        << run.raw_stdout.substr(0, 200);
+
+    ASSERT_TRUE(run.report.is_object())
+        << "stdout did not parse as JSON.\nstderr: " << run.raw_stderr;
+    EXPECT_TRUE(run.report.contains("summary"));
+
+    // The progress line has to still exist — on the other stream.
+    EXPECT_NE(run.raw_stderr.find("Phase 2: Running ODBC tests"), std::string::npos)
+        << "Progress output should have moved to stderr, not disappeared.\n"
+           "stderr was:\n" << run.raw_stderr;
+}
+
+TEST_F(CrusherE2EFixture, ReportCarriesSchemaVersionAndIso8601Timestamp) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;");
+
+    ASSERT_TRUE(run.launched);
+    ASSERT_TRUE(run.report.contains("summary")) << "stderr: " << run.raw_stderr;
+
+    ASSERT_TRUE(run.report.contains("schema_version"))
+        << "The report must be self-describing (G4).";
+    ASSERT_TRUE(run.report["schema_version"].is_number_integer())
+        << "schema_version must be an integer, matching .github/drivers.json.";
+    EXPECT_EQ(run.report["schema_version"].get<int>(), 1);
+
+    ASSERT_TRUE(run.report.contains("timestamp"));
+    ASSERT_TRUE(run.report["timestamp"].is_string())
+        << "timestamp must be an ISO-8601 string, not a raw epoch integer (G4).";
+    const auto ts = run.report["timestamp"].get<std::string>();
+
+    // Shape check: YYYY-MM-DDThh:mm:ssZ. Deliberately hand-rolled rather than
+    // <regex> — this asserts the exact 20-character layout, and a regex that
+    // accepted a 19- or 21-character variant would let the contract drift.
+    ASSERT_EQ(ts.size(), 20u) << "timestamp was: " << ts;
+    for (size_t i = 0; i < ts.size(); ++i) {
+        const char c = ts[i];
+        if (i == 4 || i == 7) {
+            EXPECT_EQ(c, '-') << "at index " << i << " of " << ts;
+        } else if (i == 10) {
+            EXPECT_EQ(c, 'T') << "at index " << i << " of " << ts;
+        } else if (i == 13 || i == 16) {
+            EXPECT_EQ(c, ':') << "at index " << i << " of " << ts;
+        } else if (i == 19) {
+            EXPECT_EQ(c, 'Z') << "at index " << i << " of " << ts;
+        } else {
+            EXPECT_TRUE(c >= '0' && c <= '9') << "at index " << i << " of " << ts;
+        }
+    }
+}

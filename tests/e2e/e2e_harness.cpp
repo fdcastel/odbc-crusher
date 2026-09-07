@@ -56,6 +56,60 @@ fs::path unique_tmp_json() {
 
 } // namespace
 
+namespace {
+
+// Shell out to the binary, capturing stderr to a file and stdout either to
+// the null device (when the report goes to `-f`) or to a file (when it goes
+// to stdout). Returns the exit code.
+int spawn(const std::string& connection_string,
+          const fs::path& report_file,       // empty => report goes to stdout
+          const fs::path& stdout_log,        // empty => stdout to null device
+          const fs::path& stderr_log) {
+    std::string cmd = quote_arg(CRUSHER_BIN_PATH);
+    cmd += ' ';
+    cmd += quote_arg(connection_string);
+    cmd += " -o json";
+    if (!report_file.empty()) {
+        cmd += " -f ";
+        cmd += quote_arg(report_file.string());
+    }
+    if (stdout_log.empty()) {
+#ifdef _WIN32
+        cmd += " > NUL";
+#else
+        cmd += " > /dev/null";
+#endif
+    } else {
+        cmd += " > ";
+        cmd += quote_arg(stdout_log.string());
+    }
+    cmd += " 2> ";
+    cmd += quote_arg(stderr_log.string());
+
+    // Wrapping the whole command in quotes is required on Windows when
+    // both the program and an argument are quoted — cmd.exe strips the
+    // outermost pair before parsing.
+#ifdef _WIN32
+    std::string wrapped = "\"" + cmd + "\"";
+    return std::system(wrapped.c_str());
+#else
+    return std::system(cmd.c_str());
+#endif
+}
+
+std::string slurp_and_remove(const fs::path& p) {
+    std::error_code ec;
+    if (!fs::exists(p, ec)) return {};
+    std::ifstream in(p, std::ios::binary);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    in.close();
+    fs::remove(p, ec);
+    return ss.str();
+}
+
+}  // namespace
+
 CrusherRun run_crusher(const std::string& connection_string) {
     CrusherRun out;
 
@@ -67,41 +121,9 @@ CrusherRun run_crusher(const std::string& connection_string) {
     fs::remove(tmp, ec);
     fs::remove(stderr_log, ec);
 
-    // Build command. We capture stderr via shell redirection — stdout is
-    // a single "JSON report written to: …" line which we don't need.
-    std::string cmd = quote_arg(CRUSHER_BIN_PATH);
-    cmd += ' ';
-    cmd += quote_arg(connection_string);
-    cmd += " -o json -f ";
-    cmd += quote_arg(tmp.string());
-#ifdef _WIN32
-    cmd += " > NUL 2> ";
-#else
-    cmd += " > /dev/null 2> ";
-#endif
-    cmd += quote_arg(stderr_log.string());
-
-    // Wrapping the whole command in quotes is required on Windows when
-    // both the program and an argument are quoted — cmd.exe strips the
-    // outermost pair before parsing.
-#ifdef _WIN32
-    std::string wrapped = "\"" + cmd + "\"";
-    int rc = std::system(wrapped.c_str());
-#else
-    int rc = std::system(cmd.c_str());
-#endif
-
+    out.exit_code = spawn(connection_string, tmp, fs::path{}, stderr_log);
     out.launched = true;
-    out.exit_code = rc;
-
-    // Slurp stderr if present (best-effort).
-    if (fs::exists(stderr_log, ec)) {
-        std::ifstream in(stderr_log);
-        std::stringstream ss;
-        ss << in.rdbuf();
-        out.raw_stderr = ss.str();
-        fs::remove(stderr_log, ec);
-    }
+    out.raw_stderr = slurp_and_remove(stderr_log);
 
     if (fs::exists(tmp, ec)) {
         std::ifstream in(tmp);
@@ -111,7 +133,38 @@ CrusherRun run_crusher(const std::string& connection_string) {
             out.raw_stderr += "\n[harness] JSON parse error: ";
             out.raw_stderr += e.what();
         }
+        in.close();
         fs::remove(tmp, ec);
+    }
+
+    return out;
+}
+
+CrusherRun run_crusher_stdout(const std::string& connection_string) {
+    CrusherRun out;
+
+    auto base = unique_tmp_json();
+    auto stdout_log = base;
+    stdout_log.replace_extension(".stdout.log");
+    auto stderr_log = base;
+    stderr_log.replace_extension(".stderr.log");
+
+    std::error_code ec;
+    fs::remove(stdout_log, ec);
+    fs::remove(stderr_log, ec);
+
+    out.exit_code = spawn(connection_string, fs::path{}, stdout_log, stderr_log);
+    out.launched = true;
+    out.raw_stderr = slurp_and_remove(stderr_log);
+    out.raw_stdout = slurp_and_remove(stdout_log);
+
+    if (!out.raw_stdout.empty()) {
+        try {
+            out.report = nlohmann::json::parse(out.raw_stdout);
+        } catch (const std::exception& e) {
+            out.raw_stderr += "\n[harness] stdout JSON parse error: ";
+            out.raw_stderr += e.what();
+        }
     }
 
     return out;
