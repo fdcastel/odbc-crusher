@@ -79,37 +79,80 @@ jobs:
     - name: Build Mock Driver
       run: cmake --build mock-driver/build --config ${{ matrix.build_type }} -j 4
 
-    - name: Check mockodbc.def export drift
-      # .def is a Windows-only linker artifact, so the check only makes
-      # sense on Windows. Runs on Release only to avoid duplicating the
-      # work on Debug.
+    - name: Check mockodbc.def export drift (both directions)
+      # IMPROVEMENT_PLAN.md F11. The .def is a Windows-only linker artifact,
+      # but this check is pure text — it runs on Windows Release only to avoid
+      # doing the same work six times across the matrix.
+      #
+      # This used to check one direction only (.def -> source), which is
+      # exactly why the 38-symbol export asymmetry in D2 went unnoticed for
+      # the life of the project. It now asserts both, against an explicit
+      # list of symbols that are implemented but deliberately unexported.
       if: runner.os == 'Windows' && matrix.build_type == 'Release'
       shell: pwsh
       run: |
-        # Every name in EXPORTS must appear as `SQLRETURN SQL_API <name>(`
-        # somewhere under mock-driver/src/. This catches exports that were
-        # hand-added to the .def without a matching C++ implementation.
-        $defFile = "mock-driver/src/mockodbc.def"
+        $defFile     = "mock-driver/src/mockodbc.def"
+        $allowFile   = "mock-driver/src/mockodbc.not-exported.txt"
+
+        # Exports: every non-comment line inside the file that is a bare
+        # symbol name. The old pattern required exactly four leading spaces,
+        # so a reformatted .def would have quietly checked fewer symbols.
         $exports = Get-Content $defFile |
-            Where-Object { $_ -match '^\s{4}SQL[A-Za-z0-9]+\s*$' } |
-            ForEach-Object { $_.Trim() }
-        # Flatten all source files into one big string so a single regex
-        # hit anywhere is enough. Covers driver/ (SQLAllocHandle etc.) and
-        # odbc/ (the W-variant wrappers in unicode_wrappers.cpp).
-        $sources = (Get-ChildItem mock-driver/src -Filter *.cpp -Recurse |
-            Get-Content -Raw) -join "`n"
-        $missing = @()
-        foreach ($exp in $exports) {
-            $pattern = "SQLRETURN\s+SQL_API\s+" + [regex]::Escape($exp) + "\s*\("
-            if ($sources -notmatch $pattern) {
-                $missing += $exp
-            }
-        }
-        if ($missing.Count -gt 0) {
-            Write-Error "mockodbc.def exports are missing C++ implementations: $($missing -join ', ')"
+            ForEach-Object { ($_ -replace ';.*$', '').Trim() } |
+            Where-Object { $_ -match '^SQL[A-Za-z0-9]+$' } |
+            Sort-Object -Unique
+
+        if ($exports.Count -lt 50) {
+            Write-Error "Only $($exports.Count) exports parsed from $defFile — the extraction is broken, not the .def."
             exit 1
         }
-        Write-Host "All $($exports.Count) .def exports resolve to implementations."
+
+        # Symbols implemented (or forward-declared) under src/.
+        $sources = (Get-ChildItem mock-driver/src -Filter *.cpp -Recurse |
+            Get-Content -Raw) -join "`n"
+        $defined = [regex]::Matches($sources, 'SQLRETURN\s+SQL_API\s+([A-Za-z0-9_]+)\s*\(') |
+            ForEach-Object { $_.Groups[1].Value } |
+            Sort-Object -Unique
+
+        # Deliberately-unexported symbols.
+        $allowed = Get-Content $allowFile |
+            ForEach-Object { ($_ -replace '#.*$', '').Trim() } |
+            Where-Object { $_ -ne '' } |
+            Sort-Object -Unique
+
+        $failed = $false
+
+        # (1) .def -> source: an export with no implementation fails to link.
+        $missing = $exports | Where-Object { $defined -notcontains $_ }
+        if ($missing) {
+            Write-Output "::error::mockodbc.def exports with no implementation under src/: $($missing -join ', ')"
+            $failed = $true
+        }
+
+        # (2) source -> .def: an implemented entry point that is neither
+        # exported nor explicitly sanctioned as internal. This is the
+        # direction that was missing.
+        $unlisted = $defined | Where-Object { $exports -notcontains $_ -and $allowed -notcontains $_ }
+        if ($unlisted) {
+            Write-Output "::error::SQL_API symbols under src/ that are neither exported nor listed in $($allowFile): $($unlisted -join ', ')"
+            Write-Output "Add them to mockodbc.def if they are part of the driver's interface, or to $allowFile if they are not."
+            $failed = $true
+        }
+
+        # (3) the allow-list itself cannot go stale.
+        $both = $allowed | Where-Object { $exports -contains $_ }
+        if ($both) {
+            Write-Output "::error::listed as not-exported but present in mockodbc.def EXPORTS: $($both -join ', ')"
+            $failed = $true
+        }
+        $ghost = $allowed | Where-Object { $defined -notcontains $_ }
+        if ($ghost) {
+            Write-Output "::error::listed in $($allowFile) but no longer implemented under src/: $($ghost -join ', ')"
+            $failed = $true
+        }
+
+        if ($failed) { exit 1 }
+        Write-Host "Export surface consistent: $($exports.Count) exported, $($allowed.Count) deliberately internal, $($defined.Count) implemented."
 
     - name: Run Mock Driver Tests
       run: ctest --test-dir mock-driver/build -C ${{ matrix.build_type }} --output-on-failure

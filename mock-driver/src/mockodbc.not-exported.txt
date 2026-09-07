@@ -1,0 +1,75 @@
+# mock-driver - symbols implemented in src/ but deliberately NOT exported.
+#
+# IMPROVEMENT_PLAN.md F11. The CI drift check asserts three things:
+#
+#   1. every name in mockodbc.def EXPORTS is implemented under src/
+#   2. every SQL_API symbol under src/ is either exported or listed here
+#   3. no name is both exported and listed here, and every name here is
+#      still implemented (so the list cannot go stale silently)
+#
+# Before F11 only (1) was checked, which is why the 38 entries below went
+# unnoticed for the life of the project - see D2. They are the source of a
+# real defect: the Windows DLL hides them via this .def, but the Linux/macOS
+# .so has no visibility control and exports them all, so the two platforms
+# are structurally different drivers built from one tree. D2 fixes the .so
+# side. This file records what the *intended* surface is either way.
+#
+# Adding a name here is a decision, not a formality. If you are adding one
+# because CI complained, the question to answer first is whether the new
+# entry point should have been in the .def.
+#
+# Format: one symbol per line. '#' starts a comment; blank lines ignored.
+
+# -- ODBC 2.x aliases ---------------------------------------------------
+# Superseded by SQLAllocHandle / SQLFreeHandle / SQLGetStmtAttr /
+# SQLSetStmtAttr. The .def header states "No legacy ODBC 2.x aliases" as a
+# deliberate choice, mirroring the MySQL Unicode driver.
+SQLAllocConnect
+SQLAllocEnv
+SQLAllocStmt
+SQLFreeConnect
+SQLFreeEnv
+SQLGetStmtOption
+SQLSetStmtOption
+
+# -- ANSI entry points behind the W exports -----------------------------
+# This driver advertises itself as a Unicode driver: the DM sees SQLConnectW
+# and routes every string call through the W variants, which convert and then
+# delegate to these. They are the implementation, not the interface - the .def
+# header states "W variants ONLY for all string functions".
+#
+# SQLColAttribute, SQLGetDescField/Rec, SQLSetDescField, SQLGetStmtAttr,
+# SQLSetStmtAttr, SQLGetConnectAttr, SQLSetConnectAttr, SQLGetCursorName and
+# SQLSetCursorName appear here for the same reason: each has a W form in the
+# .def that delegates to it.
+SQLBrowseConnect
+SQLColAttribute
+SQLColumnPrivileges
+SQLColumns
+SQLConnect
+SQLDescribeCol
+SQLDriverConnect
+SQLExecDirect
+SQLForeignKeys
+SQLGetConnectAttr
+SQLGetCursorName
+SQLGetDescField
+SQLGetDescRec
+SQLGetDiagField
+SQLGetDiagRec
+SQLGetInfo
+SQLGetStmtAttr
+SQLGetTypeInfo
+SQLNativeSql
+SQLPrepare
+SQLPrimaryKeys
+SQLProcedureColumns
+SQLProcedures
+SQLSetConnectAttr
+SQLSetCursorName
+SQLSetDescField
+SQLSetStmtAttr
+SQLSpecialColumns
+SQLStatistics
+SQLTablePrivileges
+SQLTables
