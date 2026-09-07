@@ -58,7 +58,13 @@ TestResult SqlstateTests::test_execute_without_prepare() {
             if (rc == SQL_ERROR) {
                 std::string state = get_stmt_sqlstate(stmt.get_handle());
                 if (state == "HY010") {
-                    r.status = TestStatus::PASS;
+                    // A23: driver-manager enforced. Both the Windows DM and unixODBC
+                    // check the Appendix B state table before dispatching, so this
+                    // branch is reached whatever the driver does - it is a fact about
+                    // the stack, not about the driver under test. Reported, not scored
+                    // (B2). The failure branches below stay as they are: a wrong
+                    // SQLSTATE is still worth reporting, whoever produced it.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQL_ERROR with HY010 (Function sequence error)";
                 } else {
                     r.status = TestStatus::FAIL;
@@ -98,10 +104,17 @@ TestResult SqlstateTests::test_fetch_no_cursor() {
                 // stays a PASS — but the suggestion no longer tells a
                 // correct driver that it got it wrong.
                 if (state == "HY010") {
-                    r.status = TestStatus::PASS;
+                    // A23: driver-manager enforced. Both the Windows DM and unixODBC
+                    // check the Appendix B state table before dispatching, so this
+                    // branch is reached whatever the driver does - it is a fact about
+                    // the stack, not about the driver under test. Reported, not scored
+                    // (B2). The failure branches below stay as they are: a wrong
+                    // SQLSTATE is still worth reporting, whoever produced it.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQL_ERROR with HY010 (Function sequence error)";
                 } else if (state == "24000") {
-                    r.status = TestStatus::PASS;
+                    // A23 - see above.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQL_ERROR with 24000 (Invalid cursor state) - "
                                "tolerated alternative";
                     r.suggestion = "Appendix B gives HY010 for SQLFetch on a "
@@ -154,7 +167,13 @@ TestResult SqlstateTests::test_getdata_col0_no_bookmark() {
                     if (rc == SQL_ERROR) {
                         std::string state = get_stmt_sqlstate(stmt.get_handle());
                         if (state == "07009") {
-                            r.status = TestStatus::PASS;
+                            // A23: driver-manager enforced. Both the Windows DM and unixODBC
+                            // check the Appendix B state table before dispatching, so this
+                            // branch is reached whatever the driver does - it is a fact about
+                            // the stack, not about the driver under test. Reported, not scored
+                            // (B2). The failure branches below stay as they are: a wrong
+                            // SQLSTATE is still worth reporting, whoever produced it.
+                            r.status = TestStatus::INFORMATIONAL;
                             r.actual = "SQL_ERROR with 07009 (Invalid descriptor index) for column 0";
                         } else {
                             r.status = TestStatus::FAIL;
@@ -295,10 +314,17 @@ TestResult SqlstateTests::test_bindparam_invalid_ctype() {
             if (rc == SQL_ERROR) {
                 std::string state = get_stmt_sqlstate(stmt.get_handle());
                 if (state == "HY003") {
-                    r.status = TestStatus::PASS;
+                    // A23: driver-manager enforced. Both the Windows DM and unixODBC
+                    // check the Appendix B state table before dispatching, so this
+                    // branch is reached whatever the driver does - it is a fact about
+                    // the stack, not about the driver under test. Reported, not scored
+                    // (B2). The failure branches below stay as they are: a wrong
+                    // SQLSTATE is still worth reporting, whoever produced it.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQL_ERROR with HY003 (Invalid application buffer type)";
                 } else {
-                    r.status = TestStatus::PASS;
+                    // A23 - see above.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQL_ERROR with SQLSTATE=" + state + " for invalid C type";
                     r.suggestion = "ODBC spec requires HY003 for invalid application buffer type";
                 }
@@ -363,10 +389,17 @@ TestResult SqlstateTests::test_setconnattr_invalid_attr() {
             if (rc == SQL_ERROR) {
                 std::string state = get_conn_sqlstate(conn_.get_handle());
                 if (state == "HY092") {
-                    r.status = TestStatus::PASS;
+                    // A23: driver-manager enforced. Both the Windows DM and unixODBC
+                    // check the Appendix B state table before dispatching, so this
+                    // branch is reached whatever the driver does - it is a fact about
+                    // the stack, not about the driver under test. Reported, not scored
+                    // (B2). The failure branches below stay as they are: a wrong
+                    // SQLSTATE is still worth reporting, whoever produced it.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQL_ERROR with HY092 (Invalid attribute/option identifier)";
                 } else {
-                    r.status = TestStatus::PASS;
+                    // A23 - see above.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQL_ERROR with SQLSTATE=" + state + " for invalid attribute";
                     r.suggestion = "ODBC spec requires HY092 for invalid connection attribute";
                 }
@@ -393,7 +426,13 @@ TestResult SqlstateTests::test_closecursor_no_cursor() {
             if (rc == SQL_ERROR) {
                 std::string state = get_stmt_sqlstate(stmt.get_handle());
                 if (state == "24000") {
-                    r.status = TestStatus::PASS;
+                    // A23: driver-manager enforced. Both the Windows DM and unixODBC
+                    // check the Appendix B state table before dispatching, so this
+                    // branch is reached whatever the driver does - it is a fact about
+                    // the stack, not about the driver under test. Reported, not scored
+                    // (B2). The failure branches below stay as they are: a wrong
+                    // SQLSTATE is still worth reporting, whoever produced it.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQL_ERROR with 24000 (Invalid cursor state) - no cursor open";
                 } else {
                     r.status = TestStatus::FAIL;

@@ -201,7 +201,13 @@ TestResult ErrorQueueTests::test_error_clearing() {
                 );
 
                 if (diag_rc == SQL_NO_DATA) {
-                    r.status = TestStatus::PASS;
+                    // A23: driver-manager enforced. Both the Windows DM and unixODBC
+                    // check the Appendix B state table before dispatching, so this
+                    // branch is reached whatever the driver does - it is a fact about
+                    // the stack, not about the driver under test. Reported, not scored
+                    // (B2). The failure branches below stay as they are: a wrong
+                    // SQLSTATE is still worth reporting, whoever produced it.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "Error diagnostics cleared after successful operation";
                 } else if (SQL_SUCCEEDED(diag_rc)) {
                     // There might be info/warning from the successful op, check if it's the OLD error
@@ -212,7 +218,8 @@ TestResult ErrorQueueTests::test_error_clearing() {
                         r.severity = Severity::WARNING;
                         r.suggestion = "Per ODBC spec, diagnostics should be cleared when a new function is called on the same handle";
                     } else {
-                        r.status = TestStatus::PASS;
+                        // A23 - see above.
+                        r.status = TestStatus::INFORMATIONAL;
                         r.actual = "Previous error cleared; current SQLSTATE=" + state + " (likely info from new op)";
                     }
                 }

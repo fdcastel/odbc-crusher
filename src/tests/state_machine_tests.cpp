@@ -95,10 +95,17 @@ TestResult StateMachineTests::test_invalid_operation() {
                 std::string state(reinterpret_cast<char*>(sqlstate));
 
                 if (state == "HY010") {
-                    r.status = TestStatus::PASS;
+                    // A23: driver-manager enforced. Both the Windows DM and unixODBC
+                    // check the Appendix B state table before dispatching, so this
+                    // branch is reached whatever the driver does - it is a fact about
+                    // the stack, not about the driver under test. Reported, not scored
+                    // (B2). The failure branches below stay as they are: a wrong
+                    // SQLSTATE is still worth reporting, whoever produced it.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQLExecute correctly returned SQL_ERROR with HY010 (Function sequence error)";
                 } else {
-                    r.status = TestStatus::PASS;
+                    // A23 - see above.
+                    r.status = TestStatus::INFORMATIONAL;
                     r.actual = "SQLExecute correctly returned SQL_ERROR, SQLSTATE=" + state;
                     r.suggestion = "ODBC spec requires SQLSTATE HY010 for SQLExecute without SQLPrepare, got " + state;
                 }
@@ -108,7 +115,8 @@ TestResult StateMachineTests::test_invalid_operation() {
                 r.severity = Severity::ERR;
                 r.suggestion = "Driver must return SQL_ERROR/HY010 when SQLExecute is called without prior SQLPrepare";
             } else {
-                r.status = TestStatus::PASS;
+                // A23 - see above.
+                r.status = TestStatus::INFORMATIONAL;
                 r.actual = "SQLExecute rejected without SQLPrepare (rc=" + std::to_string(rc) + ")";
             }
         });

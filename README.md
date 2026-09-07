@@ -252,11 +252,15 @@ odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
 - **Scrollable cursors** (static cursors with SQL_FETCH_FIRST/LAST/PRIOR/ABSOLUTE/RELATIVE)
 - **Parameter binding** (SQLBindParameter with value substitution in literal SELECTs)
 
-Against `Mode=Success` the mock driver scores **186/186 scored probes (100%)**, with
-9 further probes reported as `INFORMATIONAL` — 195 results in total. Those 9 record
-what the driver answered where the spec leaves no right answer to grade (an optional
-attribute's value, a `SQLGetInfo` bitmask, the type `COUNT(*)` comes back as), so
-they are deliberately outside the pass rate rather than counted as free passes.
+Against `Mode=Success` the mock driver scores **178/178 scored probes (100%)**, with
+17 further probes reported as `INFORMATIONAL` — 195 results in total. Nine of those
+record what the driver answered where the spec leaves no right answer to grade (an
+optional attribute's value, a `SQLGetInfo` bitmask, the type `COUNT(*)` comes back
+as). The other eight are enforced by the **driver manager** rather than the driver:
+both the Windows DM and unixODBC check the ODBC state-transition table before
+dispatching a call, so those results describe the stack you are running on and not
+the driver you are testing. Neither group counts toward the pass rate — a guaranteed
+pass is not evidence about a driver.
 
 This number is a property of the reference driver, not a target: the point of the
 mock is that every probe which *can* fail does fail when the driver is misconfigured,
