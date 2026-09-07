@@ -1,5 +1,6 @@
 // Diagnostic API - SQLGetDiagRec, SQLGetDiagField
 
+#include "mock/behaviors.hpp"
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 #include "utils/string_utils.hpp"
@@ -45,6 +46,14 @@ SQLRETURN SQL_API SQLGetDiagRec(
     // the queue, not from locking it. Reading diagnostics_ while another
     // thread posts to the same handle is a data race on a std::vector.
     HandleLock lock(handle);
+    // D36: FailOn reaches the diagnostic readers too - A23 and the
+    // error-queue probes had no way to be proven wrong without it. No
+    // diagnostic is posted here: a reader that fails must not add to the
+    // queue it was asked to read.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetDiagRec")) return SQL_ERROR;
+    }
 
     const DiagnosticRecord* rec = handle->get_diagnostic(iRecord);
     if (!rec) {
@@ -107,6 +116,14 @@ SQLRETURN SQL_API SQLGetDiagField(
     // D22: same reasoning as SQLGetDiagRec - the header fields and the
     // record vector are read here and written by every other entry point.
     HandleLock lock(handle);
+    // D36: FailOn reaches the diagnostic readers too - A23 and the
+    // error-queue probes had no way to be proven wrong without it. No
+    // diagnostic is posted here: a reader that fails must not add to the
+    // queue it was asked to read.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetDiagField")) return SQL_ERROR;
+    }
 
     // Header fields (iRecord = 0)
     if (iRecord == 0) {

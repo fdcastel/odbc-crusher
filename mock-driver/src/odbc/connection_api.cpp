@@ -186,6 +186,16 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC hdbc) MOCK_ENTRY_TRY {
     if (!conn) return SQL_INVALID_HANDLE;
     
     conn->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLDisconnect")) {
+            conn->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLDisconnect failure");
+            return SQL_ERROR;
+        }
+    }
     
     if (!conn->connected_) {
         conn->add_diagnostic(sqlstate::CONNECTION_NOT_OPEN, 0,
@@ -321,6 +331,16 @@ SQLRETURN SQL_API SQLSetConnectAttr(
     HandleLock lock(conn);
     
     conn->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLSetConnectAttr")) {
+            conn->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLSetConnectAttr failure");
+            return SQL_ERROR;
+        }
+    }
     
     // ODBC encodes integer attribute values inside SQLPOINTER on the
     // wire (per Driver Manager convention). On 64-bit Linux GCC treats

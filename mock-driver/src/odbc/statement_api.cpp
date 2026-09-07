@@ -1578,6 +1578,16 @@ SQLRETURN SQL_API SQLNumResultCols(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLNumResultCols")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLNumResultCols failure");
+            return SQL_ERROR;
+        }
+    }
 
     if (pccol) {
         *pccol = stmt->num_result_cols_;
@@ -1602,6 +1612,16 @@ SQLRETURN SQL_API SQLDescribeCol(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLDescribeCol")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLDescribeCol failure");
+            return SQL_ERROR;
+        }
+    }
 
     if (icol < 1 || icol > static_cast<SQLUSMALLINT>(stmt->column_names_.size())) {
         stmt->add_diagnostic(sqlstate::INVALID_PARAMETER_NUMBER, 0,
@@ -1666,6 +1686,16 @@ SQLRETURN SQL_API SQLBindCol(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLBindCol")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLBindCol failure");
+            return SQL_ERROR;
+        }
+    }
 
     if (icol == 0) {
         // Unbind bookmark column - not supported
@@ -1708,6 +1738,16 @@ SQLRETURN SQL_API SQLBindParameter(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLBindParameter")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLBindParameter failure");
+            return SQL_ERROR;
+        }
+    }
 
     if (ipar == 0) {
         stmt->add_diagnostic(sqlstate::INVALID_PARAMETER_NUMBER, 0,
@@ -1773,6 +1813,16 @@ SQLRETURN SQL_API SQLRowCount(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLRowCount")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLRowCount failure");
+            return SQL_ERROR;
+        }
+    }
 
     // D14: SQLRowCount on a statement that has not been executed is a
     // function sequence error. This used to answer 0, which an application
@@ -1796,6 +1846,16 @@ SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLCloseCursor")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLCloseCursor failure");
+            return SQL_ERROR;
+        }
+    }
 
     if (!stmt->cursor_open_) {
         stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,
@@ -1816,6 +1876,16 @@ SQLRETURN SQL_API SQLMoreResults(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLMoreResults")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLMoreResults failure");
+            return SQL_ERROR;
+        }
+    }
 
     // Mock driver doesn't support multiple result sets
     return SQL_NO_DATA;
@@ -1837,6 +1907,16 @@ SQLRETURN SQL_API SQLGetStmtAttr(
     }
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetStmtAttr")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLGetStmtAttr failure");
+            return SQL_ERROR;
+        }
+    }
 
     switch (fAttribute) {
         case SQL_ATTR_CURSOR_TYPE: {
@@ -1979,6 +2059,16 @@ SQLRETURN SQL_API SQLSetStmtAttr(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLSetStmtAttr")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLSetStmtAttr failure");
+            return SQL_ERROR;
+        }
+    }
 
     SQLULEN value = reinterpret_cast<SQLULEN>(rgbValue);
     
@@ -2188,6 +2278,16 @@ SQLRETURN SQL_API SQLNumParams(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLNumParams")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLNumParams failure");
+            return SQL_ERROR;
+        }
+    }
 
     // D14: this counted every `?` in the statement text, including ones
     // inside string literals - `SELECT '?' FROM t WHERE a = ?` reported two
@@ -2212,6 +2312,16 @@ SQLRETURN SQL_API SQLDescribeParam(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLDescribeParam")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLDescribeParam failure");
+            return SQL_ERROR;
+        }
+    }
 
     if (!stmt->prepared_) {
         stmt->add_diagnostic(sqlstate::FUNCTION_SEQUENCE_ERROR, 0,

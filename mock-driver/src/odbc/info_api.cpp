@@ -244,6 +244,16 @@ SQLRETURN SQL_API SQLGetInfo(
     HandleLock lock(conn);
     
     conn->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetInfo")) {
+            conn->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLGetInfo failure");
+            return SQL_ERROR;
+        }
+    }
     
     const auto& config = BehaviorController::instance().config();
     
@@ -733,6 +743,16 @@ SQLRETURN SQL_API SQLGetFunctions(
     HandleLock lock(conn);
     
     conn->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetFunctions")) {
+            conn->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLGetFunctions failure");
+            return SQL_ERROR;
+        }
+    }
     
     // List of supported functions — must exactly match .def exports
     static const SQLUSMALLINT supported_functions[] = {
@@ -850,8 +870,21 @@ SQLRETURN SQL_API SQLNativeSql(
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLNativeSql")) {
+            conn->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLNativeSql failure");
+            return SQL_ERROR;
+        }
+    }
 
-    std::string sql = sql_to_string(szSqlStrIn, static_cast<SQLSMALLINT>(cbSqlStrIn));
+    // D14's truncation, at a site that row did not name: `cbSqlStrIn` is an
+    // SQLINTEGER and the cast made a statement of 32 KB or more wrap
+    // negative, so SQLNativeSql answered an empty string for a long one.
+    std::string sql = sql_to_string(szSqlStrIn, cbSqlStrIn);
 
     // PORT plan port 4 canary — when NativeSqlPassThrough=true, return the
     // input verbatim. Mimics drivers that accept SQLNativeSql calls and

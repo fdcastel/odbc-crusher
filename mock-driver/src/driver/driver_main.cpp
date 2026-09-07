@@ -322,6 +322,21 @@ SQLRETURN SQL_API SQLSetCursorName(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    //
+    // Measured on Windows: this guard *is* reached and *does* return
+    // SQL_ERROR, and the application still sees SQL_SUCCESS - the driver
+    // manager maintains cursor names itself and does not surface the
+    // driver's refusal. The guard is kept for unixODBC, which forwards.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLSetCursorName")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLSetCursorName failure");
+            return SQL_ERROR;
+        }
+    }
 
     // D29: the name was discarded, so set-then-get could not round-trip.
     stmt->cursor_name_ = sql_to_string(szCursor, cbCursor);
@@ -379,6 +394,26 @@ SQLRETURN SQL_API SQLFetchScroll(
     HandleLock lock(stmt);
     
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLFetchScroll")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLFetchScroll failure");
+            return SQL_ERROR;
+        }
+    }
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetCursorName")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLGetCursorName failure");
+            return SQL_ERROR;
+        }
+    }
     
     if (!stmt->executed_) {
         stmt->add_diagnostic(sqlstate::INVALID_CURSOR_STATE, 0,

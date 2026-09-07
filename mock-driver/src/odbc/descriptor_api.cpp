@@ -1,5 +1,6 @@
 // Descriptor API - SQLGetDescField, SQLSetDescField, etc.
 
+#include "mock/behaviors.hpp"
 #include "driver/handles.hpp"
 #include "utils/buffer_copy.hpp"
 #include "driver/diagnostics.hpp"
@@ -23,6 +24,16 @@ SQLRETURN SQL_API SQLGetDescField(
     if (!desc) return SQL_INVALID_HANDLE;
     HandleLock lock(desc);
     desc->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetDescField")) {
+            desc->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLGetDescField failure");
+            return SQL_ERROR;
+        }
+    }
 
     (void)iRecord;
     (void)cbValueMax;
@@ -114,6 +125,16 @@ SQLRETURN SQL_API SQLSetDescField(
     if (!desc) return SQL_INVALID_HANDLE;
     HandleLock lock(desc);
     desc->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLSetDescField")) {
+            desc->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLSetDescField failure");
+            return SQL_ERROR;
+        }
+    }
 
     (void)cbValue;
 
@@ -217,6 +238,16 @@ SQLRETURN SQL_API SQLGetDescRec(
     if (!desc) return SQL_INVALID_HANDLE;
     HandleLock lock(desc);
     desc->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLGetDescRec")) {
+            desc->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLGetDescRec failure");
+            return SQL_ERROR;
+        }
+    }
 
     if (iRecord < 1 || iRecord > static_cast<SQLSMALLINT>(desc->records_.size())) {
         return SQL_NO_DATA;
@@ -263,6 +294,16 @@ SQLRETURN SQL_API SQLSetDescRec(
     if (!desc) return SQL_INVALID_HANDLE;
     HandleLock lock(desc);
     desc->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLSetDescRec")) {
+            desc->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLSetDescRec failure");
+            return SQL_ERROR;
+        }
+    }
 
     // Expand records if needed
     while (static_cast<SQLSMALLINT>(desc->records_.size()) < iRecord) {
@@ -316,6 +357,16 @@ SQLRETURN SQL_API SQLColAttribute(
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
     stmt->clear_diagnostics();
+    // D36: fault injection reached 18 of the mock's 65 entry points, so most
+    // probes had no configuration that could make them fail.
+    {
+        const auto& fi_config = BehaviorController::instance().config();
+        if (fi_config.should_fail("SQLColAttribute")) {
+            stmt->add_diagnostic(fi_config.error_code, 0,
+                                "Simulated SQLColAttribute failure");
+            return SQL_ERROR;
+        }
+    }
 
     if (iCol < 1 || iCol > static_cast<SQLUSMALLINT>(stmt->column_names_.size())) {
         stmt->add_diagnostic(sqlstate::INVALID_PARAMETER_NUMBER, 0,
