@@ -1190,6 +1190,87 @@ SQLRETURN SQL_API SQLGetData(
             }
             if (rgbValue) *static_cast<SQL_TIMESTAMP_STRUCT*>(rgbValue) = tss;
             if (pcbValue) *pcbValue = sizeof(SQL_TIMESTAMP_STRUCT);
+        } else if (effective_type == SQL_C_SLONG || effective_type == SQL_C_LONG ||
+                   effective_type == SQL_C_SBIGINT || effective_type == SQL_C_SSHORT ||
+                   effective_type == SQL_C_SHORT || effective_type == SQL_C_STINYINT ||
+                   effective_type == SQL_C_DOUBLE || effective_type == SQL_C_FLOAT) {
+            // Found by A21 in Phase 2: a character cell requested as a numeric
+            // C type used to fall into the ANSI branch below, which memcpy'd
+            // the raw bytes into the caller's 4-byte SQLINTEGER — SELECT '123'
+            // read back as 3355185 (0x333231, the ASCII digits). SQL_CHAR to
+            // SQL_C_SLONG is a *required Core* conversion, so this is the mock
+            // silently corrupting data on a path the spec makes mandatory.
+            //
+            // Narrow fix for the integer and floating targets; the wider
+            // C-type gaps in this switch remain D11's, and unifying the four
+            // independent C-type switches remains D18's.
+            const std::string trimmed = [&] {
+                auto b = value.find_first_not_of(" 	");
+                auto e = value.find_last_not_of(" 	");
+                return (b == std::string::npos) ? std::string()
+                                                : value.substr(b, e - b + 1);
+            }();
+
+            bool ok = false;
+            double dbl = 0.0;
+            long long ival = 0;
+            try {
+                size_t consumed = 0;
+                if (effective_type == SQL_C_DOUBLE || effective_type == SQL_C_FLOAT) {
+                    dbl = std::stod(trimmed, &consumed);
+                    ok = consumed == trimmed.size() && !trimmed.empty();
+                } else {
+                    ival = std::stoll(trimmed, &consumed);
+                    ok = consumed == trimmed.size() && !trimmed.empty();
+                }
+            } catch (...) {
+                ok = false;
+            }
+
+            if (!ok) {
+                // 22018 is what the spec requires for a character value that
+                // cannot be cast to the requested type — not a wrong number.
+                stmt->add_diagnostic(sqlstate::INVALID_CHARACTER_VALUE, 0,
+                                     "Invalid character value for cast specification");
+                return SQL_ERROR;
+            }
+
+            if (rgbValue) {
+                switch (effective_type) {
+                    case SQL_C_SLONG:
+                    case SQL_C_LONG:
+                        *static_cast<SQLINTEGER*>(rgbValue) =
+                            static_cast<SQLINTEGER>(ival);
+                        if (pcbValue) *pcbValue = sizeof(SQLINTEGER);
+                        break;
+                    case SQL_C_SBIGINT:
+                        *static_cast<SQLBIGINT*>(rgbValue) =
+                            static_cast<SQLBIGINT>(ival);
+                        if (pcbValue) *pcbValue = sizeof(SQLBIGINT);
+                        break;
+                    case SQL_C_SSHORT:
+                    case SQL_C_SHORT:
+                        *static_cast<SQLSMALLINT*>(rgbValue) =
+                            static_cast<SQLSMALLINT>(ival);
+                        if (pcbValue) *pcbValue = sizeof(SQLSMALLINT);
+                        break;
+                    case SQL_C_STINYINT:
+                        *static_cast<SQLSCHAR*>(rgbValue) =
+                            static_cast<SQLSCHAR>(ival);
+                        if (pcbValue) *pcbValue = sizeof(SQLSCHAR);
+                        break;
+                    case SQL_C_DOUBLE:
+                        *static_cast<SQLDOUBLE*>(rgbValue) = dbl;
+                        if (pcbValue) *pcbValue = sizeof(SQLDOUBLE);
+                        break;
+                    case SQL_C_FLOAT:
+                        *static_cast<SQLREAL*>(rgbValue) = static_cast<SQLREAL>(dbl);
+                        if (pcbValue) *pcbValue = sizeof(SQLREAL);
+                        break;
+                    default:
+                        break;
+                }
+            }
         } else {
             // SQL_C_CHAR or default — return ANSI
             if (rgbValue && cbValueMax > 0) {
@@ -1634,12 +1715,30 @@ SQLRETURN SQL_API SQLSetStmtAttr(
             stmt->async_enable_ = value;
             break;
             
-        // Array parameter attributes
+        // Array parameter attributes.
+        //
+        // SupportsArrayBind=false also declines these two, extended in Phase 2
+        // for A8: a driver with no array-parameter execution has no use for a
+        // per-row status array or a processed-row counter, and real ones do
+        // reject them. Without this there was no configuration in which a
+        // driver declines an optional Level 1 attribute, so A8's SKIP branch
+        // — the one that stops a correct driver being FAILed at Core — could
+        // not be exercised.
         case SQL_ATTR_PARAM_STATUS_PTR:
+            if (!BehaviorController::instance().config().supports_array_bind) {
+                stmt->add_diagnostic("HYC00", 0,
+                    "Optional feature not implemented: SQL_ATTR_PARAM_STATUS_PTR");
+                return SQL_ERROR;
+            }
             stmt->param_status_ptr_ = static_cast<SQLUSMALLINT*>(rgbValue);
             break;
             
         case SQL_ATTR_PARAMS_PROCESSED_PTR:
+            if (!BehaviorController::instance().config().supports_array_bind) {
+                stmt->add_diagnostic("HYC00", 0,
+                    "Optional feature not implemented: SQL_ATTR_PARAMS_PROCESSED_PTR");
+                return SQL_ERROR;
+            }
             stmt->params_processed_ptr_ = static_cast<SQLULEN*>(rgbValue);
             break;
             

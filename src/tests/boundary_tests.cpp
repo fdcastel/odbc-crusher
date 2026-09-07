@@ -5,6 +5,25 @@
 
 namespace odbc_crusher::tests {
 
+namespace {
+
+// First SQLSTATE on a handle, or "" when the driver posted nothing.
+//
+// Deliberately a local copy: **C5** (Phase 3) extracts the six-plus variants of
+// this shape across the tree into one helper and **B3** builds
+// classify_failure() on top of it. Phase 2 is localized probe fixes with no
+// refactor, so this is a stand-in that C5 deletes.
+std::string first_sqlstate(SQLSMALLINT handle_type, SQLHANDLE handle) {
+    try {
+        auto err = core::OdbcError::from_handle(handle_type, handle, "");
+        if (!err.diagnostics().empty()) return err.diagnostics()[0].sqlstate;
+    } catch (...) {
+    }
+    return "";
+}
+
+}  // namespace
+
 std::vector<TestResult> BoundaryTests::run() {
     return {
         test_getinfo_zero_buffer(),
@@ -247,12 +266,35 @@ TestResult BoundaryTests::test_describecol_col0() {
                             &data_type, &col_size, &decimal_digits, &nullable
                         );
 
+                        // A21: both branches used to PASS — SQL_ERROR without
+                        // reading the state, and plain SQL_SUCCESS. The spec is
+                        // specific: with SQL_ATTR_USE_BOOKMARKS at its default
+                        // SQL_UB_OFF, ColumnNumber 0 is 07009 (invalid
+                        // descriptor index), not "some error" and certainly not
+                        // success.
                         if (rc == SQL_ERROR) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "SQL_ERROR for column 0 (no bookmarks enabled)";
+                            const std::string state =
+                                first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
+                            if (state == "07009") {
+                                r.status = TestStatus::PASS;
+                                r.actual = "07009 for column 0 with bookmarks off";
+                            } else {
+                                r.status = TestStatus::FAIL;
+                                r.actual = "Column 0 rejected with " +
+                                           (state.empty() ? std::string("no SQLSTATE")
+                                                          : state) +
+                                           "; the spec requires 07009";
+                                r.severity = Severity::WARNING;
+                            }
                         } else if (SQL_SUCCEEDED(rc)) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "Driver returned bookmark column info for column 0";
+                            r.status = TestStatus::FAIL;
+                            r.actual = "Column 0 described successfully even though "
+                                       "SQL_ATTR_USE_BOOKMARKS is SQL_UB_OFF";
+                            r.severity = Severity::WARNING;
+                            r.suggestion =
+                                "Column 0 is the bookmark column. With bookmarks "
+                                "disabled, SQLDescribeCol must return SQL_ERROR "
+                                "with SQLSTATE 07009.";
                         }
 
                         success = true;

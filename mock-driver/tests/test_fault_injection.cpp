@@ -178,3 +178,105 @@ TEST_F(FaultInjectionTest, OtherCorruptionModesLeaveNumericsAlone) {
     ASSERT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
     EXPECT_EQ(value, 42);
 }
+
+// ── Conversions and diagnostics found by Phase 2 probes ────────────────────
+//
+// Both of these are mock defects that the A21 probe fixes exposed: the probes
+// had been passing unconditionally, so nothing had ever looked.
+
+// SQL_CHAR -> SQL_C_SLONG is a *required Core* conversion. The mock used to
+// fall through to its "return ANSI" branch and memcpy the raw digits into the
+// caller's 4-byte SQLINTEGER: SELECT '123' read back as 3355185, which is
+// 0x333231 — the ASCII bytes '1','2','3' little-endian.
+TEST_F(FaultInjectionTest, CharacterCellConvertsToSignedLong) {
+    Connect("");
+    ASSERT_EQ(SQLExecDirect(hstmt,
+              reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT '123'")),
+              SQL_NTS), SQL_SUCCESS);
+    ASSERT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
+
+    SQLINTEGER value = 0;
+    SQLLEN ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_SLONG, &value,
+                                         sizeof(value), &ind)));
+    EXPECT_EQ(value, 123);
+    EXPECT_EQ(ind, static_cast<SQLLEN>(sizeof(SQLINTEGER)));
+}
+
+TEST_F(FaultInjectionTest, CharacterCellConvertsToDouble) {
+    Connect("");
+    ASSERT_EQ(SQLExecDirect(hstmt,
+              reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT '2.5'")),
+              SQL_NTS), SQL_SUCCESS);
+    ASSERT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
+
+    SQLDOUBLE value = 0.0;
+    SQLLEN ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_DOUBLE, &value,
+                                         sizeof(value), &ind)));
+    EXPECT_DOUBLE_EQ(value, 2.5);
+}
+
+// A value that genuinely cannot be cast must be an error with 22018 — not a
+// wrong number, which is what silently reinterpreting the bytes produced.
+TEST_F(FaultInjectionTest, UnconvertibleCharacterCellReports22018) {
+    Connect("");
+    ASSERT_EQ(SQLExecDirect(hstmt,
+              reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT 'abc'")),
+              SQL_NTS), SQL_SUCCESS);
+    ASSERT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
+
+    SQLINTEGER value = 0;
+    SQLLEN ind = 0;
+    EXPECT_EQ(SQLGetData(hstmt, 1, SQL_C_SLONG, &value, sizeof(value), &ind),
+              SQL_ERROR);
+
+    SQLCHAR state[6] = {0};
+    SQLSMALLINT msg_len = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetDiagRec(SQL_HANDLE_STMT, hstmt, 1, state,
+                                            nullptr, nullptr, 0, &msg_len)));
+    EXPECT_STREQ(reinterpret_cast<const char*>(state), "22018");
+}
+
+// Truncating a SQLGetInfo string used to return SQL_SUCCESS_WITH_INFO with an
+// empty diagnostic stack, so an application could not tell truncation from any
+// other warning. This is the SQLGetInfo corner of D24.
+TEST_F(FaultInjectionTest, TruncatedGetInfoPosts01004) {
+    Connect("");
+    char tiny[4] = {0};
+    SQLSMALLINT len = 0;
+    SQLRETURN ret = SQLGetInfo(hdbc, SQL_DRIVER_NAME, tiny, sizeof(tiny), &len);
+    ASSERT_EQ(ret, SQL_SUCCESS_WITH_INFO) << "the value is longer than 4 bytes";
+    EXPECT_GT(len, static_cast<SQLSMALLINT>(sizeof(tiny)))
+        << "the reported length is the total available, not what fit";
+
+    SQLCHAR state[6] = {0};
+    SQLSMALLINT msg_len = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetDiagRec(SQL_HANDLE_DBC, hdbc, 1, state,
+                                            nullptr, nullptr, 0, &msg_len)))
+        << "truncation must leave a diagnostic behind";
+    EXPECT_STREQ(reinterpret_cast<const char*>(state), "01004");
+}
+
+// SupportsArrayBind=false must decline the two array-parameter output pointers
+// as well as PARAMSET_SIZE > 1 — a driver with no array execution has no use
+// for a per-row status array. This is what lets A8's SKIP branch be exercised.
+TEST_F(FaultInjectionTest, SupportsArrayBindFalseDeclinesTheOutputPointers) {
+    Connect("SupportsArrayBind=false;");
+    SQLUSMALLINT status = 0xFFFF;
+    SQLULEN processed = 0;
+    EXPECT_EQ(SQLSetStmtAttr(hstmt, SQL_ATTR_PARAM_STATUS_PTR, &status, 0),
+              SQL_ERROR);
+    EXPECT_EQ(SQLSetStmtAttr(hstmt, SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0),
+              SQL_ERROR);
+}
+
+TEST_F(FaultInjectionTest, ArrayOutputPointersAreAcceptedByDefault) {
+    Connect("");
+    SQLUSMALLINT status = 0xFFFF;
+    SQLULEN processed = 0;
+    EXPECT_EQ(SQLSetStmtAttr(hstmt, SQL_ATTR_PARAM_STATUS_PTR, &status, 0),
+              SQL_SUCCESS);
+    EXPECT_EQ(SQLSetStmtAttr(hstmt, SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0),
+              SQL_SUCCESS);
+}

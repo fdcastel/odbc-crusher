@@ -145,12 +145,23 @@ namespace {
 //
 // Strict (the default) is unchanged, so no existing caller is affected.
 SQLRETURN info_return_string(const DriverConfig& config,
+                             ConnectionHandle* conn,
                              const std::string& value,
                              SQLCHAR* target,
                              SQLSMALLINT buffer_length,
                              SQLSMALLINT* string_length) {
     const SQLRETURN ret = copy_string_to_buffer(value, target, buffer_length,
                                                 string_length);
+
+    // Found by A21 in Phase 2: copy_string_to_buffer returns
+    // SQL_SUCCESS_WITH_INFO on truncation but posts no diagnostic, so an
+    // application saw a bare warning with nothing to explain it and could not
+    // tell truncation from any other condition. This is the SQLGetInfo corner
+    // of D24, which does the same centrally for the other five callers.
+    if (ret == SQL_SUCCESS_WITH_INFO && conn) {
+        conn->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                             "String data, right truncated");
+    }
     if (config.buffer_validation != DriverConfig::BufferValidationMode::Lenient ||
         !target || buffer_length <= 0) {
         return ret;
@@ -184,7 +195,8 @@ SQLRETURN SQL_API SQLGetInfo(
     const auto& config = BehaviorController::instance().config();
     
     #define RETURN_STRING(s) \
-        return info_return_string(config, s, static_cast<SQLCHAR*>(rgbInfoValue), \
+        return info_return_string(config, conn, s, \
+                                  static_cast<SQLCHAR*>(rgbInfoValue), \
                                   cbInfoValueMax, pcbInfoValue)
     
     #define RETURN_USHORT(v) \

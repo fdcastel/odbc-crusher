@@ -50,6 +50,9 @@ namespace sqlstate {
     constexpr const char* INDICATOR_REQUIRED = "22002";
     constexpr const char* NUMERIC_VALUE_OUT_OF_RANGE = "22003";
     constexpr const char* STRING_DATA_TRUNCATED = "22001";
+    // A character value that cannot be cast to the requested C type. The spec
+    // requires this rather than a wrong number.
+    constexpr const char* INVALID_CHARACTER_VALUE = "22018";
     constexpr const char* INTEGRITY_CONSTRAINT_VIOLATION = "23000";
     constexpr const char* NO_DATA = "02000";
 }

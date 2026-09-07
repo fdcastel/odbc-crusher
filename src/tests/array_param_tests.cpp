@@ -869,11 +869,20 @@ TestResult ArrayParamTests::test_paramset_size_one() {
             return;
         }
         
-        // Set up status/processed pointers
+        // Set up status/processed pointers.
+        //
+        // A8: both return codes used to be discarded, and the assertions below
+        // then FAILed on the sentinel values a driver leaves behind when it
+        // declines the attribute — processed stays 0, status stays 0xFFFF. Both
+        // attributes are optional Level 1, so that was a guaranteed FAIL at
+        // Core for a perfectly correct driver. The sibling probe 90 lines up
+        // checks the same return code and SKIPs; the two disagreed.
         SQLUSMALLINT status = 0xFFFF;
         SQLULEN processed = 0;
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, &status, 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0);
+        const bool status_ptr_ok = SQL_SUCCEEDED(SQLSetStmtAttr(
+            stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, &status, 0));
+        const bool processed_ptr_ok = SQL_SUCCEEDED(SQLSetStmtAttr(
+            stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0));
         
         // Bind single parameter
         SQLINTEGER id_val = 999;
@@ -885,18 +894,29 @@ TestResult ArrayParamTests::test_paramset_size_one() {
         SQLRETURN exec_ret = SQLExecute(stmt.get_handle());
         
         std::ostringstream actual;
-        actual << "Execute returned " << exec_ret
-               << "; processed=" << processed
-               << "; status=" << status;
+        actual << "Execute returned " << exec_ret;
+        if (processed_ptr_ok) actual << "; processed=" << processed;
+        else                  actual << "; PARAMS_PROCESSED_PTR not supported";
+        if (status_ptr_ok)    actual << "; status=" << status;
+        else                  actual << "; PARAM_STATUS_PTR not supported";
         r.actual = actual.str();
         
         if (!SQL_SUCCEEDED(exec_ret)) {
             r.status = TestStatus::FAIL;
             r.suggestion = "PARAMSET_SIZE=1 should execute normally";
-        } else if (processed != 1) {
+        } else if (!processed_ptr_ok && !status_ptr_ok) {
+            // A8: nothing to verify. Execute worked, which is the part that is
+            // required at Core; the outputs this probe exists to inspect are
+            // both optional and both declined.
+            r.status = TestStatus::SKIP_UNSUPPORTED;
+            r.actual = "Execute succeeded, but the driver accepts neither "
+                       "SQL_ATTR_PARAMS_PROCESSED_PTR nor SQL_ATTR_PARAM_STATUS_PTR";
+            r.suggestion = "Both are optional Level 1 attributes; there is "
+                           "nothing to check when a driver declines them.";
+        } else if (processed_ptr_ok && processed != 1) {
             r.status = TestStatus::FAIL;
             r.suggestion = "With PARAMSET_SIZE=1, params_processed should be 1";
-        } else if (status != SQL_PARAM_SUCCESS) {
+        } else if (status_ptr_ok && status != SQL_PARAM_SUCCESS) {
             r.status = TestStatus::FAIL;
             r.suggestion = "With PARAMSET_SIZE=1 and successful execution, status should be SQL_PARAM_SUCCESS";
         }

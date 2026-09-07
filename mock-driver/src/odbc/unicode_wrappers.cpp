@@ -441,6 +441,16 @@ MOCK_ENTRY_TRY {
                     static_cast<SQLINTEGER>(cbInfoValueMax),
                     pcbInfoValue);
 
+        // Found by A21 in Phase 2: the ANSI SQLGetInfo call above cleared the
+        // connection's diagnostics on entry, and copy_string_to_wbuffer posts
+        // nothing, so a truncating SQLGetInfoW returned SQL_SUCCESS_WITH_INFO
+        // with an empty diagnostic stack — an application could not tell
+        // truncation from any other warning. See D24 for the general case.
+        if (str_ret == SQL_SUCCESS_WITH_INFO) {
+            conn->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                 "String data, right truncated");
+        }
+
         // D33: BufferValidation=Lenient drops the terminator here too. The
         // .def exports only SQLGetInfoW, so on Windows this is the path the
         // Driver Manager actually takes and the ANSI one is unreachable from

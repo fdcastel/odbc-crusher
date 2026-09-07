@@ -209,14 +209,30 @@ TestResult DataTypeEdgeCaseTests::test_varchar_empty() {
                                                      buffer, sizeof(buffer), &indicator);
 
                             if (SQL_SUCCEEDED(rc)) {
-                                if (indicator == 0 || std::strlen(buffer) == 0) {
+                                // A21: this used to accept SQL_NULL_DATA as an
+                                // empty string, because `std::strlen(buffer)==0`
+                                // is true for the untouched zero-initialised
+                                // buffer a NULL fetch leaves behind. That is the
+                                // exact NULL-vs-empty conflation the sibling
+                                // test_null_vs_empty_distinction_varchar FAILs.
+                                if (indicator == SQL_NULL_DATA) {
+                                    r.status = TestStatus::FAIL;
+                                    r.actual = "SELECT '' reported SQL_NULL_DATA; "
+                                               "an empty string is not NULL";
+                                    r.severity = Severity::ERR;
+                                    r.suggestion =
+                                        "The empty string and NULL are distinct values. "
+                                        "A driver conflating them corrupts every "
+                                        "nullable character column.";
+                                } else if (indicator == 0 && buffer[0] == '\0') {
                                     r.status = TestStatus::PASS;
-                                    r.actual = "Empty string retrieved correctly (length=" +
-                                                   std::to_string(indicator) + ")";
+                                    r.actual = "Empty string retrieved correctly (length=0)";
                                 } else {
                                     r.status = TestStatus::FAIL;
-                                    r.actual = "Expected empty string, got '" + std::string(buffer) + "'";
-                                    r.severity = Severity::WARNING;
+                                    r.actual = "Expected empty string, got '" +
+                                               std::string(buffer) + "' (indicator=" +
+                                               std::to_string(indicator) + ")";
+                                    r.severity = Severity::ERR;
                                 }
                                 success = true;
                                 break;
@@ -248,10 +264,18 @@ TestResult DataTypeEdgeCaseTests::test_varchar_special_chars() {
             try {
                 core::OdbcStatement stmt(conn_);
 
-                // Test with a string containing special characters
+                // A21: the literal used to be 'a''b\"c\d'. The trailing
+                // backslash is dialect-dependent — MySQL and ClickHouse treat
+                // it as an escape introducer unless NO_BACKSLASH_ESCAPES is
+                // set, so a correct driver there returns a different string
+                // and the probe was asserting a MySQL bug into existence. The
+                // two remaining specials, a doubled single quote and a double
+                // quote, are portable across every engine in the matrix.
+                const std::string expected = "a'b" + std::string(1, '\"') + "c";
+
                 std::vector<std::string> queries = {
-                    "SELECT 'a''b\"c\\d'",
-                    "SELECT 'a''b\"c\\d' FROM RDB$DATABASE"
+                    "SELECT 'a''b\"c'",
+                    "SELECT 'a''b\"c' FROM RDB$DATABASE"
                 };
                 bool success = false;
 
@@ -265,10 +289,27 @@ TestResult DataTypeEdgeCaseTests::test_varchar_special_chars() {
                                                      buffer, sizeof(buffer), &indicator);
 
                             if (SQL_SUCCEEDED(rc)) {
-                                std::string val(buffer);
-                                r.status = TestStatus::PASS;
-                                r.actual = "Special chars retrieved: '" + val +
-                                               "' (length=" + std::to_string(indicator) + ")";
+                                // A21: the value was retrieved and never
+                                // compared, so the probe passed whatever came
+                                // back — including nothing at all.
+                                const auto got = bounded_string(buffer, sizeof(buffer),
+                                                                indicator);
+                                if (got.value == expected) {
+                                    r.status = TestStatus::PASS;
+                                    r.actual = "Special chars round-tripped: '" +
+                                               got.value + "'";
+                                } else {
+                                    r.status = TestStatus::FAIL;
+                                    r.actual = "Expected '" + expected + "', got '" +
+                                               got.value + "' (indicator=" +
+                                               std::to_string(indicator) + ")";
+                                    r.severity = Severity::ERR;
+                                    r.suggestion =
+                                        "A doubled single quote is the SQL standard "
+                                        "escape and a double quote is an ordinary "
+                                        "character inside a string literal; both must "
+                                        "survive a round trip unchanged.";
+                                }
                                 success = true;
                                 break;
                             }
@@ -481,12 +522,28 @@ TestResult DataTypeEdgeCaseTests::test_string_as_integer() {
                                                      &value, sizeof(value), &indicator);
 
                             if (SQL_SUCCEEDED(rc)) {
-                                if (value == 123) {
+                                // A21: both branches used to set PASS, so a
+                                // driver returning 0 for '123' — the classic
+                                // "atoi gave up" result — passed. SQL_CHAR to
+                                // SQL_C_SLONG is a required Core conversion.
+                                if (value == 123 && indicator != SQL_NULL_DATA) {
                                     r.status = TestStatus::PASS;
                                     r.actual = "String '123' converted to integer 123";
+                                } else if (indicator == SQL_NULL_DATA) {
+                                    r.status = TestStatus::FAIL;
+                                    r.actual = "String->integer conversion reported "
+                                               "SQL_NULL_DATA for the literal '123'";
+                                    r.severity = Severity::ERR;
                                 } else {
-                                    r.status = TestStatus::PASS;
-                                    r.actual = "String->integer conversion returned " + std::to_string(value);
+                                    r.status = TestStatus::FAIL;
+                                    r.actual = "String->integer conversion returned " +
+                                               std::to_string(value) + " (expected 123)";
+                                    r.severity = Severity::ERR;
+                                    r.suggestion =
+                                        "SQL_CHAR to SQL_C_SLONG is a required Core "
+                                        "conversion; a driver that cannot perform it "
+                                        "must return SQL_ERROR with 07006, not a "
+                                        "wrong value.";
                                 }
                                 success = true;
                                 break;

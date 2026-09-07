@@ -629,3 +629,33 @@ TEST_F(CrusherE2EFixture, FetchBoundVsGetDataProbeCatchesADisagreement) {
     EXPECT_EQ(t->value("severity", std::string{}), "CRITICAL")
         << "two delivery paths disagreeing is data corruption, not a warning";
 }
+
+// A8 — test_paramset_size_one ignored both SQLSetStmtAttr return codes and
+// then FAILed on the sentinel values a driver leaves behind when it declines
+// the attribute: processed stays 0, status stays 0xFFFF. Both attributes are
+// optional Level 1, so that was a guaranteed FAIL at Core for a correct
+// driver. Verified before the fix: with the pointers declined the old code
+// reported `FAIL: Execute returned 0; processed=0; status=65535`.
+TEST_F(CrusherE2EFixture, ParamsetSizeOneSkipsRatherThanFailsWhenAttrsDeclined) {
+    auto ok = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    auto baseline = find_test(ok.report, "Array Parameter Tests",
+                              "test_paramset_size_one");
+    ASSERT_TRUE(baseline.has_value());
+    EXPECT_EQ(baseline->value("status", std::string{}), "PASS")
+        << "a driver that supports the attributes must still be checked";
+
+    // SupportsArrayBind=false declines SQL_ATTR_PARAM_STATUS_PTR and
+    // SQL_ATTR_PARAMS_PROCESSED_PTR — a driver with no array-parameter
+    // execution has no use for either.
+    auto declined = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
+        "SupportsArrayBind=false;");
+    ASSERT_TRUE(declined.report.contains("summary")) << declined.raw_stderr;
+    auto t = find_test(declined.report, "Array Parameter Tests",
+                       "test_paramset_size_one");
+    ASSERT_TRUE(t.has_value());
+    EXPECT_EQ(t->value("status", std::string{}), "SKIP_UNSUPPORTED")
+        << "declining an optional Level 1 attribute is not a Core failure";
+}

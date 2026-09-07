@@ -16,6 +16,25 @@
 
 namespace odbc_crusher::tests {
 
+namespace {
+
+// First SQLSTATE on a handle, or "" when the driver posted nothing.
+//
+// Deliberately a local copy: **C5** (Phase 3) extracts the six-plus variants of
+// this shape across the tree into one helper and **B3** builds
+// classify_failure() on top of it. Phase 2 is localized probe fixes with no
+// refactor, so this is a stand-in that C5 deletes.
+std::string first_sqlstate(SQLSMALLINT handle_type, SQLHANDLE handle) {
+    try {
+        auto err = core::OdbcError::from_handle(handle_type, handle, "");
+        if (!err.diagnostics().empty()) return err.diagnostics()[0].sqlstate;
+    } catch (...) {
+    }
+    return "";
+}
+
+}  // namespace
+
 std::vector<TestResult> UnicodeTests::run() {
     return {
         test_getinfo_wchar_strings(),
@@ -402,14 +421,28 @@ TestResult UnicodeTests::test_string_truncation_wchar() {
                                         tiny_buf.data(), tiny_byte_len, &needed_len);
 
             if (ret == SQL_SUCCESS_WITH_INFO) {
-                // Check that needed_len reports the full string length in bytes
+                // A21: both `expected` and `actual` claim this checks for
+                // 01004, and it only ever checked that *some* warning came
+                // back. Any unrelated 01000 satisfied it.
+                const std::string state =
+                    first_sqlstate(SQL_HANDLE_DBC, conn_.get_handle());
+
                 std::ostringstream actual;
-                actual << "Truncation detected: 01004, needed " << needed_len
+                actual << "Truncation returned " << (state.empty() ? "no SQLSTATE" : state)
+                       << ", needed " << needed_len
                        << " bytes, buffer was " << tiny_byte_len
                        << " bytes (full=" << full_byte_len << ")";
                 r.actual = actual.str();
 
-                if (needed_len <= 0) {
+                if (state != "01004") {
+                    r.status = TestStatus::FAIL;
+                    r.suggestion =
+                        "Truncating a string output must post SQLSTATE 01004 "
+                        "(String data, right-truncated). A bare "
+                        "SQL_SUCCESS_WITH_INFO with some other state leaves the "
+                        "application unable to tell truncation from any other "
+                        "warning.";
+                } else if (needed_len <= 0) {
                     r.status = TestStatus::FAIL;
                     r.suggestion = "pcbInfoValue should report total bytes needed (excl NUL) even on truncation";
                 } else if (needed_len < tiny_byte_len) {
