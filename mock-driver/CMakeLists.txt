@@ -156,6 +156,9 @@ add_executable(mock-odbc-tests
     tests/test_getinfo_paths.cpp
     tests/test_array_corruption.cpp
     tests/test_fault_injection_reach.cpp
+    tests/test_catalog_shapes.cpp
+    tests/test_unicode_wrappers.cpp
+    tests/test_cursor_and_data.cpp
     tests/test_literal_select.cpp
     tests/test_buffer_copy.cpp
     tests/test_c_types.cpp

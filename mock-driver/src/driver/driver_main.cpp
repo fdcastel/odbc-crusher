@@ -603,10 +603,20 @@ SQLRETURN SQL_API SQLParamData(
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
     (void)prgbValue;
-    
-    // Mock: no data-at-execution parameters
-    return SQL_SUCCESS;
+
+    // D50: this answered SQL_SUCCESS unconditionally. SQLParamData is only
+    // meaningful inside a data-at-execution sequence - one begun by an
+    // SQLExecute that returned SQL_NEED_DATA - and the mock has no such
+    // parameters, so there is never a sequence in progress. Reporting success
+    // told an application its data-at-execution round trip had completed when
+    // nothing had happened at all; HY010 is what "not now" is spelled as.
+    stmt->add_diagnostic(sqlstate::FUNCTION_SEQUENCE_ERROR, 0,
+                         "SQLParamData called with no data-at-execution "
+                         "parameter outstanding");
+    return SQL_ERROR;
 }
 MOCK_ENTRY_CATCH(hstmt)
 
@@ -618,11 +628,17 @@ SQLRETURN SQL_API SQLPutData(
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
     (void)rgbValue;
     (void)cbValue;
-    
-    // Mock: accept but don't use
-    return SQL_SUCCESS;
+
+    // D50: same as SQLParamData above - accepting the data and discarding it
+    // told an application its value had been sent.
+    stmt->add_diagnostic(sqlstate::FUNCTION_SEQUENCE_ERROR, 0,
+                         "SQLPutData called outside a data-at-execution "
+                         "sequence");
+    return SQL_ERROR;
 }
 MOCK_ENTRY_CATCH(hstmt)
 
