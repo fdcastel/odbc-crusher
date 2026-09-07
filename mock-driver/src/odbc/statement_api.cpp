@@ -7,6 +7,7 @@
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
 #include "utils/buffer_copy.hpp"
+#include "utils/c_types.hpp"
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -808,98 +809,50 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
             continue;
         }
         
-        // Convert and copy data based on target type
-        if (std::holds_alternative<long long>(cell)) {
+        // D11/D18: one delivery path for every numeric C type.
+        //
+        // This used to be two switches that between them handled SQL_C_SLONG,
+        // SQL_C_SBIGINT, SQL_C_SSHORT, SQL_C_DOUBLE and SQL_C_FLOAT, with
+        // everything else falling through to `default:` and being written as
+        // an **ANSI decimal string**. An application binding a column as
+        // SQL_C_ULONG, SQL_C_UBIGINT, SQL_C_UTINYINT, SQL_C_BIT or
+        // SQL_C_WCHAR got the characters of the number laid over its buffer
+        // and an indicator claiming a string length - SQL_SUCCESS returned,
+        // garbage delivered. write_numeric_as knows every C type in the
+        // table, so a type added there is handled here without an edit.
+        const bool is_float_cell = std::holds_alternative<double>(cell);
+        if (is_float_cell || std::holds_alternative<long long>(cell)) {
             // D34
-            long long value = apply_numeric_skew(std::get<long long>(cell),
-                                                 FetchPath::BoundColumn);
-            
-            switch (binding.target_type) {
-                case SQL_C_SLONG:
-                case SQL_C_LONG:
-                    if (binding.target_value) {
-                        *static_cast<SQLINTEGER*>(binding.target_value) = 
-                            static_cast<SQLINTEGER>(value);
-                    }
-                    if (binding.str_len_or_ind) {
-                        *binding.str_len_or_ind = sizeof(SQLINTEGER);
-                    }
-                    break;
-                    
-                case SQL_C_SBIGINT:
-                    if (binding.target_value) {
-                        *static_cast<SQLBIGINT*>(binding.target_value) = value;
-                    }
-                    if (binding.str_len_or_ind) {
-                        *binding.str_len_or_ind = sizeof(SQLBIGINT);
-                    }
-                    break;
-                    
-                case SQL_C_SSHORT:
-                    if (binding.target_value) {
-                        *static_cast<SQLSMALLINT*>(binding.target_value) = 
-                            static_cast<SQLSMALLINT>(value);
-                    }
-                    if (binding.str_len_or_ind) {
-                        *binding.str_len_or_ind = sizeof(SQLSMALLINT);
-                    }
-                    break;
-                    
-                case SQL_C_CHAR:
-                default: {
-                    std::string str = std::to_string(value);
-                    if (binding.target_value && binding.buffer_length > 0) {
-                        size_t copy_len = std::min(str.length(), 
-                                                   static_cast<size_t>(binding.buffer_length - 1));
-                        std::memcpy(binding.target_value, str.c_str(), copy_len);
-                        static_cast<char*>(binding.target_value)[copy_len] = '\0';
-                    }
-                    if (binding.str_len_or_ind) {
-                        *binding.str_len_or_ind = static_cast<SQLLEN>(str.length());
-                    }
-                    break;
-                }
+            const long long ival = is_float_cell
+                ? 0
+                : apply_numeric_skew(std::get<long long>(cell),
+                                     FetchPath::BoundColumn);
+            const double dval = is_float_cell
+                ? apply_numeric_skew(std::get<double>(cell),
+                                     FetchPath::BoundColumn)
+                : 0.0;
+
+            const SQLRETURN wrote = write_numeric_as(
+                binding.target_type, ival, dval, is_float_cell,
+                binding.target_value, binding.buffer_length,
+                binding.str_len_or_ind);
+
+            if (wrote == SQL_ERROR) {
+                // A numeric cell requested as a date, an interval or an
+                // unknown C type. 07006 is the spec's answer for a
+                // conversion it does not define, and it is a great deal more
+                // useful than silently writing digits.
+                stmt->add_diagnostic(sqlstate::DATA_TYPE_ATTRIBUTE_VIOLATION, 0,
+                                     "Restricted data type attribute "
+                                     "violation for column " +
+                                     std::to_string(col_num));
+                return SQL_ERROR;
             }
-        } else if (std::holds_alternative<double>(cell)) {
-            // D34
-            double value = apply_numeric_skew(std::get<double>(cell),
-                                              FetchPath::BoundColumn);
-            
-            switch (binding.target_type) {
-                case SQL_C_DOUBLE:
-                    if (binding.target_value) {
-                        *static_cast<SQLDOUBLE*>(binding.target_value) = value;
-                    }
-                    if (binding.str_len_or_ind) {
-                        *binding.str_len_or_ind = sizeof(SQLDOUBLE);
-                    }
-                    break;
-                    
-                case SQL_C_FLOAT:
-                    if (binding.target_value) {
-                        *static_cast<SQLREAL*>(binding.target_value) = 
-                            static_cast<SQLREAL>(value);
-                    }
-                    if (binding.str_len_or_ind) {
-                        *binding.str_len_or_ind = sizeof(SQLREAL);
-                    }
-                    break;
-                    
-                case SQL_C_CHAR:
-                default: {
-                    std::string str = std::to_string(value);
-                    if (binding.target_value && binding.buffer_length > 0) {
-                        size_t copy_len = std::min(str.length(),
-                                                   static_cast<size_t>(binding.buffer_length - 1));
-                        std::memcpy(binding.target_value, str.c_str(), copy_len);
-                        static_cast<char*>(binding.target_value)[copy_len] = '\0';
-                    }
-                    if (binding.str_len_or_ind) {
-                        *binding.str_len_or_ind = static_cast<SQLLEN>(str.length());
-                    }
-                    break;
-                }
+            if (wrote == SQL_SUCCESS_WITH_INFO) {
+                stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                     "String data, right truncated");
             }
+        
         } else if (std::holds_alternative<std::string>(cell)) {
             const std::string& value = std::get<std::string>(cell);
             

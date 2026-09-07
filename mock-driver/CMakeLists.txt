@@ -74,6 +74,7 @@ set(MOCK_DRIVER_CORE_SOURCES
     src/odbc/unicode_wrappers.cpp
     src/utils/string_utils.cpp
     src/utils/buffer_copy.cpp
+    src/utils/c_types.cpp
 )
 
 # Driver shared library
@@ -146,6 +147,7 @@ add_executable(mock-odbc-tests
     tests/test_dml.cpp
     tests/test_literal_select.cpp
     tests/test_buffer_copy.cpp
+    tests/test_c_types.cpp
     ${MOCK_DRIVER_CORE_SOURCES}
 )
 

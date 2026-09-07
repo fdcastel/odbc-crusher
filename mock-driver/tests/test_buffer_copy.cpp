@@ -9,6 +9,9 @@
 #include "utils/buffer_copy.hpp"
 #include "utils/string_utils.hpp"
 
+// GCC does not pull these in transitively the way MSVC does.
+#include <cstring>
+
 #include <string>
 #include <vector>
 
