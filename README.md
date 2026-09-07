@@ -301,6 +301,7 @@ The document is versioned:
 |---|---|---|
 | `schema_version` | integer | Currently `1`. Bumped whenever an existing key changes meaning, is renamed or is removed; purely additive changes keep the number. Consumers should reject a version they do not know. |
 | `timestamp` | string | ISO-8601 UTC, e.g. `2026-09-07T13:28:29Z`. |
+| `complete` | boolean | `false` in a report written while the run was still going. With `-f`, the report is snapshotted to the file as categories finish, so a run that is killed (CI caps it at 570s) still leaves a valid document holding everything that completed. Always check this before treating a summary as authoritative — a partial report has `categories` but no `summary`. |
 
 ## Interpreting Results
 

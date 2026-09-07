@@ -23,6 +23,22 @@ std::string trim(const std::string& s) {
     return s.substr(start, end - start + 1);
 }
 
+// Clamp an integer knob parsed from the connection string - D9.
+//
+// Every one of these values comes straight from a caller-supplied string and
+// is used as a loop bound or an allocation size. `ResultSetSize=-1` reached
+// `std::vector::reserve()`, where the int converts to SIZE_MAX and throws
+// std::length_error; `ResultSetSize=500000000` threw std::bad_alloc. Neither
+// had a handler between the throw and odbc32.dll. entry_guard.hpp now stops
+// such a throw taking the host process down; clamping here stops it being
+// thrown at all, which is the better outcome - an out-of-range knob is a typo
+// in a test's connection string, not a condition worth failing the call over.
+int clamp_int(int value, int lo, int hi) {
+    if (value < lo) return lo;
+    if (value > hi) return hi;
+    return value;
+}
+
 } // anonymous namespace
 
 bool DriverConfig::should_fail(const std::string& function_name) const {
@@ -158,8 +174,11 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     // Types
     config.types = get_string_value(pairs, "types", "AllTypes");
     
-    // Result set size
-    config.result_set_size = get_int_value(pairs, "resultsetsize", 100);
+    // Result set size. The upper bound is deliberately generous but finite:
+    // a million generated rows is far past any plausible test and still well
+    // inside what the process can allocate.
+    config.result_set_size =
+        clamp_int(get_int_value(pairs, "resultsetsize", 100), 0, 1000000);
     
     // FailOn - comma-separated list of functions
     std::string fail_on_str = get_string_value(pairs, "failon", "");
@@ -191,14 +210,19 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         }
     }
     
-    // Max connections
-    config.max_connections = get_int_value(pairs, "maxconnections", 0);
+    // Max connections (0 = unlimited). Capped at the SQLUSMALLINT range,
+    // because that is what SQLGetInfo(SQL_MAX_DRIVER_CONNECTIONS) can report.
+    config.max_connections =
+        clamp_int(get_int_value(pairs, "maxconnections", 0), 0, 0xFFFF);
     
     // Transaction mode
     config.transaction_mode = get_string_value(pairs, "transactionmode", "Autocommit");
     
     // Failure probability
-    config.failure_probability = get_int_value(pairs, "failureprobability", 50);
+    // A percentage; anything outside 0-100 would make Mode=Random either
+    // never fail or always fail, silently.
+    config.failure_probability =
+        clamp_int(get_int_value(pairs, "failureprobability", 50), 0, 100);
     
     // Phase 10.1: Buffer validation mode
     std::string buffer_val_str = to_lower(get_string_value(pairs, "buffervalidation", "strict"));
@@ -247,7 +271,8 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     config.procedures_broken_inout = (procs_str == "brokeninout");
 
     // PORT plan port 6 — array-bind misbehavior knobs.
-    config.array_bind_row_fails_at = get_int_value(pairs, "arraybindrowfailsat", 0);
+    config.array_bind_row_fails_at =
+        clamp_int(get_int_value(pairs, "arraybindrowfailsat", 0), 0, 1000000);
     std::string supports_str =
         to_lower(get_string_value(pairs, "supportsarraybind", "true"));
     config.supports_array_bind = (supports_str != "false" && supports_str != "no");

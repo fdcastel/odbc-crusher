@@ -59,6 +59,7 @@ set(MOCK_DRIVER_CORE_SOURCES
     src/driver/descriptor.cpp
     src/driver/diagnostics.cpp
     src/driver/config.cpp
+    src/driver/entry_guard.cpp
     src/mock/mock_catalog.cpp
     src/mock/mock_types.cpp
     src/mock/mock_data.cpp
@@ -133,6 +134,7 @@ add_executable(mock-odbc-tests
     tests/test_main.cpp
     tests/test_handles.cpp
     tests/test_connection.cpp
+    tests/test_entry_guard.cpp
     tests/test_config.cpp
     tests/test_gettypeinfo.cpp
     tests/test_error_injection.cpp

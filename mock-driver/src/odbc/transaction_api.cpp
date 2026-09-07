@@ -4,6 +4,7 @@
 #include "driver/diagnostics.hpp"
 #include "mock/behaviors.hpp"
 #include "mock/mock_catalog.hpp"
+#include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
 
@@ -12,7 +13,7 @@ extern "C" {
 SQLRETURN SQL_API SQLEndTran(
     SQLSMALLINT fHandleType,
     SQLHANDLE hHandle,
-    SQLSMALLINT fType) {
+    SQLSMALLINT fType) MOCK_ENTRY_TRY {
     
     const auto& config = BehaviorController::instance().config();
     if (config.should_fail("SQLEndTran")) {
@@ -76,5 +77,6 @@ SQLRETURN SQL_API SQLEndTran(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hHandle)
 
 } // extern "C"

@@ -5,6 +5,7 @@
 #include "discovery/type_info.hpp"
 #include "discovery/function_info.hpp"
 #include <nlohmann/json.hpp>
+#include <chrono>
 #include <fstream>
 
 namespace odbc_crusher::reporting {
@@ -37,9 +38,38 @@ public:
     void report_end() override;
     
 private:
+    // F2: write the report as it stands to output_file_, atomically.
+    //
+    // CI wraps crusher in `timeout --kill-after=30 570`, and the report used
+    // to be serialised only in report_end(), so a run that hung produced no
+    // JSON at all — precisely when the report matters most. (The text run
+    // survives because it is piped through tee.) A snapshot after every
+    // category means a SIGKILL leaves a valid document containing everything
+    // that completed. Chose this over the per-category watchdog the task also
+    // offered: a watchdog inside the process cannot survive SIGKILL, and
+    // interrupting a wedged SQLExecute would need SQLCancel from a second
+    // thread — which a hang-prone driver is exactly the one not to honour.
+    //
+    // No-op when writing to stdout: there the document is emitted once, and
+    // partial copies would break the single-document contract G1 established.
+    void write_snapshot(bool complete);
+
+    // Snapshot after a category, subject to a rate limit. Always writes the
+    // first one, so a report exists from early on; after that at most one per
+    // kSnapshotInterval. Rewriting the whole ~100 KB document after each of 23
+    // categories cost ~150 ms per run and took the e2e suite from 5.6s to 10s,
+    // for no benefit: CI kills crusher at 570 seconds, so a snapshot that is
+    // up to a second stale is exactly as useful as one that is current.
+    void maybe_write_snapshot();
+
+    static constexpr std::chrono::seconds kSnapshotInterval{1};
+
     std::string output_file_;
     nlohmann::json root_;
     nlohmann::json categories_;
+    bool write_failed_ = false;   // Report a bad output path once, not 23 times
+    bool wrote_snapshot_ = false;
+    std::chrono::steady_clock::time_point last_snapshot_{};
 };
 
 } // namespace odbc_crusher::reporting

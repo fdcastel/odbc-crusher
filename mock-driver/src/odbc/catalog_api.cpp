@@ -5,6 +5,7 @@
 #include "mock/mock_catalog.hpp"
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
+#include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
 
@@ -36,7 +37,7 @@ SQLRETURN SQL_API SQLTables(
     SQLCHAR* szTableName,
     SQLSMALLINT cbTableName,
     SQLCHAR* szTableType,
-    SQLSMALLINT cbTableType) {
+    SQLSMALLINT cbTableType) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -93,6 +94,7 @@ SQLRETURN SQL_API SQLTables(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLColumns(
     SQLHSTMT hstmt,
@@ -103,7 +105,7 @@ SQLRETURN SQL_API SQLColumns(
     SQLCHAR* szTableName,
     SQLSMALLINT cbTableName,
     SQLCHAR* szColumnName,
-    SQLSMALLINT cbColumnName) {
+    SQLSMALLINT cbColumnName) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -196,6 +198,7 @@ SQLRETURN SQL_API SQLColumns(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLPrimaryKeys(
     SQLHSTMT hstmt,
@@ -204,7 +207,7 @@ SQLRETURN SQL_API SQLPrimaryKeys(
     SQLCHAR* szSchemaName,
     SQLSMALLINT cbSchemaName,
     SQLCHAR* szTableName,
-    SQLSMALLINT cbTableName) {
+    SQLSMALLINT cbTableName) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -249,6 +252,7 @@ SQLRETURN SQL_API SQLPrimaryKeys(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLForeignKeys(
     SQLHSTMT hstmt,
@@ -263,7 +267,7 @@ SQLRETURN SQL_API SQLForeignKeys(
     SQLCHAR* szFkSchemaName,
     SQLSMALLINT cbFkSchemaName,
     SQLCHAR* szFkTableName,
-    SQLSMALLINT cbFkTableName) {
+    SQLSMALLINT cbFkTableName) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -343,6 +347,7 @@ SQLRETURN SQL_API SQLForeignKeys(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLStatistics(
     SQLHSTMT hstmt,
@@ -353,7 +358,7 @@ SQLRETURN SQL_API SQLStatistics(
     SQLCHAR* szTableName,
     SQLSMALLINT cbTableName,
     SQLUSMALLINT fUnique,
-    SQLUSMALLINT fAccuracy) {
+    SQLUSMALLINT fAccuracy) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -415,6 +420,7 @@ SQLRETURN SQL_API SQLStatistics(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLSpecialColumns(
     SQLHSTMT hstmt,
@@ -426,7 +432,7 @@ SQLRETURN SQL_API SQLSpecialColumns(
     SQLCHAR* szTableName,
     SQLSMALLINT cbTableName,
     SQLUSMALLINT fScope,
-    SQLUSMALLINT fNullable) {
+    SQLUSMALLINT fNullable) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -480,6 +486,7 @@ SQLRETURN SQL_API SQLSpecialColumns(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLProcedures(
     SQLHSTMT hstmt,
@@ -488,7 +495,7 @@ SQLRETURN SQL_API SQLProcedures(
     SQLCHAR* szSchemaName,
     SQLSMALLINT cbSchemaName,
     SQLCHAR* szProcName,
-    SQLSMALLINT cbProcName) {
+    SQLSMALLINT cbProcName) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -546,6 +553,7 @@ SQLRETURN SQL_API SQLProcedures(
 
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLProcedureColumns(
     SQLHSTMT hstmt,
@@ -556,7 +564,7 @@ SQLRETURN SQL_API SQLProcedureColumns(
     SQLCHAR* szProcName,
     SQLSMALLINT cbProcName,
     SQLCHAR* szColumnName,
-    SQLSMALLINT cbColumnName) {
+    SQLSMALLINT cbColumnName) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -623,6 +631,7 @@ SQLRETURN SQL_API SQLProcedureColumns(
 
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLTablePrivileges(
     SQLHSTMT hstmt,
@@ -631,7 +640,7 @@ SQLRETURN SQL_API SQLTablePrivileges(
     SQLCHAR* szSchemaName,
     SQLSMALLINT cbSchemaName,
     SQLCHAR* szTableName,
-    SQLSMALLINT cbTableName) {
+    SQLSMALLINT cbTableName) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -660,6 +669,7 @@ SQLRETURN SQL_API SQLTablePrivileges(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLColumnPrivileges(
     SQLHSTMT hstmt,
@@ -670,7 +680,7 @@ SQLRETURN SQL_API SQLColumnPrivileges(
     SQLCHAR* szTableName,
     SQLSMALLINT cbTableName,
     SQLCHAR* szColumnName,
-    SQLSMALLINT cbColumnName) {
+    SQLSMALLINT cbColumnName) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -701,5 +711,6 @@ SQLRETURN SQL_API SQLColumnPrivileges(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 } // extern "C"

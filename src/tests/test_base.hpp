@@ -6,6 +6,8 @@
 #include <vector>
 #include <chrono>
 #include <optional>
+#include <stdexcept>
+#include <typeinfo>
 
 namespace odbc_crusher::tests {
 
@@ -134,6 +136,39 @@ protected:
                 // when the caller deliberately chose those.
                 result.severity = Severity::ERR;
             }
+        } catch (const std::exception& e) {
+            // A9. Anything that is not an OdbcError used to unwind out of
+            // the category, through crash_guard (which deliberately lets C++
+            // exceptions past), to main's `return 3` — discarding all 195
+            // results and, with `-o json -f`, writing no file at all, because
+            // the report is only serialised in report_end(). One std::bad_alloc
+            // in probe #4 lost the other 191. Worse, the crash guard reported
+            // it as a *driver* crash. AGENTS.md says this tool never crashes.
+            //
+            // A non-OdbcError escaping a probe is a bug in the probe or an
+            // exhausted resource, not a driver verdict, so it is always ERR
+            // regardless of the caller's on_odbc_error choice.
+            result.status = TestStatus::ERR;
+            result.actual = std::string("Unhandled ") + typeid(e).name() +
+                            ": " + e.what();
+            result.diagnostic =
+                "The probe threw a non-ODBC exception. This is a defect in "
+                "odbc-crusher (or an exhausted system resource), not a finding "
+                "about the driver under test.";
+            if (severity > Severity::ERR) result.severity = Severity::ERR;
+        } catch (...) {
+            // Non-std exception types cannot carry a message, but they must
+            // not be allowed to destroy the run either. This does not — and
+            // must not — catch SEH faults on MSVC: those are the crash
+            // guard's job, and an access violation inside the driver is a
+            // genuine driver finding.
+            result.status = TestStatus::ERR;
+            result.actual = "Unhandled non-std::exception thrown by the probe";
+            result.diagnostic =
+                "The probe threw an object not derived from std::exception. "
+                "This is a defect in odbc-crusher, not a finding about the "
+                "driver under test.";
+            if (severity > Severity::ERR) result.severity = Severity::ERR;
         }
         auto end = std::chrono::high_resolution_clock::now();
         result.duration =

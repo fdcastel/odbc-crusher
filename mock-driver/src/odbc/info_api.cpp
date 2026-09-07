@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <regex>
+#include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
 
@@ -140,7 +141,7 @@ SQLRETURN SQL_API SQLGetInfo(
     SQLUSMALLINT fInfoType,
     SQLPOINTER rgbInfoValue,
     SQLSMALLINT cbInfoValueMax,
-    SQLSMALLINT* pcbInfoValue) {
+    SQLSMALLINT* pcbInfoValue) MOCK_ENTRY_TRY {
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
@@ -500,10 +501,11 @@ SQLRETURN SQL_API SQLGetInfo(
     #undef RETURN_USHORT
     #undef RETURN_ULONG
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLGetTypeInfo(
     SQLHSTMT hstmt,
-    SQLSMALLINT fSqlType) {
+    SQLSMALLINT fSqlType) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -583,11 +585,12 @@ SQLRETURN SQL_API SQLGetTypeInfo(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLGetFunctions(
     SQLHDBC hdbc,
     SQLUSMALLINT fFunction,
-    SQLUSMALLINT* pfExists) {
+    SQLUSMALLINT* pfExists) MOCK_ENTRY_TRY {
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
@@ -697,6 +700,7 @@ SQLRETURN SQL_API SQLGetFunctions(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLNativeSql(
     SQLHDBC hdbc,
@@ -704,7 +708,7 @@ SQLRETURN SQL_API SQLNativeSql(
     SQLINTEGER cbSqlStrIn,
     SQLCHAR* szSqlStr,
     SQLINTEGER cbSqlStrMax,
-    SQLINTEGER* pcbSqlStr) {
+    SQLINTEGER* pcbSqlStr) MOCK_ENTRY_TRY {
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
@@ -735,5 +739,6 @@ SQLRETURN SQL_API SQLNativeSql(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 } // extern "C"

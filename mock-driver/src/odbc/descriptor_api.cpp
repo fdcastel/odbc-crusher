@@ -4,6 +4,7 @@
 #include "driver/diagnostics.hpp"
 
 #include <cstring>  // std::memcpy — Linux GCC is stricter than MSVC about transitives
+#include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
 
@@ -15,7 +16,7 @@ SQLRETURN SQL_API SQLGetDescField(
     SQLSMALLINT iField,
     SQLPOINTER rgbValue,
     SQLINTEGER cbValueMax,
-    SQLINTEGER* pcbValue) {
+    SQLINTEGER* pcbValue) MOCK_ENTRY_TRY {
     
     auto* desc = validate_desc_handle(hdesc);
     if (!desc) return SQL_INVALID_HANDLE;
@@ -44,13 +45,14 @@ SQLRETURN SQL_API SQLGetDescField(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdesc)
 
 SQLRETURN SQL_API SQLSetDescField(
     SQLHDESC hdesc,
     SQLSMALLINT iRecord,
     SQLSMALLINT iField,
     SQLPOINTER rgbValue,
-    SQLINTEGER cbValue) {
+    SQLINTEGER cbValue) MOCK_ENTRY_TRY {
     
     auto* desc = validate_desc_handle(hdesc);
     if (!desc) return SQL_INVALID_HANDLE;
@@ -72,6 +74,7 @@ SQLRETURN SQL_API SQLSetDescField(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdesc)
 
 SQLRETURN SQL_API SQLGetDescRec(
     SQLHDESC hdesc,
@@ -84,7 +87,7 @@ SQLRETURN SQL_API SQLGetDescRec(
     SQLLEN* pLength,
     SQLSMALLINT* pPrecision,
     SQLSMALLINT* pScale,
-    SQLSMALLINT* pNullable) {
+    SQLSMALLINT* pNullable) MOCK_ENTRY_TRY {
     
     auto* desc = validate_desc_handle(hdesc);
     if (!desc) return SQL_INVALID_HANDLE;
@@ -110,6 +113,7 @@ SQLRETURN SQL_API SQLGetDescRec(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdesc)
 
 SQLRETURN SQL_API SQLSetDescRec(
     SQLHDESC hdesc,
@@ -121,7 +125,7 @@ SQLRETURN SQL_API SQLSetDescRec(
     SQLSMALLINT ibScale,
     SQLPOINTER rgbValue,
     SQLLEN* pcbStringLength,
-    SQLLEN* pcbIndicator) {
+    SQLLEN* pcbIndicator) MOCK_ENTRY_TRY {
     
     auto* desc = validate_desc_handle(hdesc);
     if (!desc) return SQL_INVALID_HANDLE;
@@ -147,10 +151,11 @@ SQLRETURN SQL_API SQLSetDescRec(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdesc)
 
 SQLRETURN SQL_API SQLCopyDesc(
     SQLHDESC hDescSource,
-    SQLHDESC hDescTarget) {
+    SQLHDESC hDescTarget) MOCK_ENTRY_TRY {
     
     auto* src = validate_desc_handle(hDescSource);
     auto* tgt = validate_desc_handle(hDescTarget);
@@ -164,6 +169,7 @@ SQLRETURN SQL_API SQLCopyDesc(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hDescSource)
 
 SQLRETURN SQL_API SQLColAttribute(
     SQLHSTMT hstmt,
@@ -172,7 +178,7 @@ SQLRETURN SQL_API SQLColAttribute(
     SQLPOINTER pCharAttr,
     SQLSMALLINT cbCharAttrMax,
     SQLSMALLINT* pcbCharAttr,
-    SQLLEN* pNumAttr) {
+    SQLLEN* pNumAttr) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -279,5 +285,6 @@ SQLRETURN SQL_API SQLColAttribute(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 } // extern "C"

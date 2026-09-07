@@ -1,7 +1,9 @@
 #include "json_reporter.hpp"
 #include <ctime>
+#include <filesystem>
 #include <iostream>
 #include <iomanip>
+#include <system_error>
 
 namespace odbc_crusher::reporting {
 
@@ -74,6 +76,9 @@ void JsonReporter::report_category(const std::string& category_name,
     
     category["tests"] = tests_array;
     categories_.push_back(category);
+
+    // F2: persist what we have, so a killed run still leaves a usable report.
+    maybe_write_snapshot();
 }
 
 void JsonReporter::report_summary(size_t total_tests, size_t passed, size_t failed,
@@ -94,23 +99,84 @@ void JsonReporter::report_summary(size_t total_tests, size_t passed, size_t fail
     }
     
     root_["summary"] = summary;
-    root_["categories"] = categories_;
+    // categories are attached by write_snapshot() / report_end(), which own
+    // that key — see F2.
+}
+
+void JsonReporter::maybe_write_snapshot() {
+    if (output_file_.empty()) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (wrote_snapshot_ && (now - last_snapshot_) < kSnapshotInterval) return;
+
+    write_snapshot(false);
+    wrote_snapshot_ = true;
+    last_snapshot_ = now;
+}
+
+void JsonReporter::write_snapshot(bool complete) {
+    if (output_file_.empty()) return;
+
+    nlohmann::json doc = root_;
+    doc["categories"] = categories_;
+    doc["complete"] = complete;
+
+    // Write to a sibling temp file and rename over the target, so a signal
+    // landing mid-write can never leave a truncated document behind. rename()
+    // within a directory is atomic on POSIX, and MoveFileEx-with-replace on
+    // Windows via std::filesystem.
+    const std::filesystem::path target(output_file_);
+    std::filesystem::path tmp = target;
+    tmp += ".partial";
+
+    {
+        std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
+        if (!file.is_open()) {
+            // Report it once, on the first failure, then stay quiet: this runs
+            // after every category and a broken path would otherwise emit 23
+            // identical lines.
+            if (!write_failed_) {
+                write_failed_ = true;
+                std::cerr << "Error: Could not write to " << tmp.string() << std::endl;
+            }
+            return;
+        }
+        // Intermediate snapshots are written compact: they exist to be
+        // machine-read after a kill, and re-serialising a pretty-printed
+        // ~100 KB document after each of 23 categories measurably lengthened
+        // the run. Only the final report is indented.
+        if (complete) {
+            file << std::setw(2) << doc << std::endl;
+        } else {
+            file << doc << std::endl;
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(tmp, target, ec);
+    if (ec) {
+        if (!write_failed_) {
+            write_failed_ = true;
+            std::cerr << "Error: Could not write to " << output_file_ << ": "
+                      << ec.message() << std::endl;
+        }
+        std::filesystem::remove(tmp, ec);
+    }
 }
 
 void JsonReporter::report_end() {
     if (output_file_.empty()) {
-        // Print to stdout
+        // Print to stdout: exactly one document, so there is nothing partial
+        // to mark, but it must still carry the same keys as the file form.
+        root_["categories"] = categories_;
+        root_["complete"] = true;
         std::cout << std::setw(2) << root_ << std::endl;
     } else {
-        // Write to file
-        std::ofstream file(output_file_);
-        if (file.is_open()) {
-            file << std::setw(2) << root_ << std::endl;
+        write_snapshot(true);
+        if (!write_failed_) {
             // G1: this is progress chatter, not report data. On stderr so that
             // `-o json -f report.json` leaves stdout completely empty.
             std::cerr << "JSON report written to: " << output_file_ << std::endl;
-        } else {
-            std::cerr << "Error: Could not write to " << output_file_ << std::endl;
         }
     }
 }

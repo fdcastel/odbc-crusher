@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cmath>
+#include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
 
@@ -440,7 +441,7 @@ extern "C" {
 SQLRETURN SQL_API SQLExecDirect(
     SQLHSTMT hstmt,
     SQLCHAR* szSqlStr,
-    SQLINTEGER cbSqlStr) {
+    SQLINTEGER cbSqlStr) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -518,11 +519,12 @@ SQLRETURN SQL_API SQLExecDirect(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLPrepare(
     SQLHSTMT hstmt,
     SQLCHAR* szSqlStr,
-    SQLINTEGER cbSqlStr) {
+    SQLINTEGER cbSqlStr) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -558,8 +560,9 @@ SQLRETURN SQL_API SQLPrepare(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
-SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
+SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
@@ -755,8 +758,9 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
 
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
-SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) {
+SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
@@ -906,6 +910,7 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) {
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLGetData(
     SQLHSTMT hstmt,
@@ -913,7 +918,7 @@ SQLRETURN SQL_API SQLGetData(
     SQLSMALLINT fCType,
     SQLPOINTER rgbValue,
     SQLLEN cbValueMax,
-    SQLLEN* pcbValue) {
+    SQLLEN* pcbValue) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -1225,10 +1230,11 @@ SQLRETURN SQL_API SQLGetData(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLNumResultCols(
     SQLHSTMT hstmt,
-    SQLSMALLINT* pccol) {
+    SQLSMALLINT* pccol) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -1241,6 +1247,7 @@ SQLRETURN SQL_API SQLNumResultCols(
 
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLDescribeCol(
     SQLHSTMT hstmt,
@@ -1251,7 +1258,7 @@ SQLRETURN SQL_API SQLDescribeCol(
     SQLSMALLINT* pfSqlType,
     SQLULEN* pcbColDef,
     SQLSMALLINT* pibScale,
-    SQLSMALLINT* pfNullable) {
+    SQLSMALLINT* pfNullable) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -1297,6 +1304,7 @@ SQLRETURN SQL_API SQLDescribeCol(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLBindCol(
     SQLHSTMT hstmt,
@@ -1304,7 +1312,7 @@ SQLRETURN SQL_API SQLBindCol(
     SQLSMALLINT fCType,
     SQLPOINTER rgbValue,
     SQLLEN cbValueMax,
-    SQLLEN* pcbValue) {
+    SQLLEN* pcbValue) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -1332,6 +1340,7 @@ SQLRETURN SQL_API SQLBindCol(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLBindParameter(
     SQLHSTMT hstmt,
@@ -1343,7 +1352,7 @@ SQLRETURN SQL_API SQLBindParameter(
     SQLSMALLINT ibScale,
     SQLPOINTER rgbValue,
     SQLLEN cbValueMax,
-    SQLLEN* pcbValue) {
+    SQLLEN* pcbValue) MOCK_ENTRY_TRY {
     
     (void)ibScale;
 
@@ -1406,10 +1415,11 @@ SQLRETURN SQL_API SQLBindParameter(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLRowCount(
     SQLHSTMT hstmt,
-    SQLLEN* pcrow) {
+    SQLLEN* pcrow) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -1422,8 +1432,9 @@ SQLRETURN SQL_API SQLRowCount(
 
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
-SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT hstmt) {
+SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
@@ -1441,8 +1452,9 @@ SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT hstmt) {
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
-SQLRETURN SQL_API SQLMoreResults(SQLHSTMT hstmt) {
+SQLRETURN SQL_API SQLMoreResults(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
@@ -1451,13 +1463,14 @@ SQLRETURN SQL_API SQLMoreResults(SQLHSTMT hstmt) {
     // Mock driver doesn't support multiple result sets
     return SQL_NO_DATA;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLGetStmtAttr(
     SQLHSTMT hstmt,
     SQLINTEGER fAttribute,
     SQLPOINTER rgbValue,
     SQLINTEGER cbValueMax,
-    SQLINTEGER* pcbValue) {
+    SQLINTEGER* pcbValue) MOCK_ENTRY_TRY {
     
     (void)cbValueMax;
     
@@ -1557,12 +1570,13 @@ SQLRETURN SQL_API SQLGetStmtAttr(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLSetStmtAttr(
     SQLHSTMT hstmt,
     SQLINTEGER fAttribute,
     SQLPOINTER rgbValue,
-    SQLINTEGER cbValue) {
+    SQLINTEGER cbValue) MOCK_ENTRY_TRY {
     
     (void)cbValue;
 
@@ -1640,10 +1654,11 @@ SQLRETURN SQL_API SQLSetStmtAttr(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLFreeStmt(
     SQLHSTMT hstmt,
-    SQLUSMALLINT fOption) {
+    SQLUSMALLINT fOption) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -1675,8 +1690,9 @@ SQLRETURN SQL_API SQLFreeStmt(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
-SQLRETURN SQL_API SQLCancel(SQLHSTMT hstmt) {
+SQLRETURN SQL_API SQLCancel(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     HandleLock lock(stmt);
@@ -1687,10 +1703,11 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT hstmt) {
 
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLNumParams(
     SQLHSTMT hstmt,
-    SQLSMALLINT* pcpar) {
+    SQLSMALLINT* pcpar) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -1707,6 +1724,7 @@ SQLRETURN SQL_API SQLNumParams(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLDescribeParam(
     SQLHSTMT hstmt,
@@ -1714,7 +1732,7 @@ SQLRETURN SQL_API SQLDescribeParam(
     SQLSMALLINT* pfSqlType,
     SQLULEN* pcbParamDef,
     SQLSMALLINT* pibScale,
-    SQLSMALLINT* pfNullable) {
+    SQLSMALLINT* pfNullable) MOCK_ENTRY_TRY {
 
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -1759,22 +1777,25 @@ SQLRETURN SQL_API SQLDescribeParam(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // ODBC 2.x compatibility functions
 SQLRETURN SQL_API SQLGetStmtOption(
     SQLHSTMT hstmt,
     SQLUSMALLINT fOption,
-    SQLPOINTER pvParam) {
+    SQLPOINTER pvParam) MOCK_ENTRY_TRY {
     // Map to ODBC 3.x function
     return SQLGetStmtAttr(hstmt, fOption, pvParam, SQL_MAX_OPTION_STRING_LENGTH, NULL);
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLSetStmtOption(
     SQLHSTMT hstmt,
     SQLUSMALLINT fOption,
-    SQLULEN vParam) {
+    SQLULEN vParam) MOCK_ENTRY_TRY {
     // Map to ODBC 3.x function
     return SQLSetStmtAttr(hstmt, fOption, reinterpret_cast<SQLPOINTER>(vParam), SQL_NTS);
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 } // extern "C"

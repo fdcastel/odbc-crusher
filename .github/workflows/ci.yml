@@ -154,6 +154,19 @@ jobs:
         if ($failed) { exit 1 }
         Write-Host "Export surface consistent: $($exports.Count) exported, $($allowed.Count) deliberately internal, $($defined.Count) implemented."
 
+    - name: Check every SQL_API entry point has the exception barrier
+      # IMPROVEMENT_PLAN.md D9. A C++ exception unwinding out of an entry
+      # point, across the C ABI into the Driver Manager, terminates the host
+      # process. Every definition is wrapped in a function-try-block via
+      # MOCK_ENTRY_TRY / MOCK_ENTRY_CATCH (driver/entry_guard.hpp).
+      #
+      # This is a property of the source text rather than of the running
+      # driver, so it sits here alongside the .def drift check; the handler's
+      # behaviour is covered by test_entry_guard.cpp. One matrix slot is
+      # enough — it is pure text and platform-independent.
+      if: runner.os == 'Linux' && matrix.build_type == 'Release'
+      run: python3 mock-driver/tools/check_entry_guards.py
+
     - name: Run Mock Driver Tests
       run: ctest --test-dir mock-driver/build -C ${{ matrix.build_type }} --output-on-failure
 

@@ -17,6 +17,9 @@ add_executable(odbc_crusher_tests
     unit/test_type_info.cpp
     unit/test_function_info.cpp
     unit/test_crash_guard.cpp
+    unit/test_test_base.cpp
+    unit/test_console_reporter.cpp
+    unit/test_json_reporter.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE
@@ -28,9 +31,11 @@ target_link_libraries(odbc_crusher_tests PRIVATE
     odbc_crusher_core
     odbc_crusher_discovery
     odbc_crusher_tests_lib
+    odbc_crusher_reporting
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
+    nlohmann_json::nlohmann_json
     project_warnings
     project_options
 )

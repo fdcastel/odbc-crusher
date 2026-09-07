@@ -11,6 +11,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include "driver/entry_guard.hpp"
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     (void)lpvReserved;
@@ -47,7 +48,7 @@ extern "C" {
 SQLRETURN SQL_API SQLAllocHandle(
     SQLSMALLINT fHandleType,
     SQLHANDLE hInput,
-    SQLHANDLE* phOutput) {
+    SQLHANDLE* phOutput) MOCK_ENTRY_TRY {
     
     if (!phOutput) {
         return SQL_ERROR;
@@ -109,11 +110,12 @@ SQLRETURN SQL_API SQLAllocHandle(
             return SQL_ERROR;
     }
 }
+MOCK_ENTRY_CATCH(hInput)
 
 // SQLFreeHandle - Free a handle
 SQLRETURN SQL_API SQLFreeHandle(
     SQLSMALLINT fHandleType,
-    SQLHANDLE hHandle) {
+    SQLHANDLE hHandle) MOCK_ENTRY_TRY {
     
     switch (fHandleType) {
         case SQL_HANDLE_ENV: {
@@ -173,6 +175,7 @@ SQLRETURN SQL_API SQLFreeHandle(
             return SQL_INVALID_HANDLE;
     }
 }
+MOCK_ENTRY_CATCH(hHandle)
 
 // SQLGetEnvAttr - Get environment attribute
 SQLRETURN SQL_API SQLGetEnvAttr(
@@ -180,7 +183,7 @@ SQLRETURN SQL_API SQLGetEnvAttr(
     SQLINTEGER fAttribute,
     SQLPOINTER rgbValue,
     SQLINTEGER cbValueMax,
-    SQLINTEGER* pcbValue) {
+    SQLINTEGER* pcbValue) MOCK_ENTRY_TRY {
     
     (void)cbValueMax;
     
@@ -214,13 +217,14 @@ SQLRETURN SQL_API SQLGetEnvAttr(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(henv)
 
 // SQLSetEnvAttr - Set environment attribute
 SQLRETURN SQL_API SQLSetEnvAttr(
     SQLHENV henv,
     SQLINTEGER fAttribute,
     SQLPOINTER rgbValue,
-    SQLINTEGER cbValue) {
+    SQLINTEGER cbValue) MOCK_ENTRY_TRY {
     
     (void)cbValue;
     
@@ -253,33 +257,39 @@ SQLRETURN SQL_API SQLSetEnvAttr(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(henv)
 
 // Legacy allocation functions (deprecated in ODBC 3.x but needed for compatibility)
-SQLRETURN SQL_API SQLAllocEnv(SQLHENV* phenv) {
+SQLRETURN SQL_API SQLAllocEnv(SQLHENV* phenv) MOCK_ENTRY_TRY {
     return SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, phenv);
 }
+MOCK_ENTRY_CATCH(SQL_NULL_HANDLE)
 
-SQLRETURN SQL_API SQLAllocConnect(SQLHENV henv, SQLHDBC* phdbc) {
+SQLRETURN SQL_API SQLAllocConnect(SQLHENV henv, SQLHDBC* phdbc) MOCK_ENTRY_TRY {
     return SQLAllocHandle(SQL_HANDLE_DBC, henv, phdbc);
 }
+MOCK_ENTRY_CATCH(henv)
 
-SQLRETURN SQL_API SQLAllocStmt(SQLHDBC hdbc, SQLHSTMT* phstmt) {
+SQLRETURN SQL_API SQLAllocStmt(SQLHDBC hdbc, SQLHSTMT* phstmt) MOCK_ENTRY_TRY {
     return SQLAllocHandle(SQL_HANDLE_STMT, hdbc, phstmt);
 }
+MOCK_ENTRY_CATCH(hdbc)
 
-SQLRETURN SQL_API SQLFreeEnv(SQLHENV henv) {
+SQLRETURN SQL_API SQLFreeEnv(SQLHENV henv) MOCK_ENTRY_TRY {
     return SQLFreeHandle(SQL_HANDLE_ENV, henv);
 }
+MOCK_ENTRY_CATCH(henv)
 
-SQLRETURN SQL_API SQLFreeConnect(SQLHDBC hdbc) {
+SQLRETURN SQL_API SQLFreeConnect(SQLHDBC hdbc) MOCK_ENTRY_TRY {
     return SQLFreeHandle(SQL_HANDLE_DBC, hdbc);
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 // Cursor name functions
 SQLRETURN SQL_API SQLSetCursorName(
     SQLHSTMT hstmt,
     SQLCHAR* szCursor,
-    SQLSMALLINT cbCursor) {
+    SQLSMALLINT cbCursor) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -290,12 +300,13 @@ SQLRETURN SQL_API SQLSetCursorName(
     // Mock: accept but don't use cursor name
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLGetCursorName(
     SQLHSTMT hstmt,
     SQLCHAR* szCursor,
     SQLSMALLINT cbCursorMax,
-    SQLSMALLINT* pcbCursor) {
+    SQLSMALLINT* pcbCursor) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -316,12 +327,13 @@ SQLRETURN SQL_API SQLGetCursorName(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // Extended fetch and scroll (for advanced cursor support)
 SQLRETURN SQL_API SQLFetchScroll(
     SQLHSTMT hstmt,
     SQLSMALLINT fFetchType,
-    SQLLEN iRow) {
+    SQLLEN iRow) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -467,11 +479,12 @@ SQLRETURN SQL_API SQLFetchScroll(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // Bulk operations (stub)
 SQLRETURN SQL_API SQLBulkOperations(
     SQLHSTMT hstmt,
-    SQLSMALLINT Operation) {
+    SQLSMALLINT Operation) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -482,13 +495,14 @@ SQLRETURN SQL_API SQLBulkOperations(
                         "Bulk operations not supported");
     return SQL_ERROR;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // SetPos (stub)
 SQLRETURN SQL_API SQLSetPos(
     SQLHSTMT hstmt,
     SQLSETPOSIROW iRow,
     SQLUSMALLINT fOption,
-    SQLUSMALLINT fLock) {
+    SQLUSMALLINT fLock) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -501,11 +515,12 @@ SQLRETURN SQL_API SQLSetPos(
                         "SQLSetPos not supported");
     return SQL_ERROR;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // ParamData/PutData for long data
 SQLRETURN SQL_API SQLParamData(
     SQLHSTMT hstmt,
-    SQLPOINTER* prgbValue) {
+    SQLPOINTER* prgbValue) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -515,11 +530,12 @@ SQLRETURN SQL_API SQLParamData(
     // Mock: no data-at-execution parameters
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLPutData(
     SQLHSTMT hstmt,
     SQLPOINTER rgbValue,
-    SQLLEN cbValue) {
+    SQLLEN cbValue) MOCK_ENTRY_TRY {
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
@@ -530,5 +546,6 @@ SQLRETURN SQL_API SQLPutData(
     // Mock: accept but don't use
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 } // extern "C"

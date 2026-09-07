@@ -294,10 +294,51 @@ TEST(ConfigTest, CaseInsensitiveKey) {
     EXPECT_EQ(pairs["catalog"], "Large");
 }
 
-TEST(ConfigTest, NegativeIntegerValue) {
-    // ResultSetSize=-1 used to round-trip as -1; document current behaviour.
+// D9. This test used to assert that ResultSetSize=-5 round-tripped as -5,
+// with the comment "document current behaviour". That behaviour was a defect,
+// not a contract: the value reaches std::vector::reserve(), where a negative
+// int converts to a huge size_t and throws std::length_error, with no handler
+// anywhere between there and odbc32.dll. Integer knobs are clamped at parse
+// time now.
+TEST(ConfigTest, NegativeResultSetSizeIsClampedToZero) {
     DriverConfig config = parse_connection_string("ResultSetSize=-5;");
-    EXPECT_EQ(config.result_set_size, -5);
+    EXPECT_EQ(config.result_set_size, 0);
+}
+
+TEST(ConfigTest, HugeResultSetSizeIsClampedToTheUpperBound) {
+    DriverConfig config = parse_connection_string("ResultSetSize=500000000;");
+    EXPECT_EQ(config.result_set_size, 1000000);
+}
+
+TEST(ConfigTest, InRangeResultSetSizeIsUntouched) {
+    DriverConfig config = parse_connection_string("ResultSetSize=250;");
+    EXPECT_EQ(config.result_set_size, 250);
+}
+
+TEST(ConfigTest, NegativeMaxConnectionsIsClampedToUnlimited) {
+    DriverConfig config = parse_connection_string("MaxConnections=-1;");
+    EXPECT_EQ(config.max_connections, 0);
+}
+
+// SQLGetInfo(SQL_MAX_DRIVER_CONNECTIONS) reports a SQLUSMALLINT, so a larger
+// value could not be represented and used to wrap (E1/D16 fixed the report
+// side; this fixes the stored side).
+TEST(ConfigTest, HugeMaxConnectionsIsClampedToUshortRange) {
+    DriverConfig config = parse_connection_string("MaxConnections=70000;");
+    EXPECT_EQ(config.max_connections, 0xFFFF);
+}
+
+// Outside 0-100 a probability makes Mode=Random either never fail or always
+// fail, with nothing in the report to say why.
+TEST(ConfigTest, FailureProbabilityIsClampedToPercentRange) {
+    EXPECT_EQ(parse_connection_string("FailureProbability=-20;").failure_probability, 0);
+    EXPECT_EQ(parse_connection_string("FailureProbability=500;").failure_probability, 100);
+    EXPECT_EQ(parse_connection_string("FailureProbability=37;").failure_probability, 37);
+}
+
+TEST(ConfigTest, ArrayBindRowFailsAtIsClampedToNonNegative) {
+    DriverConfig config = parse_connection_string("ArrayBindRowFailsAt=-3;");
+    EXPECT_EQ(config.array_bind_row_fails_at, 0);
 }
 
 TEST(ConfigTest, NonNumericIntegerFallsBackToDefault) {

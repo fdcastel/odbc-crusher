@@ -6,6 +6,7 @@
 #include "mock/mock_catalog.hpp"
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
+#include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
 
@@ -18,7 +19,7 @@ SQLRETURN SQL_API SQLConnect(
     SQLCHAR* szUID,
     SQLSMALLINT cbUID,
     SQLCHAR* szPWD,
-    SQLSMALLINT cbPWD) {
+    SQLSMALLINT cbPWD) MOCK_ENTRY_TRY {
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
@@ -46,6 +47,7 @@ SQLRETURN SQL_API SQLConnect(
     conn->connected_ = true;
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLDriverConnect(
     SQLHDBC hdbc,
@@ -55,7 +57,7 @@ SQLRETURN SQL_API SQLDriverConnect(
     SQLCHAR* szConnStrOut,
     SQLSMALLINT cbConnStrOutMax,
     SQLSMALLINT* pcbConnStrOut,
-    SQLUSMALLINT fDriverCompletion) {
+    SQLUSMALLINT fDriverCompletion) MOCK_ENTRY_TRY {
     
     (void)hwnd;
     (void)fDriverCompletion;
@@ -122,8 +124,9 @@ SQLRETURN SQL_API SQLDriverConnect(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
-SQLRETURN SQL_API SQLDisconnect(SQLHDBC hdbc) {
+SQLRETURN SQL_API SQLDisconnect(SQLHDBC hdbc) MOCK_ENTRY_TRY {
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
     
@@ -150,13 +153,14 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC hdbc) {
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLGetConnectAttr(
     SQLHDBC hdbc,
     SQLINTEGER fAttribute,
     SQLPOINTER rgbValue,
     SQLINTEGER cbValueMax,
-    SQLINTEGER* pcbValue) {
+    SQLINTEGER* pcbValue) MOCK_ENTRY_TRY {
     
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
@@ -213,12 +217,13 @@ SQLRETURN SQL_API SQLGetConnectAttr(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLSetConnectAttr(
     SQLHDBC hdbc,
     SQLINTEGER fAttribute,
     SQLPOINTER rgbValue,
-    SQLINTEGER cbValue) {
+    SQLINTEGER cbValue) MOCK_ENTRY_TRY {
     
     (void)cbValue;
     
@@ -271,6 +276,7 @@ SQLRETURN SQL_API SQLSetConnectAttr(
     
     return SQL_SUCCESS;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLBrowseConnect(
     SQLHDBC hdbc,
@@ -278,12 +284,13 @@ SQLRETURN SQL_API SQLBrowseConnect(
     SQLSMALLINT cbConnStrIn,
     SQLCHAR* szConnStrOut,
     SQLSMALLINT cbConnStrOutMax,
-    SQLSMALLINT* pcbConnStrOut) {
+    SQLSMALLINT* pcbConnStrOut) MOCK_ENTRY_TRY {
     
     // Simplified: just forward to SQLDriverConnect
     return SQLDriverConnect(hdbc, nullptr, szConnStrIn, cbConnStrIn,
                            szConnStrOut, cbConnStrOutMax, pcbConnStrOut,
                            SQL_DRIVER_NOPROMPT);
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 } // extern "C"

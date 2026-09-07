@@ -26,7 +26,10 @@ void ConsoleReporter::report_category(const std::string& category_name,
             case tests::TestStatus::SKIP_INCONCLUSIVE: skipped++; break;
             case tests::TestStatus::ERR: errors++; break;
         }
-        all_results_.push_back(result);
+        if (result.status == tests::TestStatus::FAIL ||
+            result.status == tests::TestStatus::ERR) {
+            failures_.push_back(result);
+        }
     }
     
     // Build summary string
@@ -113,12 +116,12 @@ void ConsoleReporter::report_summary(size_t total_tests, size_t passed, size_t f
     out_ << "  Total Time:   " << format_duration(total_duration) << "\n";
     out_ << "\n";
     
-    // Severity-ranked failure summary
+    // Severity-ranked failure summary. failures_ was filtered on the way in
+    // (G5), so this only has to order it.
     std::vector<const tests::TestResult*> failures;
-    for (const auto& r : all_results_) {
-        if (r.status == tests::TestStatus::FAIL || r.status == tests::TestStatus::ERR) {
-            failures.push_back(&r);
-        }
+    failures.reserve(failures_.size());
+    for (const auto& r : failures_) {
+        failures.push_back(&r);
     }
     
     if (!failures.empty()) {

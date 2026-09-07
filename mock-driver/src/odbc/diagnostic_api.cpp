@@ -4,6 +4,7 @@
 #include "driver/diagnostics.hpp"
 #include "utils/string_utils.hpp"
 #include <cstring>
+#include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
 
@@ -17,7 +18,7 @@ SQLRETURN SQL_API SQLGetDiagRec(
     SQLINTEGER* pfNativeError,
     SQLCHAR* szErrorMsg,
     SQLSMALLINT cbErrorMsgMax,
-    SQLSMALLINT* pcbErrorMsg) {
+    SQLSMALLINT* pcbErrorMsg) MOCK_ENTRY_TRY {
     
     OdbcHandle* handle = nullptr;
     
@@ -66,6 +67,7 @@ SQLRETURN SQL_API SQLGetDiagRec(
     
     return ret;
 }
+MOCK_ENTRY_CATCH(hHandle)
 
 SQLRETURN SQL_API SQLGetDiagField(
     SQLSMALLINT fHandleType,
@@ -74,7 +76,7 @@ SQLRETURN SQL_API SQLGetDiagField(
     SQLSMALLINT fDiagField,
     SQLPOINTER rgbDiagInfo,
     SQLSMALLINT cbDiagInfoMax,
-    SQLSMALLINT* pcbDiagInfo) {
+    SQLSMALLINT* pcbDiagInfo) MOCK_ENTRY_TRY {
     
     OdbcHandle* handle = nullptr;
     
@@ -208,5 +210,6 @@ SQLRETURN SQL_API SQLGetDiagField(
             return SQL_ERROR;
     }
 }
+MOCK_ENTRY_CATCH(hHandle)
 
 } // extern "C"

@@ -20,6 +20,7 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
 
@@ -107,7 +108,7 @@ SQLRETURN SQL_API SQLConnectW(
     SQLWCHAR* szDSN,     SQLSMALLINT cbDSN,
     SQLWCHAR* szUID,     SQLSMALLINT cbUID,
     SQLWCHAR* szAuthStr, SQLSMALLINT cbAuthStr)
-{
+MOCK_ENTRY_TRY {
     std::string dsn  = sqlw_to_string(szDSN,     cbDSN);
     std::string uid  = sqlw_to_string(szUID,     cbUID);
     std::string auth = sqlw_to_string(szAuthStr, cbAuthStr);
@@ -117,6 +118,7 @@ SQLRETURN SQL_API SQLConnectW(
                       (SQLCHAR*)uid.c_str(),  static_cast<SQLSMALLINT>(uid.length()),
                       (SQLCHAR*)auth.c_str(), static_cast<SQLSMALLINT>(auth.length()));
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLDriverConnectW(
     SQLHDBC hdbc,
@@ -125,7 +127,7 @@ SQLRETURN SQL_API SQLDriverConnectW(
     SQLWCHAR* szConnStrOut,  SQLSMALLINT cbConnStrOutMax,
     SQLSMALLINT* pcbConnStrOut,
     SQLUSMALLINT fDriverCompletion)
-{
+MOCK_ENTRY_TRY {
     std::string connIn = sqlw_to_string(szConnStrIn, cbConnStrIn);
 
     // Prepare ANSI output buffer
@@ -155,18 +157,20 @@ SQLRETURN SQL_API SQLDriverConnectW(
 
     return ret;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLBrowseConnectW(
     SQLHDBC hdbc,
     SQLWCHAR* szConnStrIn,   SQLSMALLINT cbConnStrIn,
     SQLWCHAR* szConnStrOut,  SQLSMALLINT cbConnStrOutMax,
     SQLSMALLINT* pcbConnStrOut)
-{
+MOCK_ENTRY_TRY {
     return SQLDriverConnectW(hdbc, nullptr,
                              szConnStrIn, cbConnStrIn,
                              szConnStrOut, cbConnStrOutMax,
                              pcbConnStrOut, SQL_DRIVER_NOPROMPT);
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 // ================================================================
 //  Connection Attributes — W variants
@@ -178,7 +182,7 @@ SQLRETURN SQL_API SQLGetConnectAttrW(
     SQLPOINTER rgbValue,
     SQLINTEGER cbValueMax,
     SQLINTEGER* pcbValue)
-{
+MOCK_ENTRY_TRY {
     // For string attributes we need to convert the output
     if (fAttribute == SQL_ATTR_CURRENT_CATALOG) {
         // Call ANSI version into temp buffer
@@ -199,16 +203,18 @@ SQLRETURN SQL_API SQLGetConnectAttrW(
     // Numeric attributes — pass through
     return SQLGetConnectAttr(hdbc, fAttribute, rgbValue, cbValueMax, pcbValue);
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLSetConnectAttrW(
     SQLHDBC hdbc,
     SQLINTEGER fAttribute,
     SQLPOINTER rgbValue,
     SQLINTEGER cbValue)
-{
+MOCK_ENTRY_TRY {
     // All current mock connection attributes are numeric — pass through
     return SQLSetConnectAttr(hdbc, fAttribute, rgbValue, cbValue);
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 // ================================================================
 //  Statement Execution — W variants
@@ -218,23 +224,25 @@ SQLRETURN SQL_API SQLExecDirectW(
     SQLHSTMT hstmt,
     SQLWCHAR* szSqlStr,
     SQLINTEGER cbSqlStr)
-{
+MOCK_ENTRY_TRY {
     std::string sql = sqlw_to_string(szSqlStr, cbSqlStr);
     return SQLExecDirect(hstmt,
                          (SQLCHAR*)sql.c_str(),
                          static_cast<SQLINTEGER>(sql.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLPrepareW(
     SQLHSTMT hstmt,
     SQLWCHAR* szSqlStr,
     SQLINTEGER cbSqlStr)
-{
+MOCK_ENTRY_TRY {
     std::string sql = sqlw_to_string(szSqlStr, cbSqlStr);
     return SQLPrepare(hstmt,
                       (SQLCHAR*)sql.c_str(),
                       static_cast<SQLINTEGER>(sql.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // ================================================================
 //  Column Info — W variants
@@ -250,7 +258,7 @@ SQLRETURN SQL_API SQLDescribeColW(
     SQLULEN* pcbColDef,
     SQLSMALLINT* pibScale,
     SQLSMALLINT* pfNullable)
-{
+MOCK_ENTRY_TRY {
     // Call ANSI version to get name into temp buffer
     SQLCHAR ansi_name[512] = {0};
     SQLSMALLINT ansi_len = 0;
@@ -275,6 +283,7 @@ SQLRETURN SQL_API SQLDescribeColW(
 
     return ret;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLColAttributeW(
     SQLHSTMT hstmt,
@@ -284,7 +293,7 @@ SQLRETURN SQL_API SQLColAttributeW(
     SQLSMALLINT cbCharAttrMax,  // bytes
     SQLSMALLINT* pcbCharAttr,   // bytes
     SQLLEN* pNumAttr)
-{
+MOCK_ENTRY_TRY {
     // Determine if this field returns a string
     bool is_string_field = (iField == SQL_DESC_NAME ||
                             iField == SQL_COLUMN_NAME ||
@@ -320,6 +329,7 @@ SQLRETURN SQL_API SQLColAttributeW(
     return SQLColAttribute(hstmt, iCol, iField, pCharAttr,
                            cbCharAttrMax, pcbCharAttr, pNumAttr);
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // ================================================================
 //  Cursor Name — W variants
@@ -329,19 +339,20 @@ SQLRETURN SQL_API SQLSetCursorNameW(
     SQLHSTMT hstmt,
     SQLWCHAR* szCursor,
     SQLSMALLINT cbCursor)
-{
+MOCK_ENTRY_TRY {
     std::string name = sqlw_to_string(szCursor, cbCursor);
     return SQLSetCursorName(hstmt,
                             (SQLCHAR*)name.c_str(),
                             static_cast<SQLSMALLINT>(name.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLGetCursorNameW(
     SQLHSTMT hstmt,
     SQLWCHAR* szCursor,
     SQLSMALLINT cbCursorMax,    // characters
     SQLSMALLINT* pcbCursor)     // characters (excl NUL)
-{
+MOCK_ENTRY_TRY {
     SQLCHAR ansi[256] = {0};
     SQLSMALLINT ansi_len = 0;
     SQLRETURN ret = SQLGetCursorName(hstmt, ansi, sizeof(ansi), &ansi_len);
@@ -359,6 +370,7 @@ SQLRETURN SQL_API SQLGetCursorNameW(
     }
     return ret;
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // ================================================================
 //  Driver Info — W variants
@@ -370,7 +382,7 @@ SQLRETURN SQL_API SQLGetInfoW(
     SQLPOINTER rgbInfoValue,
     SQLSMALLINT cbInfoValueMax,   // bytes
     SQLSMALLINT* pcbInfoValue)    // bytes
-{
+MOCK_ENTRY_TRY {
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
 
@@ -437,14 +449,16 @@ SQLRETURN SQL_API SQLGetInfoW(
     if (pcbInfoValue) *pcbInfoValue = ansi_len;
     return ret;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 SQLRETURN SQL_API SQLGetTypeInfoW(
     SQLHSTMT hstmt,
     SQLSMALLINT fSqlType)
-{
+MOCK_ENTRY_TRY {
     // No string parameters — just forward
     return SQLGetTypeInfo(hstmt, fSqlType);
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // ================================================================
 //  Statement Attributes — W variants
@@ -456,19 +470,21 @@ SQLRETURN SQL_API SQLGetStmtAttrW(
     SQLPOINTER rgbValue,
     SQLINTEGER cbValueMax,
     SQLINTEGER* pcbValue)
-{
+MOCK_ENTRY_TRY {
     // All mock stmt attributes are numeric — pass through
     return SQLGetStmtAttr(hstmt, fAttribute, rgbValue, cbValueMax, pcbValue);
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLSetStmtAttrW(
     SQLHSTMT hstmt,
     SQLINTEGER fAttribute,
     SQLPOINTER rgbValue,
     SQLINTEGER cbValue)
-{
+MOCK_ENTRY_TRY {
     return SQLSetStmtAttr(hstmt, fAttribute, rgbValue, cbValue);
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // ================================================================
 //  Catalog Functions — W variants
@@ -480,7 +496,7 @@ SQLRETURN SQL_API SQLTablesW(
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName,
     SQLWCHAR* szTableType,    SQLSMALLINT cbTableType)
-{
+MOCK_ENTRY_TRY {
     std::string cat  = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch  = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string tab  = sqlw_to_string(szTableName,   cbTableName);
@@ -492,6 +508,7 @@ SQLRETURN SQL_API SQLTablesW(
         tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
         typ.empty() ? nullptr : (SQLCHAR*)typ.c_str(), static_cast<SQLSMALLINT>(typ.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLColumnsW(
     SQLHSTMT hstmt,
@@ -499,7 +516,7 @@ SQLRETURN SQL_API SQLColumnsW(
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName,
     SQLWCHAR* szColumnName,   SQLSMALLINT cbColumnName)
-{
+MOCK_ENTRY_TRY {
     std::string cat = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
@@ -511,13 +528,14 @@ SQLRETURN SQL_API SQLColumnsW(
         tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
         col.empty() ? nullptr : (SQLCHAR*)col.c_str(), static_cast<SQLSMALLINT>(col.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLPrimaryKeysW(
     SQLHSTMT hstmt,
     SQLWCHAR* szCatalogName,  SQLSMALLINT cbCatalogName,
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName)
-{
+MOCK_ENTRY_TRY {
     std::string cat = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
@@ -527,6 +545,7 @@ SQLRETURN SQL_API SQLPrimaryKeysW(
         sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
         tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLForeignKeysW(
     SQLHSTMT hstmt,
@@ -536,7 +555,7 @@ SQLRETURN SQL_API SQLForeignKeysW(
     SQLWCHAR* szFkCatalogName, SQLSMALLINT cbFkCatalogName,
     SQLWCHAR* szFkSchemaName,  SQLSMALLINT cbFkSchemaName,
     SQLWCHAR* szFkTableName,   SQLSMALLINT cbFkTableName)
-{
+MOCK_ENTRY_TRY {
     std::string pkCat = sqlw_to_string(szPkCatalogName, cbPkCatalogName);
     std::string pkSch = sqlw_to_string(szPkSchemaName,  cbPkSchemaName);
     std::string pkTab = sqlw_to_string(szPkTableName,   cbPkTableName);
@@ -552,6 +571,7 @@ SQLRETURN SQL_API SQLForeignKeysW(
         fkSch.empty() ? nullptr : (SQLCHAR*)fkSch.c_str(), static_cast<SQLSMALLINT>(fkSch.length()),
         fkTab.empty() ? nullptr : (SQLCHAR*)fkTab.c_str(), static_cast<SQLSMALLINT>(fkTab.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLSpecialColumnsW(
     SQLHSTMT hstmt,
@@ -561,7 +581,7 @@ SQLRETURN SQL_API SQLSpecialColumnsW(
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName,
     SQLUSMALLINT fScope,
     SQLUSMALLINT fNullable)
-{
+MOCK_ENTRY_TRY {
     std::string cat = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
@@ -572,6 +592,7 @@ SQLRETURN SQL_API SQLSpecialColumnsW(
         tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
         fScope, fNullable);
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLStatisticsW(
     SQLHSTMT hstmt,
@@ -580,7 +601,7 @@ SQLRETURN SQL_API SQLStatisticsW(
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName,
     SQLUSMALLINT fUnique,
     SQLUSMALLINT fAccuracy)
-{
+MOCK_ENTRY_TRY {
     std::string cat = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
@@ -591,13 +612,14 @@ SQLRETURN SQL_API SQLStatisticsW(
         tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
         fUnique, fAccuracy);
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLProceduresW(
     SQLHSTMT hstmt,
     SQLWCHAR* szCatalogName,  SQLSMALLINT cbCatalogName,
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szProcName,     SQLSMALLINT cbProcName)
-{
+MOCK_ENTRY_TRY {
     std::string cat = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string prc = sqlw_to_string(szProcName,    cbProcName);
@@ -607,6 +629,7 @@ SQLRETURN SQL_API SQLProceduresW(
         sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
         prc.empty() ? nullptr : (SQLCHAR*)prc.c_str(), static_cast<SQLSMALLINT>(prc.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLProcedureColumnsW(
     SQLHSTMT hstmt,
@@ -614,7 +637,7 @@ SQLRETURN SQL_API SQLProcedureColumnsW(
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szProcName,     SQLSMALLINT cbProcName,
     SQLWCHAR* szColumnName,   SQLSMALLINT cbColumnName)
-{
+MOCK_ENTRY_TRY {
     std::string cat = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string prc = sqlw_to_string(szProcName,    cbProcName);
@@ -626,13 +649,14 @@ SQLRETURN SQL_API SQLProcedureColumnsW(
         prc.empty() ? nullptr : (SQLCHAR*)prc.c_str(), static_cast<SQLSMALLINT>(prc.length()),
         col.empty() ? nullptr : (SQLCHAR*)col.c_str(), static_cast<SQLSMALLINT>(col.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLTablePrivilegesW(
     SQLHSTMT hstmt,
     SQLWCHAR* szCatalogName,  SQLSMALLINT cbCatalogName,
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName)
-{
+MOCK_ENTRY_TRY {
     std::string cat = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
@@ -642,6 +666,7 @@ SQLRETURN SQL_API SQLTablePrivilegesW(
         sch.empty() ? nullptr : (SQLCHAR*)sch.c_str(), static_cast<SQLSMALLINT>(sch.length()),
         tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 SQLRETURN SQL_API SQLColumnPrivilegesW(
     SQLHSTMT hstmt,
@@ -649,7 +674,7 @@ SQLRETURN SQL_API SQLColumnPrivilegesW(
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName,
     SQLWCHAR* szColumnName,   SQLSMALLINT cbColumnName)
-{
+MOCK_ENTRY_TRY {
     std::string cat = sqlw_to_string(szCatalogName, cbCatalogName);
     std::string sch = sqlw_to_string(szSchemaName,  cbSchemaName);
     std::string tab = sqlw_to_string(szTableName,   cbTableName);
@@ -661,6 +686,7 @@ SQLRETURN SQL_API SQLColumnPrivilegesW(
         tab.empty() ? nullptr : (SQLCHAR*)tab.c_str(), static_cast<SQLSMALLINT>(tab.length()),
         col.empty() ? nullptr : (SQLCHAR*)col.c_str(), static_cast<SQLSMALLINT>(col.length()));
 }
+MOCK_ENTRY_CATCH(hstmt)
 
 // ================================================================
 //  NativeSql — W variant
@@ -671,7 +697,7 @@ SQLRETURN SQL_API SQLNativeSqlW(
     SQLWCHAR* szSqlStrIn,    SQLINTEGER cbSqlStrIn,
     SQLWCHAR* szSqlStr,      SQLINTEGER cbSqlStrMax,
     SQLINTEGER* pcbSqlStr)
-{
+MOCK_ENTRY_TRY {
     std::string sqlIn = sqlw_to_string(szSqlStrIn, cbSqlStrIn);
 
     SQLCHAR ansi_out[4096] = {0};
@@ -700,6 +726,7 @@ SQLRETURN SQL_API SQLNativeSqlW(
 
     return ret;
 }
+MOCK_ENTRY_CATCH(hdbc)
 
 // ================================================================
 //  Diagnostics — W variants
@@ -714,7 +741,7 @@ SQLRETURN SQL_API SQLGetDiagRecW(
     SQLWCHAR* szErrorMsg,
     SQLSMALLINT cbErrorMsgMax,   // characters
     SQLSMALLINT* pcbErrorMsg)    // characters (excl NUL)
-{
+MOCK_ENTRY_TRY {
     SQLCHAR ansi_state[6] = {0};
     SQLCHAR ansi_msg[2048] = {0};
     SQLSMALLINT ansi_msg_len = 0;
@@ -749,6 +776,7 @@ SQLRETURN SQL_API SQLGetDiagRecW(
 
     return ret;
 }
+MOCK_ENTRY_CATCH(hHandle)
 
 SQLRETURN SQL_API SQLGetDiagFieldW(
     SQLSMALLINT fHandleType,
@@ -758,7 +786,7 @@ SQLRETURN SQL_API SQLGetDiagFieldW(
     SQLPOINTER rgbDiagInfo,
     SQLSMALLINT cbDiagInfoMax,   // bytes
     SQLSMALLINT* pcbDiagInfo)    // bytes
-{
+MOCK_ENTRY_TRY {
     // String diagnostic fields need conversion
     bool is_string_field = (fDiagField == SQL_DIAG_SQLSTATE ||
                             fDiagField == SQL_DIAG_MESSAGE_TEXT ||
@@ -791,6 +819,7 @@ SQLRETURN SQL_API SQLGetDiagFieldW(
                            fDiagField, rgbDiagInfo,
                            cbDiagInfoMax, pcbDiagInfo);
 }
+MOCK_ENTRY_CATCH(hHandle)
 
 // ================================================================
 //  Descriptor — W variants
@@ -803,11 +832,12 @@ SQLRETURN SQL_API SQLGetDescFieldW(
     SQLPOINTER rgbValue,
     SQLINTEGER cbValueMax,
     SQLINTEGER* pcbValue)
-{
+MOCK_ENTRY_TRY {
     // The mock driver descriptor fields are all numeric — pass through
     return SQLGetDescField(hdesc, iRecord, iField, rgbValue,
                            cbValueMax, pcbValue);
 }
+MOCK_ENTRY_CATCH(hdesc)
 
 SQLRETURN SQL_API SQLGetDescRecW(
     SQLHDESC hdesc,
@@ -821,7 +851,7 @@ SQLRETURN SQL_API SQLGetDescRecW(
     SQLSMALLINT* pPrecision,
     SQLSMALLINT* pScale,
     SQLSMALLINT* pNullable)
-{
+MOCK_ENTRY_TRY {
     SQLCHAR ansi_name[512] = {0};
     SQLSMALLINT ansi_len = 0;
     SQLRETURN ret = SQLGetDescRec(hdesc, iRecord,
@@ -842,6 +872,7 @@ SQLRETURN SQL_API SQLGetDescRecW(
     }
     return ret;
 }
+MOCK_ENTRY_CATCH(hdesc)
 
 SQLRETURN SQL_API SQLSetDescFieldW(
     SQLHDESC hdesc,
@@ -849,9 +880,10 @@ SQLRETURN SQL_API SQLSetDescFieldW(
     SQLSMALLINT iField,
     SQLPOINTER rgbValue,
     SQLINTEGER cbValue)
-{
+MOCK_ENTRY_TRY {
     // Mock descriptor fields are all numeric — pass through
     return SQLSetDescField(hdesc, iRecord, iField, rgbValue, cbValue);
 }
+MOCK_ENTRY_CATCH(hdesc)
 
 } // extern "C"

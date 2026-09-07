@@ -29,7 +29,12 @@ public:
 private:
     std::ostream& out_;
     bool verbose_;
-    std::vector<tests::TestResult> all_results_;  // Collected for severity-ranked summary
+    // G5: only the FAIL/ERR results are ever read back, by the
+    // severity-ranked summary in report_summary(). This used to be a full
+    // second copy of every TestResult — 195 of them against the mock, each
+    // carrying five std::strings and two optionals — to produce a list that
+    // is empty on a clean run.
+    std::vector<tests::TestResult> failures_;
     
     std::string status_icon(tests::TestStatus status) const;
     std::string format_duration(std::chrono::microseconds duration) const;
