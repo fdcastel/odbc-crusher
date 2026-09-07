@@ -103,6 +103,14 @@ SQLRETURN SQL_API SQLAllocHandle(
             }
             
             auto* desc = new DescriptorHandle(conn, true);
+            // D8(b): a descriptor the application asked for is
+            // SQL_DESC_ALLOC_USER by definition, and that is what tells
+            // SQLFreeHandle it may free it and ~StatementHandle that it must
+            // not. It was left at the SQL_DESC_ALLOC_AUTO default, so the
+            // driver could not tell an explicit descriptor from one of the
+            // four it allocates for every statement - which is why freeing
+            // either of them did the same thing.
+            desc->alloc_type_ = SQL_DESC_ALLOC_USER;
             *phOutput = static_cast<SQLHANDLE>(desc);
             return SQL_SUCCESS;
         }
@@ -167,7 +175,24 @@ SQLRETURN SQL_API SQLFreeHandle(
         case SQL_HANDLE_DESC: {
             auto* desc = validate_desc_handle(hHandle);
             if (!desc) return SQL_INVALID_HANDLE;
-            
+
+            // D8(b): this deleted any valid descriptor unconditionally,
+            // including the four implicit ones every statement allocates.
+            // An application that obtained one from
+            // SQLGetStmtAttr(SQL_ATTR_APP_ROW_DESC) and then freed it left
+            // `stmt->app_row_desc_` dangling, and ~StatementHandle deleted
+            // it a second time.
+            //
+            // The spec is explicit: freeing an implicitly allocated
+            // descriptor is HY017. `alloc_type_` is what tells them apart,
+            // and it is the same field ~StatementHandle already consults.
+            if (desc->alloc_type_ != SQL_DESC_ALLOC_USER) {
+                desc->add_diagnostic(sqlstate::INVALID_USE_OF_AUTO_DESC, 0,
+                                     "Invalid use of an automatically "
+                                     "allocated descriptor handle");
+                return SQL_ERROR;
+            }
+
             delete desc;
             return SQL_SUCCESS;
         }

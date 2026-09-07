@@ -47,6 +47,8 @@ namespace sqlstate {
     constexpr const char* DATA_TYPE_ATTRIBUTE_VIOLATION = "07006";
     constexpr const char* INVALID_APPLICATION_BUFFER_TYPE = "HY003";
     constexpr const char* INVALID_INFO_TYPE = "HY096";
+    // D8(b): freeing a descriptor the driver allocated implicitly.
+    constexpr const char* INVALID_USE_OF_AUTO_DESC = "HY017";
     constexpr const char* INDICATOR_REQUIRED = "22002";
     constexpr const char* NUMERIC_VALUE_OUT_OF_RANGE = "22003";
     constexpr const char* STRING_DATA_TRUNCATED = "22001";

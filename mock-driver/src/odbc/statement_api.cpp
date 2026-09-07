@@ -294,12 +294,15 @@ static void write_output_to_binding(
                 break;
             case SQL_C_CHAR:
             default: {
-                std::string s = std::to_string(v);
-                size_t copy_len = std::min<size_t>(s.size(),
-                    static_cast<size_t>(pb.buffer_length > 0 ? pb.buffer_length - 1 : 0));
-                std::memcpy(pb.param_value, s.data(), copy_len);
-                static_cast<char*>(pb.param_value)[copy_len] = '\0';
-                if (pb.str_len_or_ind) *pb.str_len_or_ind = static_cast<SQLLEN>(copy_len);
+                // D8(c): this wrote `[0] = '\0'` even when buffer_length was
+                // 0 - a one-byte store into a buffer the caller said had no
+                // room - and reported what *fitted* in the indicator rather
+                // than what was *available*, so an application sizing a
+                // second call from it never grew past the first.
+                const std::string s = std::to_string(v);
+                const BufferCopyResult res =
+                    copy_chars(s, 0, pb.param_value, pb.buffer_length);
+                if (pb.str_len_or_ind) *pb.str_len_or_ind = res.remaining;
                 break;
             }
         }
@@ -313,13 +316,10 @@ static void write_output_to_binding(
                                    &wbytes);
             if (pb.str_len_or_ind) *pb.str_len_or_ind = static_cast<SQLLEN>(wbytes);
         } else {
-            // SQL_C_CHAR / default
-            size_t cap = pb.buffer_length > 0
-                ? static_cast<size_t>(pb.buffer_length - 1) : 0;
-            size_t copy_len = std::min<size_t>(s.size(), cap);
-            std::memcpy(pb.param_value, s.data(), copy_len);
-            static_cast<char*>(pb.param_value)[copy_len] = '\0';
-            if (pb.str_len_or_ind) *pb.str_len_or_ind = static_cast<SQLLEN>(copy_len);
+            // SQL_C_CHAR / default - D8(c), see write_number above.
+            const BufferCopyResult res =
+                copy_chars(s, 0, pb.param_value, pb.buffer_length);
+            if (pb.str_len_or_ind) *pb.str_len_or_ind = res.remaining;
         }
     };
 

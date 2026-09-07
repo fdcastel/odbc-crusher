@@ -29,11 +29,17 @@ EnvironmentHandle::EnvironmentHandle() : OdbcHandle(HandleType::ENV) {
 }
 
 EnvironmentHandle::~EnvironmentHandle() {
-    // Clean up any remaining connections
-    for (auto* conn : connections_) {
+    // D8(a): this used to range-for over `connections_` and delete each
+    // element - but ~ConnectionHandle erases itself from this very vector,
+    // so the iterator was invalidated on the first delete. Freeing an
+    // environment with two or more connections skipped elements and then
+    // read freed storage. Take the vector first, so the children erase
+    // themselves from something empty.
+    std::vector<ConnectionHandle*> doomed;
+    doomed.swap(connections_);
+    for (auto* conn : doomed) {
         delete conn;
     }
-    connections_.clear();
     magic_ = 0;  // Invalidate handle
 }
 
@@ -46,11 +52,13 @@ ConnectionHandle::ConnectionHandle(EnvironmentHandle* env)
 }
 
 ConnectionHandle::~ConnectionHandle() {
-    // Clean up any remaining statements
-    for (auto* stmt : statements_) {
+    // D8(a) - see ~EnvironmentHandle. ~StatementHandle erases itself from
+    // `statements_`, so iterating it while deleting was undefined.
+    std::vector<StatementHandle*> doomed;
+    doomed.swap(statements_);
+    for (auto* stmt : doomed) {
         delete stmt;
     }
-    statements_.clear();
     
     // Remove from environment
     if (env_) {
