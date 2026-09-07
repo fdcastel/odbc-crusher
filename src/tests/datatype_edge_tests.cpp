@@ -676,19 +676,12 @@ TestResult DataTypeEdgeCaseTests::test_varchar_raw_byte_integrity() {
             };
 
             core::OdbcStatement stmt(conn_);
-            bool executed = false;
-            for (const auto& q : queries) {
-                try {
-                    stmt.execute(q);
-                    executed = true;
-                    break;
-                } catch (const core::OdbcError&) {
-                    // try next
-                }
-            }
-            if (!executed) {
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "No CAST(... AS VARCHAR(32)) query succeeded";
+                // C2: name each variant and its SQLSTATE.
+                r.diagnostic = attempt.format_failures();
                 return;
             }
 

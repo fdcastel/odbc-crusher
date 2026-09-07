@@ -90,27 +90,32 @@ TestResult BoundaryTests::test_getdata_zero_buffer() {
                     "SELECT CAST('hello' AS VARCHAR(50))",
                     "SELECT CAST('hello' AS VARCHAR(50)) FROM RDB$DATABASE"
                 };
+                // `success` is set by the strategies further down, which
+                // report the probe's actual verdict.
                 bool success = false;
+
+                // C2: find a query this driver accepts, recording why the
+                // others were rejected. The loop this replaces allocated a
+                // fresh statement per attempt and threw the failures away.
                 std::string working_query;
-
-                // First, find a query that actually works on this driver
-                for (const auto& query : queries) {
-                    try {
-                        core::OdbcStatement probe(conn_);
-                        probe.execute(query);
-                        if (probe.fetch()) {
-                            working_query = query;
-                            break;
+                {
+                    core::OdbcStatement probe(conn_);
+                    auto attempt = try_first_working(queries, [&](const std::string& q) {
+                        probe.execute(q);
+                        // A variant that executes but yields no row is no use to
+                        // the strategies below, so treat it as a rejection —
+                        // throwing keeps that decision inside the helper.
+                        if (!probe.fetch()) {
+                            throw core::OdbcError("query returned no row");
                         }
-                    } catch (const core::OdbcError&) {
-                        continue;
+                    });
+                    if (!attempt) {
+                        r.status = TestStatus::SKIP_INCONCLUSIVE;
+                        r.actual = "Could not execute query to test zero-buffer SQLGetData";
+                        r.diagnostic = attempt.format_failures();
+                        return;
                     }
-                }
-
-                if (working_query.empty()) {
-                    r.status = TestStatus::SKIP_INCONCLUSIVE;
-                    r.actual = "Could not execute query to test zero-buffer SQLGetData";
-                    return;
+                    working_query = attempt.query;
                 }
 
                 // Strategy 1: NULL buffer, 0 size — should return data length
