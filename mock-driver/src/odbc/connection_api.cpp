@@ -10,6 +10,25 @@
 
 using namespace mock_odbc;
 
+namespace {
+
+// D29: the check was `env->connections_.size() >= max_connections`, but the
+// ConnectionHandle constructor has already pushed `this` onto that vector -
+// so MaxConnections=1 rejected the very first connect. What the limit counts
+// is connections that are *established*, not handles that have been
+// allocated, and never the one currently being established.
+bool connection_budget_allows(ConnectionHandle* conn, int max_connections) {
+    auto* env = conn->environment();
+    if (!env) return true;
+    int live = 0;
+    for (auto* c : env->connections_) {
+        if (c != conn && c->is_connected()) ++live;
+    }
+    return live < max_connections;
+}
+
+} // namespace
+
 extern "C" {
 
 SQLRETURN SQL_API SQLConnect(
@@ -61,14 +80,11 @@ SQLRETURN SQL_API SQLConnect(
 
     config.apply_latency();
 
-    if (config.max_connections > 0) {
-        auto* env = conn->environment();
-        if (env && static_cast<int>(env->connections_.size()) >=
-                       config.max_connections) {
-            conn->add_diagnostic(sqlstate::CONNECTION_FAILURE, 0,
-                                 "Maximum connections exceeded");
-            return SQL_ERROR;
-        }
+    if (config.max_connections > 0 && !connection_budget_allows(conn,
+                                                               config.max_connections)) {
+        conn->add_diagnostic(sqlstate::CONNECTION_FAILURE, 0,
+                             "Maximum connections exceeded");
+        return SQL_ERROR;
     }
 
     // D6 makes this a no-op when the preset is already loaded, so a second
@@ -119,13 +135,11 @@ SQLRETURN SQL_API SQLDriverConnect(
     config.apply_latency();
     
     // Check max connections
-    if (config.max_connections > 0) {
-        auto* env = conn->environment();
-        if (env && static_cast<int>(env->connections_.size()) >= config.max_connections) {
-            conn->add_diagnostic(sqlstate::CONNECTION_FAILURE, 0,
-                                "Maximum connections exceeded");
-            return SQL_ERROR;
-        }
+    if (config.max_connections > 0 && !connection_budget_allows(conn,
+                                                               config.max_connections)) {
+        conn->add_diagnostic(sqlstate::CONNECTION_FAILURE, 0,
+                            "Maximum connections exceeded");
+        return SQL_ERROR;
     }
     
     // Store configuration

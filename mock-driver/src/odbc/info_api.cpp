@@ -535,7 +535,42 @@ SQLRETURN SQL_API SQLGetInfo(
             
         case SQL_SQL92_VALUE_EXPRESSIONS:
             RETURN_ULONG(SQL_SVE_CASE | SQL_SVE_CAST | SQL_SVE_COALESCE | SQL_SVE_NULLIF);
-            
+
+        // D29: these fell through to HY096, "information type out of range" -
+        // which is what a driver says about a type it does not recognise, not
+        // about one it simply never got round to. Every one of them is a Core
+        // or Level 1 type a client reasonably asks for.
+        case SQL_QUOTED_IDENTIFIER_CASE:
+            // The mock upper-cases unquoted identifiers and preserves quoted
+            // ones, which is SQL_IC_SENSITIVE for the quoted form.
+            RETURN_USHORT(SQL_IC_SENSITIVE);
+
+        case SQL_CORRELATION_NAME:
+            // The parser accepts `FROM t alias` but not `AS`; SQL_CN_DIFFERENT
+            // is the honest answer for "correlation names, but not any name".
+            RETURN_USHORT(SQL_CN_DIFFERENT);
+
+        case SQL_KEYWORDS:
+            // The words the mock's parser treats specially beyond the ODBC
+            // reserved list. Reporting the real set beats reporting none.
+            RETURN_STRING("MOCK_FN,MOCK_INOUT,INSERT_N_ROWS");
+
+        case SQL_MAX_STATEMENT_LEN:
+            // 0 means "no limit or unknown"; the mock has no limit, and D14
+            // removed the SQLSMALLINT truncation that used to impose one.
+            RETURN_ULONG(0);
+
+        case SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES2:
+        case SQL_STATIC_CURSOR_ATTRIBUTES2:
+            // What the cursor supports beyond fetching: the mock's result sets
+            // are read-only snapshots, so it reports the read side only.
+            RETURN_ULONG(SQL_CA2_READ_ONLY_CONCURRENCY);
+
+        case SQL_DYNAMIC_CURSOR_ATTRIBUTES2:
+        case SQL_KEYSET_CURSOR_ATTRIBUTES2:
+            // Neither cursor type is supported, so neither has attributes.
+            RETURN_ULONG(0);
+
         default:
             conn->add_diagnostic(sqlstate::INVALID_INFO_TYPE, 0,
                                 "Information type out of range");
@@ -649,7 +684,10 @@ SQLRETURN SQL_API SQLGetFunctions(
         SQL_API_SQLBINDCOL,
         SQL_API_SQLBINDPARAMETER,
         SQL_API_SQLBROWSECONNECT,
-        SQL_API_SQLBULKOPERATIONS,
+        // D29: SQL_API_SQLBULKOPERATIONS and SQL_API_SQLSETPOS were both
+        // claimed here while both entry points always answer HYC00. A
+        // client that trusts SQLGetFunctions - which is what it is for -
+        // then calls a function the driver has already decided to refuse.
         SQL_API_SQLCANCEL,
         SQL_API_SQLCLOSECURSOR,
         SQL_API_SQLCOLATTRIBUTE,
@@ -697,7 +735,6 @@ SQLRETURN SQL_API SQLGetFunctions(
         SQL_API_SQLSETDESCFIELD,
         SQL_API_SQLSETDESCREC,
         SQL_API_SQLSETENVATTR,
-        SQL_API_SQLSETPOS,
         SQL_API_SQLSETSTMTATTR,
         SQL_API_SQLSPECIALCOLUMNS,
         SQL_API_SQLSTATISTICS,

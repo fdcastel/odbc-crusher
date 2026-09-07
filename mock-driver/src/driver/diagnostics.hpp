@@ -26,6 +26,9 @@ namespace sqlstate {
     constexpr const char* STRING_TRUNCATED = "01004";
     constexpr const char* INVALID_CURSOR_STATE = "24000";
     constexpr const char* INVALID_TRANSACTION_STATE = "25000";
+    // D29: SQLColAttribute / SQLGetDescField / SQLSetDescField for a
+    // descriptor field the driver does not implement.
+    constexpr const char* INVALID_DESCRIPTOR_FIELD = "HY091";
     // D28: SQLEndTran with an fType that is neither SQL_COMMIT nor
     // SQL_ROLLBACK.
     constexpr const char* INVALID_TRANSACTION_OPERATION_CODE = "HY012";

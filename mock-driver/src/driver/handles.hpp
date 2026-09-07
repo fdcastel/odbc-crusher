@@ -180,6 +180,13 @@ public:
     // client that set it still got pattern matching from every catalog
     // function, which is the one thing the attribute exists to turn off.
     SQLULEN metadata_id_ = SQL_FALSE;
+    // D29: SQLSetCursorName discarded its argument and SQLGetCursorName
+    // synthesised a name from the handle address - so set-then-get did
+    // not round-trip, and a heap pointer leaked into a name applications
+    // put in SQL text.
+    std::string cursor_name_;
+    // A stable ordinal for the fallback name, assigned at construction.
+    unsigned long cursor_ordinal_ = 0;
     
     // Array parameter attributes (ODBC Arrays of Parameter Values)
     SQLUSMALLINT* param_status_ptr_ = nullptr;       // SQL_ATTR_PARAM_STATUS_PTR

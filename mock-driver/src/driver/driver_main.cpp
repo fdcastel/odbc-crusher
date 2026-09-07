@@ -4,6 +4,7 @@
 #include "driver/entry_guard.hpp"
 #include "driver/handles.hpp"
 #include "utils/buffer_copy.hpp"
+#include "utils/string_utils.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/mock_catalog.hpp"
 #include "mock/behaviors.hpp"
@@ -319,11 +320,11 @@ SQLRETURN SQL_API SQLSetCursorName(
     
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
-    
-    (void)szCursor;
-    (void)cbCursor;
-    
-    // Mock: accept but don't use cursor name
+    HandleLock lock(stmt);
+    stmt->clear_diagnostics();
+
+    // D29: the name was discarded, so set-then-get could not round-trip.
+    stmt->cursor_name_ = sql_to_string(szCursor, cbCursor);
     return SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hstmt)
@@ -337,8 +338,14 @@ SQLRETURN SQL_API SQLGetCursorName(
     auto* stmt = validate_stmt_handle(hstmt);
     if (!stmt) return SQL_INVALID_HANDLE;
     
-    // Return a generated cursor name
-    std::string cursor_name = "SQL_CUR" + std::to_string(reinterpret_cast<uintptr_t>(stmt));
+    // D29: this used to synthesise a name from the handle address, which
+    // both failed to round-trip a name the application had set and leaked a
+    // heap pointer into text applications put into SQL. Return what was set;
+    // fall back to a stable per-statement name that reveals nothing.
+    std::string cursor_name = stmt->cursor_name_;
+    if (cursor_name.empty()) {
+        cursor_name = "SQL_CUR" + std::to_string(stmt->cursor_ordinal_);
+    }
     
     // D18/D24: a hand-rolled copy that signalled nothing on truncation.
     // Returning plain SQL_SUCCESS also made any diagnostic invisible: a

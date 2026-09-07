@@ -1,4 +1,5 @@
 #include "handles.hpp"
+#include <atomic>
 #include <algorithm>
 
 namespace mock_odbc {
@@ -88,6 +89,11 @@ StatementHandle::StatementHandle(ConnectionHandle* conn)
     if (conn_) {
         conn_->statements_.push_back(this);
     }
+    // D29: the fallback cursor name used to be built from the handle
+    // address. A monotonic ordinal is just as unique and does not put a
+    // heap pointer into text the application uses in SQL.
+    static std::atomic<unsigned long> next_cursor_ordinal{1};
+    cursor_ordinal_ = next_cursor_ordinal.fetch_add(1);
     // The Windows DM calls SQLGetStmtAttrW for the four implicit
     // descriptor handles immediately after SQLAllocHandle(SQL_HANDLE_STMT).
     // If they are NULL the DM's internal statement structure is incomplete

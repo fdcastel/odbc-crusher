@@ -27,21 +27,76 @@ SQLRETURN SQL_API SQLGetDescField(
     (void)iRecord;
     (void)cbValueMax;
     
+    // D29: read back what SQLSetDescField now stores; a field an application
+    // can set and not read is only half implemented.
+    const DescriptorHandle::DescriptorRecord* rec =
+        (iRecord >= 1 && static_cast<size_t>(iRecord) <= desc->records_.size())
+            ? &desc->records_[static_cast<size_t>(iRecord) - 1]
+            : nullptr;
+    auto emit_small = [&](SQLSMALLINT v) {
+        if (rgbValue) *static_cast<SQLSMALLINT*>(rgbValue) = v;
+        if (pcbValue) *pcbValue = sizeof(SQLSMALLINT);
+    };
+    auto emit_len = [&](SQLLEN v) {
+        if (rgbValue) *static_cast<SQLLEN*>(rgbValue) = v;
+        if (pcbValue) *pcbValue = sizeof(SQLLEN);
+    };
+
     switch (iField) {
         case SQL_DESC_COUNT:
             if (rgbValue) *static_cast<SQLSMALLINT*>(rgbValue) = desc->count_;
             if (pcbValue) *pcbValue = sizeof(SQLSMALLINT);
             break;
-            
+
         case SQL_DESC_ALLOC_TYPE:
             if (rgbValue) *static_cast<SQLSMALLINT*>(rgbValue) = desc->alloc_type_;
             if (pcbValue) *pcbValue = sizeof(SQLSMALLINT);
             break;
+
+        case SQL_DESC_TYPE:
+            if (!rec) return SQL_NO_DATA;
+            emit_small(rec->type);
+            break;
+
+        case SQL_DESC_CONCISE_TYPE:
+            if (!rec) return SQL_NO_DATA;
+            emit_small(rec->concise_type);
+            break;
+
+        case SQL_DESC_PRECISION:
+            if (!rec) return SQL_NO_DATA;
+            emit_small(rec->precision);
+            break;
+
+        case SQL_DESC_SCALE:
+            if (!rec) return SQL_NO_DATA;
+            emit_small(rec->scale);
+            break;
+
+        case SQL_DESC_LENGTH:
+            if (!rec) return SQL_NO_DATA;
+            emit_len(rec->length);
+            break;
+
+        case SQL_DESC_OCTET_LENGTH:
+            if (!rec) return SQL_NO_DATA;
+            emit_len(rec->octet_length);
+            break;
+
+        case SQL_DESC_DATA_PTR:
+            if (!rec) return SQL_NO_DATA;
+            if (rgbValue) *static_cast<SQLPOINTER*>(rgbValue) = rec->data_ptr;
+            if (pcbValue) *pcbValue = sizeof(SQLPOINTER);
+            break;
             
         default:
-            // Return success for unknown fields
-            if (pcbValue) *pcbValue = 0;
-            break;
+            // D29: this returned SQL_SUCCESS with a zeroed output for every
+            // field it did not implement, so an application could not tell
+            // "the answer is 0" from "I do not know that field".
+            desc->add_diagnostic(sqlstate::INVALID_DESCRIPTOR_FIELD, 0,
+                                 "Invalid descriptor field identifier: "
+                                 + std::to_string(iField));
+            return SQL_ERROR;
     }
     
     return SQL_SUCCESS;
@@ -60,17 +115,85 @@ SQLRETURN SQL_API SQLSetDescField(
     HandleLock lock(desc);
     desc->clear_diagnostics();
 
-    (void)iRecord;
     (void)cbValue;
-    
+
+    // D29: the per-record fields were not implemented at all. They were
+    // accepted silently, so an application configuring an ARD - which is the
+    // only way to bind SQL_C_NUMERIC with a chosen precision and scale - was
+    // told every field took effect while none of them did.
+    auto record_for = [&](SQLSMALLINT rec) -> DescriptorHandle::DescriptorRecord* {
+        if (rec < 1) return nullptr;
+        if (static_cast<size_t>(rec) > desc->records_.size()) {
+            desc->records_.resize(static_cast<size_t>(rec));
+            if (desc->count_ < rec) desc->count_ = rec;
+        }
+        return &desc->records_[static_cast<size_t>(rec) - 1];
+    };
+    const SQLLEN value = reinterpret_cast<SQLLEN>(rgbValue);
+
     switch (iField) {
         case SQL_DESC_COUNT:
             desc->count_ = static_cast<SQLSMALLINT>(reinterpret_cast<intptr_t>(rgbValue));
             break;
+
+        case SQL_DESC_TYPE:
+        case SQL_DESC_CONCISE_TYPE: {
+            auto* rec = record_for(iRecord);
+            if (!rec) break;
+            rec->type = static_cast<SQLSMALLINT>(value);
+            rec->concise_type = static_cast<SQLSMALLINT>(value);
+            break;
+        }
+
+        case SQL_DESC_PRECISION: {
+            auto* rec = record_for(iRecord);
+            if (rec) rec->precision = static_cast<SQLSMALLINT>(value);
+            break;
+        }
+
+        case SQL_DESC_SCALE: {
+            auto* rec = record_for(iRecord);
+            if (rec) rec->scale = static_cast<SQLSMALLINT>(value);
+            break;
+        }
+
+        case SQL_DESC_LENGTH: {
+            auto* rec = record_for(iRecord);
+            if (rec) rec->length = value;
+            break;
+        }
+
+        case SQL_DESC_OCTET_LENGTH: {
+            auto* rec = record_for(iRecord);
+            if (rec) rec->octet_length = value;
+            break;
+        }
+
+        case SQL_DESC_DATA_PTR: {
+            auto* rec = record_for(iRecord);
+            if (rec) rec->data_ptr = rgbValue;
+            break;
+        }
+
+        case SQL_DESC_INDICATOR_PTR: {
+            auto* rec = record_for(iRecord);
+            if (rec) rec->indicator_ptr = static_cast<SQLLEN*>(rgbValue);
+            break;
+        }
+
+        case SQL_DESC_OCTET_LENGTH_PTR: {
+            auto* rec = record_for(iRecord);
+            if (rec) rec->octet_length_ptr = static_cast<SQLLEN*>(rgbValue);
+            break;
+        }
             
         default:
-            // Ignore unknown fields
-            break;
+            // D29: silently accepting a field the driver does not implement
+            // tells the application its setting took effect.
+            desc->add_diagnostic(sqlstate::INVALID_DESCRIPTOR_FIELD, 0,
+                                 "Invalid descriptor field identifier: "
+                                 + std::to_string(iField));
+            return SQL_ERROR;
     }
     
     return SQL_SUCCESS;
@@ -101,9 +224,17 @@ SQLRETURN SQL_API SQLGetDescRec(
     
     const auto& rec = desc->records_[iRecord - 1];
     
-    (void)szName;
-    (void)cbNameMax;
-    (void)pcbName;
+    // D29: the name output was explicitly discarded, so a caller asking
+    // SQLGetDescRec for a column's name got its buffer back untouched.
+    if (szName || pcbName) {
+        const BufferCopyResult res = copy_chars(
+            rec.name, 0, szName, static_cast<SQLLEN>(cbNameMax));
+        if (pcbName) *pcbName = static_cast<SQLSMALLINT>(res.remaining);
+        if (res.truncated) {
+            desc->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                 "String data, right truncated");
+        }
+    }
     
     if (pfType) *pfType = rec.type;
     if (pfSubType) *pfSubType = rec.datetime_interval_code;
@@ -194,6 +325,61 @@ SQLRETURN SQL_API SQLColAttribute(
     
     const std::string& col_name = stmt->column_names_[iCol - 1];
     SQLSMALLINT col_type = stmt->column_types_[iCol - 1];
+    const SQLULEN col_size = (iCol <= stmt->column_sizes_.size())
+                           ? stmt->column_sizes_[iCol - 1] : 0;
+
+    // D29 helpers, shared by the fields added below.
+    auto is_character_type = [](SQLSMALLINT t) {
+        return t == SQL_CHAR || t == SQL_VARCHAR || t == SQL_LONGVARCHAR
+            || t == SQL_WCHAR || t == SQL_WVARCHAR || t == SQL_WLONGVARCHAR;
+    };
+    auto type_name_for = [](SQLSMALLINT t) -> std::string {
+        switch (t) {
+            case SQL_INTEGER:        return "INTEGER";
+            case SQL_SMALLINT:       return "SMALLINT";
+            case SQL_BIGINT:         return "BIGINT";
+            case SQL_VARCHAR:        return "VARCHAR";
+            case SQL_CHAR:           return "CHAR";
+            case SQL_WVARCHAR:       return "NVARCHAR";
+            case SQL_WCHAR:          return "NCHAR";
+            case SQL_DECIMAL:        return "DECIMAL";
+            case SQL_NUMERIC:        return "NUMERIC";
+            case SQL_DOUBLE:         return "DOUBLE";
+            case SQL_REAL:           return "REAL";
+            case SQL_TYPE_DATE:      return "DATE";
+            case SQL_TYPE_TIME:      return "TIME";
+            case SQL_TYPE_TIMESTAMP: return "TIMESTAMP";
+            case SQL_BINARY:         return "BINARY";
+            case SQL_VARBINARY:      return "VARBINARY";
+            default:                 return "UNKNOWN";
+        }
+    };
+    auto octet_length_for = [&](SQLSMALLINT t, SQLULEN size) -> SQLLEN {
+        switch (t) {
+            case SQL_INTEGER:  return 4;
+            case SQL_SMALLINT: return 2;
+            case SQL_BIGINT:   return 8;
+            case SQL_DOUBLE:   return 8;
+            case SQL_REAL:     return 4;
+            case SQL_WCHAR:
+            case SQL_WVARCHAR:
+            case SQL_WLONGVARCHAR:
+                return static_cast<SQLLEN>(size ? size * 2 : 510);
+            default:
+                return static_cast<SQLLEN>(size ? size : 255);
+        }
+    };
+    auto emit_string = [&](const std::string& value) {
+        const BufferCopyResult res = copy_chars(
+            value, 0, pCharAttr, static_cast<SQLLEN>(cbCharAttrMax));
+        if (pcbCharAttr) {
+            *pcbCharAttr = static_cast<SQLSMALLINT>(res.remaining);
+        }
+        if (res.truncated) {
+            stmt->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
+                                 "String data, right truncated");
+        }
+    };
     
     switch (iField) {
         case SQL_DESC_NAME:
@@ -216,6 +402,9 @@ SQLRETURN SQL_API SQLColAttribute(
             break;
             
         case SQL_DESC_TYPE:
+        // SQL_DESC_CONCISE_TYPE and SQL_COLUMN_TYPE are both 2, so the
+        // concise type is already answered here - D29 listed it as
+        // missing, but it was reachable all along under the other name.
         case SQL_COLUMN_TYPE:
             if (pNumAttr) *pNumAttr = col_type;
             break;
@@ -286,10 +475,59 @@ SQLRETURN SQL_API SQLColAttribute(
             if (pNumAttr) *pNumAttr = SQL_ATTR_READONLY;
             break;
             
-        default:
-            if (pNumAttr) *pNumAttr = 0;
-            if (pcbCharAttr) *pcbCharAttr = 0;
+        // D29: ten fields the spec defines that used to fall through to a
+        // silent zero. An application reading SQL_DESC_COUNT off a result set
+        // was told the set had no columns.
+        case SQL_DESC_COUNT:
+            if (pNumAttr) {
+                *pNumAttr = static_cast<SQLLEN>(stmt->column_names_.size());
+            }
             break;
+
+        case SQL_DESC_OCTET_LENGTH:
+            if (pNumAttr) *pNumAttr = octet_length_for(col_type, col_size);
+            break;
+
+        case SQL_DESC_TYPE_NAME:
+            emit_string(type_name_for(col_type));
+            break;
+
+        case SQL_DESC_LABEL:
+        case SQL_DESC_BASE_COLUMN_NAME:
+            emit_string(col_name);
+            break;
+
+        case SQL_DESC_TABLE_NAME:
+        case SQL_DESC_BASE_TABLE_NAME:
+            // The mock does not track which table a result column came from,
+            // and the spec allows an empty string for that case. Saying so is
+            // different from saying nothing.
+            emit_string("");
+            break;
+
+        case SQL_DESC_UNNAMED:
+            if (pNumAttr) {
+                *pNumAttr = col_name.empty() ? SQL_UNNAMED : SQL_NAMED;
+            }
+            break;
+
+        case SQL_DESC_CASE_SENSITIVE:
+            if (pNumAttr) {
+                *pNumAttr = is_character_type(col_type) ? SQL_TRUE : SQL_FALSE;
+            }
+            break;
+
+        case SQL_DESC_SEARCHABLE:
+            if (pNumAttr) *pNumAttr = SQL_PRED_SEARCHABLE;
+            break;
+
+        default:
+            // D29: SQL_SUCCESS with a zeroed output said "the answer is 0"
+            // for every field the driver does not implement.
+            stmt->add_diagnostic(sqlstate::INVALID_DESCRIPTOR_FIELD, 0,
+                                 "Invalid descriptor field identifier: "
+                                 + std::to_string(iField));
+            return SQL_ERROR;
     }
     
     return SQL_SUCCESS;
