@@ -1434,6 +1434,63 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
         return result;
     }
     
+    // D41: a select-list item that is a literal rather than a column.
+    //
+    // `SELECT 1 FROM T` used to be rejected with 42S22 "Column not found: 1",
+    // which made two things impossible against the reference driver: the
+    // `SELECT 1 FROM <table> WHERE 1=0` existence probe that both
+    // create_test_table() helpers use before reusing a table (so **A15**'s
+    // reuse path was unreachable), and every dialect variant **A2** builds -
+    // `SELECT <expr> FROM RDB$DATABASE`, `SELECT <expr> FROM DUAL` - which
+    // are all constants selected from a table.
+    //
+    // Recognises integers, decimals and single-quoted strings. Anything else
+    // still falls through to the column lookup and its 42S22, which is the
+    // right answer for a genuine typo.
+    struct SelectLiteral {
+        bool is_literal = false;
+        CellValue value;
+        SQLSMALLINT sql_type = SQL_VARCHAR;
+        SQLULEN size = 0;
+    };
+    auto parse_select_literal = [](const std::string& raw) -> SelectLiteral {
+        SelectLiteral out;
+        const std::string t = trim(raw);
+        if (t.size() >= 2 && t.front() == '\'' && t.back() == '\'') {
+            out.is_literal = true;
+            out.value = t.substr(1, t.size() - 2);
+            out.sql_type = SQL_VARCHAR;
+            out.size = static_cast<SQLULEN>(t.size());
+            return out;
+        }
+        if (t.empty()) return out;
+        try {
+            size_t used = 0;
+            long long i = std::stoll(t, &used);
+            if (used == t.size()) {
+                out.is_literal = true;
+                out.value = i;
+                out.sql_type = SQL_INTEGER;
+                out.size = 10;
+                return out;
+            }
+        } catch (...) {
+        }
+        try {
+            size_t used = 0;
+            double d = std::stod(t, &used);
+            if (used == t.size()) {
+                out.is_literal = true;
+                out.value = d;
+                out.sql_type = SQL_DOUBLE;
+                out.size = 15;
+                return out;
+            }
+        } catch (...) {
+        }
+        return out;
+    };
+
     switch (query.query_type) {
         case ParsedQuery::QueryType::Select: {
             // COUNT(*)
@@ -1477,6 +1534,16 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                         }
                     }
                     if (!found) {
+                        // D41: a constant in the select list is not a missing
+                        // column. Name the result column after the expression,
+                        // which is what most engines do when there is no alias.
+                        SelectLiteral lit = parse_select_literal(col_name);
+                        if (lit.is_literal) {
+                            result.column_names.push_back(trim(col_name));
+                            result.column_types.push_back(lit.sql_type);
+                            result.column_sizes.push_back(lit.size);
+                            continue;
+                        }
                         result.success = false;
                         result.error_message = "Column not found: " + col_name;
                         result.error_sqlstate = "42S22";
@@ -1550,6 +1617,22 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                             break;
                         }
                     }
+                    // D41: a constant predicate. `WHERE 1=0` has no column on
+                    // the left, so the filter below was skipped entirely and
+                    // the statement returned every row - which is the opposite
+                    // of what it asks for. It is the predicate the existence
+                    // probe in both create_test_table() helpers uses precisely
+                    // because it should match nothing.
+                    if (col_idx < 0) {
+                        SelectLiteral left = parse_select_literal(filter_col);
+                        if (left.is_literal) {
+                            bool matched = false;
+                            for (const auto& fv : filter_values) {
+                                if (left.value == fv) { matched = true; break; }
+                            }
+                            if (!matched) result.data.clear();
+                        }
+                    }
                     if (col_idx >= 0) {
                         std::vector<MockRow> filtered;
                         for (const auto& row : result.data) {
@@ -1607,21 +1690,42 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
             
             // If specific columns were requested, project only those columns
             if (!all_columns && !result.data.empty()) {
-                std::vector<int> col_indices;
+                // D41: one entry per select-list item, so a constant keeps its
+                // position. The old code built a column-index list and simply
+                // dropped anything that was not a column, which silently
+                // shifted every later column one place left.
+                struct Projection {
+                    int index = -1;          // >= 0: a table column
+                    bool literal = false;
+                    CellValue value;
+                };
+                std::vector<Projection> plan;
                 for (const auto& col_name : query.columns) {
+                    Projection p;
                     for (size_t j = 0; j < table->columns.size(); ++j) {
                         if (to_upper(table->columns[j].name) == to_upper(col_name)) {
-                            col_indices.push_back(static_cast<int>(j));
+                            p.index = static_cast<int>(j);
                             break;
                         }
                     }
+                    if (p.index < 0) {
+                        SelectLiteral lit = parse_select_literal(col_name);
+                        if (lit.is_literal) {
+                            p.literal = true;
+                            p.value = lit.value;
+                        }
+                    }
+                    plan.push_back(std::move(p));
                 }
                 std::vector<MockRow> projected;
                 for (const auto& row : result.data) {
                     MockRow proj_row;
-                    for (int idx : col_indices) {
-                        if (idx < static_cast<int>(row.size())) {
-                            proj_row.push_back(row[idx]);
+                    for (const auto& p : plan) {
+                        if (p.literal) {
+                            proj_row.push_back(p.value);
+                        } else if (p.index >= 0 &&
+                                   p.index < static_cast<int>(row.size())) {
+                            proj_row.push_back(row[p.index]);
                         } else {
                             proj_row.push_back(std::monostate{});
                         }

@@ -15,11 +15,14 @@ public:
     std::vector<TestResult> run() override;
     std::string category_name() const override { return "Array Parameter Tests"; }
     
-private:
-    // Table lifecycle — creates ODBC_TEST_ARRAY with autocommit ON, drops on cleanup
+protected:
+    // Table lifecycle — creates ODBC_TEST_ARRAY with autocommit ON, drops on
+    // cleanup. `protected` for the reason given in transaction_tests.hpp:
+    // A15's reuse path needs a test, and a test cannot crash a previous run.
     bool create_test_table();
     void drop_test_table();
-    
+
+private:
     // Stores the last DDL error message for reporting in skip suggestions
     std::string last_ddl_error_;
     

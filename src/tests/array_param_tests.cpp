@@ -18,11 +18,11 @@ namespace odbc_crusher::tests {
 
 bool ArrayParamTests::create_test_table() {
     try {
-        // Ensure autocommit ON so DDL commits immediately
-        SQLUINTEGER old_ac = 0;
-        SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+        // A14: this was the fifth copy of the save/restore, and it kept the
+        // bug the others had - `old_ac = 0` with the read's return code
+        // ignored, and SQL_AUTOCOMMIT_OFF *is* 0. It was missed in A14's
+        // first sweep because the search stopped at transaction_tests.
+        ScopedAutocommitOn ac(conn_.get_handle());
 
         // Strategy 0: Check if the test table already exists from a prior run.
         // This avoids needing DDL privileges when the table is already there.
@@ -30,9 +30,20 @@ bool ArrayParamTests::create_test_table() {
             try {
                 core::OdbcStatement probe(conn_);
                 probe.execute("SELECT 1 FROM ODBC_TEST_ARRAY WHERE 1=0");
-                // Table exists — no DDL needed
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                  (SQLPOINTER)(intptr_t)old_ac, 0);
+
+                // A15: reusing the table also reused its rows. The row-wise
+                // binding probes insert IDs 9990-9992 and never delete them,
+                // and one of them asserts that
+                // `WHERE ID IN (9991, 9992)` returns exactly two rows - so a
+                // second run against the same database saw four and failed a
+                // correct driver for the previous run's leftovers.
+                try {
+                    core::OdbcStatement clear(conn_);
+                    clear.execute("DELETE FROM ODBC_TEST_ARRAY");
+                } catch (...) {
+                    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(),
+                               SQL_ROLLBACK);
+                }
                 return true;
             } catch (...) {
                 // Table doesn't exist — try to create it
@@ -53,8 +64,6 @@ bool ArrayParamTests::create_test_table() {
             try {
                 core::OdbcStatement stmt(conn_);
                 stmt.execute(sql);
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                  (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
             } catch (const core::OdbcError& e) {
                 last_ddl_error_ = e.format_diagnostics();
@@ -78,8 +87,6 @@ bool ArrayParamTests::create_test_table() {
             try {
                 core::OdbcStatement stmt(conn_);
                 stmt.execute(sql);
-                SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                                  (SQLPOINTER)(intptr_t)old_ac, 0);
                 return true;
             } catch (const core::OdbcError& e) {
                 last_ddl_error_ = e.format_diagnostics();
@@ -91,10 +98,7 @@ bool ArrayParamTests::create_test_table() {
             }
         }
 
-        // Restore autocommit setting
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)(intptr_t)old_ac, 0);
-        return false;
+        return false;   // A14: ScopedAutocommitOn restores on the way out.
     } catch (...) {
         return false;
     }

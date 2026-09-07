@@ -19,6 +19,7 @@ add_executable(odbc_crusher_tests
     unit/test_crash_guard.cpp
     unit/test_test_base.cpp
     unit/test_row_verification.cpp
+    unit/test_stale_table_reuse.cpp
     unit/test_console_reporter.cpp
     unit/test_json_reporter.cpp
 )

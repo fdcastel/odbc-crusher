@@ -143,6 +143,7 @@ add_executable(mock-odbc-tests
     tests/test_silent_corruption.cpp
     tests/test_param_binding.cpp
     tests/test_dml.cpp
+    tests/test_literal_select.cpp
     ${MOCK_DRIVER_CORE_SOURCES}
 )
 

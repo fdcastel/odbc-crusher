@@ -25,12 +25,16 @@ private:
     // isolation often leak state when both fire at once.
     TestResult test_rollback_with_open_cursor();
 
-    // Helper to create test table
-    bool create_test_table();
-    void drop_test_table();
-    
     // Stores the last DDL error message for reporting in skip suggestions
     std::string last_ddl_error_;
+
+protected:
+    // Table lifecycle. `protected` rather than `private` so a test can
+    // exercise the reuse path directly - A15's fix (clearing a table left
+    // behind by a crashed run) is otherwise only reachable by crashing a
+    // previous run, which is not something a test can arrange.
+    bool create_test_table();
+    void drop_test_table();
 };
 
 } // namespace odbc_crusher::tests

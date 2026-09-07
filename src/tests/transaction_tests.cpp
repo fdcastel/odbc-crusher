@@ -32,7 +32,23 @@ bool TransactionTests::create_test_table() {
             try {
                 core::OdbcStatement probe(conn_);
                 probe.execute("SELECT 1 FROM ODBC_TEST_TXN WHERE 1=0");
-                // Table exists — no DDL needed
+
+                // A15: the table survives a crashed run - main.cpp's crash
+                // guard keeps the process alive past an abort, so the DROP
+                // never happens - and this path reused it *with its rows*.
+                // The commit probe then asserts COUNT(*) == 1 and the
+                // rollback probe COUNT(*) == 0, so yesterday's leftovers
+                // fail a correct driver today. Clear it before handing it
+                // back. A DELETE that fails is not fatal: the probes will
+                // report a count mismatch, which is the honest outcome when
+                // the table cannot be emptied.
+                try {
+                    core::OdbcStatement clear(conn_);
+                    clear.execute("DELETE FROM ODBC_TEST_TXN");
+                } catch (...) {
+                    SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(),
+                               SQL_ROLLBACK);
+                }
                 return true;
             } catch (...) {
                 // Table doesn't exist — try to create it

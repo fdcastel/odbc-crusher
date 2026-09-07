@@ -58,15 +58,9 @@ bool ParameterBindingTests::create_roundtrip_table(
     const std::string& table_name,
     const std::string& val_ddl)
 {
-    SQLUINTEGER old_ac = 0;
-    SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
-    SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                      (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
-
-    auto restore_ac = [&]() {
-        SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                          (SQLPOINTER)(intptr_t)old_ac, 0);
-    };
+    // A14: another copy of the save/restore that treated a failed read as
+    // SQL_AUTOCOMMIT_OFF. Missed in A14's first sweep.
+    ScopedAutocommitOn ac(conn_.get_handle());
 
     const std::vector<std::string> ddl = {
         "CREATE TABLE " + table_name + " (ID INTEGER, VAL " + val_ddl + ")",
@@ -89,7 +83,7 @@ bool ParameterBindingTests::create_roundtrip_table(
         return false;
     };
 
-    if (try_create()) { restore_ac(); return true; }
+    if (try_create()) return true;
 
     try {
         core::OdbcStatement drop_stmt(conn_);
@@ -98,24 +92,17 @@ bool ParameterBindingTests::create_roundtrip_table(
         SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
     }
 
-    bool ok = try_create();
-    restore_ac();
-    return ok;
+    return try_create();
 }
 
 void ParameterBindingTests::drop_roundtrip_table(const std::string& table_name) {
-    SQLUINTEGER old_ac = 0;
-    SQLGetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT, &old_ac, 0, nullptr);
-    SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                      (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+    ScopedAutocommitOn ac(conn_.get_handle());   // A14
     try {
         core::OdbcStatement s(conn_);
         s.execute("DROP TABLE " + table_name);
     } catch (...) {
         SQLEndTran(SQL_HANDLE_DBC, conn_.get_handle(), SQL_ROLLBACK);
     }
-    SQLSetConnectAttr(conn_.get_handle(), SQL_ATTR_AUTOCOMMIT,
-                      (SQLPOINTER)(intptr_t)old_ac, 0);
 }
 
 TestResult ParameterBindingTests::test_bindparam_wchar_input() {
