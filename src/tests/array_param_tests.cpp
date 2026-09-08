@@ -132,14 +132,11 @@ std::vector<TestResult> ArrayParamTests::run() {
 // common one would have spread the weaker behaviour to all ten.
 bool ArrayParamTests::prepare_array_insert(core::OdbcStatement& stmt,
                                            TestResult& r, const char* sql) {
-    SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-                                SqlWcharBuf(sql).ptr(), SQL_NTS);
-    if (!SQL_SUCCEEDED(ret)) {
-        ret = SQLPrepare(stmt.get_handle(),
-                         reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql)),
-                         SQL_NTS);
-    }
-    if (SQL_SUCCEEDED(ret)) return true;
+    // D78: the W-then-ANSI shape C9 found at the best of the ten prologues now
+    // lives in TestBase, where the other five copies of it went too. What is
+    // left here is what is this helper's own - the skip, and a message naming
+    // the statement.
+    if (SQL_SUCCEEDED(prepare_w_then_ansi(stmt, {sql}))) return true;
 
     r.status = TestStatus::SKIP_INCONCLUSIVE;
     r.actual = std::string("Could not prepare `") + sql +

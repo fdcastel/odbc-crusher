@@ -104,24 +104,11 @@ TestResult ParameterBindingTests::test_bindparam_wchar_input() {
             "SELECT CAST(? AS VARCHAR(50))",
             "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE"
         };
-        SQLRETURN ret = SQL_ERROR;
-        // Strategy 1: Try W-function (SQLPrepareW)
-        for (const auto& q : queries) {
-            ret = SQLPrepareW(stmt.get_handle(),
-                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
-            if (SQL_SUCCEEDED(ret)) break;
-            SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
-        }
-        // Strategy 2: Fall back to ANSI SQLPrepare if W-function fails
-        // (some drivers export W-functions but have broken W→A conversion)
-        if (!SQL_SUCCEEDED(ret)) {
-            for (const auto& q : queries) {
-                ret = SQLPrepare(stmt.get_handle(),
-                    (SQLCHAR*)q.c_str(), SQL_NTS);
-                if (SQL_SUCCEEDED(ret)) break;
-                SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
-            }
-        }
+        // D78: W first, then ANSI. The fallback is for a driver exporting
+        // both widths with broken W conversion; against a Unicode-only
+        // driver the manager converts the ANSI attempt back into the same
+        // W entry point, so it cannot help. One copy, not six.
+        SQLRETURN ret = prepare_w_then_ansi(stmt, queries);
         
         if (!SQL_SUCCEEDED(ret)) {
             r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -177,23 +164,11 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
             "SELECT CAST(? AS VARCHAR(50))",
             "SELECT CAST(? AS VARCHAR(50)) FROM RDB$DATABASE"
         };
-        SQLRETURN ret = SQL_ERROR;
-        // Strategy 1: Try W-function (SQLPrepareW)
-        for (const auto& q : queries) {
-            ret = SQLPrepareW(stmt.get_handle(),
-                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
-            if (SQL_SUCCEEDED(ret)) break;
-            SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
-        }
-        // Strategy 2: Fall back to ANSI SQLPrepare if W-function fails
-        if (!SQL_SUCCEEDED(ret)) {
-            for (const auto& q : queries) {
-                ret = SQLPrepare(stmt.get_handle(),
-                    (SQLCHAR*)q.c_str(), SQL_NTS);
-                if (SQL_SUCCEEDED(ret)) break;
-                SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
-            }
-        }
+        // D78: W first, then ANSI. The fallback is for a driver exporting
+        // both widths with broken W conversion; against a Unicode-only
+        // driver the manager converts the ANSI attempt back into the same
+        // W entry point, so it cannot help. One copy, not six.
+        SQLRETURN ret = prepare_w_then_ansi(stmt, queries);
         
         if (!SQL_SUCCEEDED(ret)) {
             r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -244,23 +219,11 @@ TestResult ParameterBindingTests::test_param_bound_value_reread_on_execute() {
             "SELECT CAST(? AS INTEGER)",
             "SELECT CAST(? AS INTEGER) FROM RDB$DATABASE"
         };
-        SQLRETURN ret = SQL_ERROR;
-        // Strategy 1: Try W-function (SQLPrepareW)
-        for (const auto& q : queries) {
-            ret = SQLPrepareW(stmt.get_handle(),
-                SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
-            if (SQL_SUCCEEDED(ret)) break;
-            SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
-        }
-        // Strategy 2: Fall back to ANSI SQLPrepare if W-function fails
-        if (!SQL_SUCCEEDED(ret)) {
-            for (const auto& q : queries) {
-                ret = SQLPrepare(stmt.get_handle(),
-                    (SQLCHAR*)q.c_str(), SQL_NTS);
-                if (SQL_SUCCEEDED(ret)) break;
-                SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
-            }
-        }
+        // D78: W first, then ANSI. The fallback is for a driver exporting
+        // both widths with broken W conversion; against a Unicode-only
+        // driver the manager converts the ANSI attempt back into the same
+        // W entry point, so it cannot help. One copy, not six.
+        SQLRETURN ret = prepare_w_then_ansi(stmt, queries);
         
         if (!SQL_SUCCEEDED(ret)) {
             r.status = TestStatus::SKIP_INCONCLUSIVE;

@@ -1,6 +1,7 @@
 #include "test_base.hpp"
 #include "core/odbc_error.hpp"
 #include "core/odbc_statement.hpp"
+#include "sqlwchar_utils.hpp"   // D78: SqlWcharBuf
 
 #ifdef _WIN32
 #include <windows.h>
@@ -282,6 +283,49 @@ bool TestBase::get_data_full(SQLHSTMT hstmt, SQLUSMALLINT col,
             return false;
         }
     }
+}
+
+// D78: the W-then-ANSI fallback, once instead of six times.
+//
+// See the header for why this branch cannot be tested end to end. The loop
+// shape is the one all six sites had: try every dialect variant as Unicode
+// first, and only if none took, try them all again as ANSI.
+SQLRETURN TestBase::prepare_w_then_ansi(core::OdbcStatement& stmt,
+                                        const std::vector<std::string>& queries) {
+    SQLRETURN ret = SQL_ERROR;
+    for (const auto& q : queries) {
+        ret = SQLPrepareW(stmt.get_handle(), SqlWcharBuf(q.c_str()).ptr(),
+                          SQL_NTS);
+        if (SQL_SUCCEEDED(ret)) return ret;
+        SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+    }
+    for (const auto& q : queries) {
+        ret = SQLPrepare(stmt.get_handle(),
+                         reinterpret_cast<SQLCHAR*>(const_cast<char*>(q.c_str())),
+                         SQL_NTS);
+        if (SQL_SUCCEEDED(ret)) return ret;
+        SQLFreeStmt(stmt.get_handle(), SQL_RESET_PARAMS);
+    }
+    return ret;
+}
+
+SQLRETURN TestBase::exec_direct_w_then_ansi(core::OdbcStatement& stmt,
+                                            const std::vector<std::string>& queries) {
+    SQLRETURN ret = SQL_ERROR;
+    for (const auto& q : queries) {
+        ret = SQLExecDirectW(stmt.get_handle(), SqlWcharBuf(q.c_str()).ptr(),
+                             SQL_NTS);
+        if (SQL_SUCCEEDED(ret)) return ret;
+        SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+    }
+    for (const auto& q : queries) {
+        ret = SQLExecDirect(stmt.get_handle(),
+                            reinterpret_cast<SQLCHAR*>(const_cast<char*>(q.c_str())),
+                            SQL_NTS);
+        if (SQL_SUCCEEDED(ret)) return ret;
+        SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+    }
+    return ret;
 }
 
 // A19

@@ -123,24 +123,11 @@ TestResult UnicodeTests::test_describecol_wchar_names() {
                 "SELECT * FROM RDB$DATABASE",
                 "SELECT * FROM CUSTOMERS"
             };
-            SQLRETURN ret = SQL_ERROR;
-            // Strategy 1: Try W-function (SQLExecDirectW)
-            for (const auto& q : queries) {
-                ret = SQLExecDirectW(stmt.get_handle(),
-                    SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
-                if (SQL_SUCCEEDED(ret)) break;
-                SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
-            }
-            // Strategy 2: Fall back to ANSI SQLExecDirect if W-function fails
-            // (some drivers export W-functions but have broken W→A conversion)
-            if (!SQL_SUCCEEDED(ret)) {
-                for (const auto& q : queries) {
-                    ret = SQLExecDirect(stmt.get_handle(),
-                        (SQLCHAR*)q.c_str(), SQL_NTS);
-                    if (SQL_SUCCEEDED(ret)) break;
-                    SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
-                }
-            }
+            // D78: W first, then ANSI. The fallback is for a driver exporting
+            // both widths with broken W conversion; against a Unicode-only
+            // driver the manager converts the ANSI attempt back into the same
+            // W entry point, so it cannot help. One copy, not six.
+            SQLRETURN ret = exec_direct_w_then_ansi(stmt, queries);
 
             if (!SQL_SUCCEEDED(ret)) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
@@ -204,23 +191,11 @@ TestResult UnicodeTests::test_getdata_sql_c_wchar() {
                 "SELECT CAST('Hello' AS VARCHAR(50)) FROM RDB$DATABASE",
                 "SELECT 'Hello'"
             };
-            SQLRETURN ret = SQL_ERROR;
-            // Strategy 1: Try W-function (SQLExecDirectW)
-            for (const auto& q : queries) {
-                ret = SQLExecDirectW(stmt.get_handle(),
-                    SqlWcharBuf(q.c_str()).ptr(), SQL_NTS);
-                if (SQL_SUCCEEDED(ret)) break;
-                SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
-            }
-            // Strategy 2: Fall back to ANSI SQLExecDirect if W-function fails
-            if (!SQL_SUCCEEDED(ret)) {
-                for (const auto& q : queries) {
-                    ret = SQLExecDirect(stmt.get_handle(),
-                        (SQLCHAR*)q.c_str(), SQL_NTS);
-                    if (SQL_SUCCEEDED(ret)) break;
-                    SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
-                }
-            }
+            // D78: W first, then ANSI. The fallback is for a driver exporting
+            // both widths with broken W conversion; against a Unicode-only
+            // driver the manager converts the ANSI attempt back into the same
+            // W entry point, so it cannot help. One copy, not six.
+            SQLRETURN ret = exec_direct_w_then_ansi(stmt, queries);
 
             if (!SQL_SUCCEEDED(ret)) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;

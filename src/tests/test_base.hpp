@@ -350,6 +350,27 @@ public:
     static BoundedString bounded_string(const char* buf, size_t capacity,
                                         SQLLEN reported);
 
+    // Try each query as Unicode, then each as ANSI; return the last result
+    // code. D78.
+    //
+    // Six probes had this inline, in two shapes. The fallback exists for a
+    // driver that exports both widths and whose W conversion is broken, which
+    // is a real shape - but it cannot help against a Unicode-only driver,
+    // because the driver manager converts the ANSI attempt back into the same
+    // W entry point. D78 measured that: naming the W function and naming the
+    // ANSI one produce identical reports.
+    //
+    // So this branch cannot be exercised end to end by any test here. One copy
+    // of an untestable branch is better than six.
+    static SQLRETURN prepare_w_then_ansi(core::OdbcStatement& stmt,
+                                         const std::vector<std::string>& queries);
+
+    // As above, for SQLExecDirectW / SQLExecDirect. Separate rather than a flag
+    // because the two reset differently between attempts: a failed prepare
+    // resets parameters, a failed execute closes the cursor.
+    static SQLRETURN exec_direct_w_then_ansi(core::OdbcStatement& stmt,
+                                             const std::vector<std::string>& queries);
+
     // Point an ARD field at SQL_C_NUMERIC with a precision and scale — C11.
     //
     // The ODBC spec requires this before SQLGetData with SQL_C_NUMERIC: the
