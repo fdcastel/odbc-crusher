@@ -14,6 +14,7 @@ std::vector<TestResult> ConnectionTests::run() {
         test_connection_attributes(),
         test_connection_timeout(),
         test_connection_pooling(),
+        test_reused_connection_starts_clean(),   // I8
     };
 }
 
@@ -215,6 +216,128 @@ TestResult ConnectionTests::test_connection_pooling() {
                 r.status = TestStatus::SKIP_UNSUPPORTED;
                 r.suggestion = "Connection pooling is an optional ODBC feature";
             }
+        });
+}
+
+// I8 / PORT 10.B — what a reused connection hands to the next caller.
+//
+// Connection pooling gives the *same* handle to the next application, so
+// anything the previous one left behind becomes its problem: an open
+// transaction, autocommit switched off, a changed isolation level. A driver
+// that pools without resetting turns one careless caller into a bug in
+// somebody else's code.
+//
+// This deliberately does not turn pooling on: SQL_ATTR_CONNECTION_POOLING is
+// an environment attribute that must be set before the environment handle
+// exists, and the environment here is already open. What it checks instead is
+// the property pooling depends on — that a fresh connection to the same
+// target starts in the documented default state, whoever used it last.
+TestResult ConnectionTests::test_reused_connection_starts_clean() {
+    return run_test(
+        "test_reconnected_handle_is_usable", "SQLDisconnect/SQLConnect",
+        "A reconnected handle works, with no session state carried over",
+        Severity::ERR, ConformanceLevel::LEVEL_1,
+        "ODBC 3.8 SQLDisconnect, SQLConnect",
+        [&](TestResult& r) {
+            auto sibling = open_sibling_connection();
+            if (!sibling) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "No connection string available to open a second "
+                           "connection with";
+                return;
+            }
+
+            // Leave it in the state a pooled connection is most often
+            // returned in: autocommit off, with work in flight.
+            SQLRETURN rc = SQLSetConnectAttr(
+                sibling->get_handle(), SQL_ATTR_AUTOCOMMIT,
+                reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver declined SQL_AUTOCOMMIT_OFF, so it cannot "
+                           "be left in that state to begin with";
+                return;
+            }
+
+            RoundTripTableGuard table(conn_, "ODBC_CRUSHER_REUSE_CONN",
+                                      "INTEGER");
+            if (!table.ok()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create a table to test with: " +
+                           table.last_error();
+                return;
+            }
+
+            {
+                core::OdbcStatement stmt(*sibling);
+                stmt.execute("INSERT INTO " + table.name() + " VALUES (7777)");
+            }
+            // SQLDisconnect may legitimately refuse while this is open — see
+            // test_disconnect_with_open_transaction, which is the probe for
+            // that. This one is about what comes back afterwards, so end the
+            // transaction the documented way first.
+            SQLEndTran(SQL_HANDLE_DBC, sibling->get_handle(), SQL_ROLLBACK);
+
+            sibling->disconnect();
+            sibling->connect(connection_string());
+
+            // The graded question: is the handle actually usable again? A
+            // driver that pools a connection badly hands back one that is
+            // open but wedged — every statement on it failing, or failing
+            // only for the second caller.
+            try {
+                core::OdbcStatement stmt(*sibling);
+                stmt.execute("INSERT INTO " + table.name() + " VALUES (7778)");
+                SQLEndTran(SQL_HANDLE_DBC, sibling->get_handle(), SQL_COMMIT);
+            } catch (const core::OdbcError& e) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = std::string("Reconnected handle could not execute: ") +
+                           e.what();
+                r.suggestion = "A handle that reconnects must be as usable as "
+                               "a new one. Anything less makes connection "
+                               "pooling unsafe.";
+                return;
+            }
+
+            // And the rolled-back row must not have come back with it.
+            core::OdbcStatement check(conn_);
+            check.execute("SELECT COUNT(*) FROM " + table.name() +
+                          " WHERE ID = 7777");
+            SQLINTEGER stale = -1;
+            SQLLEN ind = 0;
+            if (check.fetch() &&
+                SQL_SUCCEEDED(SQLGetData(check.get_handle(), 1, SQL_C_SLONG,
+                                         &stale, 0, &ind)) && stale != 0) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "A rolled-back row reappeared after reconnecting "
+                           "(found " + std::to_string(stale) + ")";
+                r.suggestion = "Reconnecting must not resurrect session state "
+                               "the previous connection discarded";
+                return;
+            }
+
+            // Whether SQL_ATTR_AUTOCOMMIT survived is reported and
+            // deliberately not graded. Connection attributes belong to the
+            // handle, not the session, and persist until changed or the
+            // handle is freed — so a driver that keeps the caller's setting
+            // across a reconnect is right, and the first version of this
+            // probe was wrong to fail it.
+            SQLUINTEGER autocommit = 0;
+            const bool readable = SQL_SUCCEEDED(SQLGetConnectAttr(
+                sibling->get_handle(), SQL_ATTR_AUTOCOMMIT, &autocommit, 0,
+                nullptr));
+            r.status = TestStatus::PASS;
+            r.actual = "Reconnected handle executes and commits normally; "
+                       "no discarded work came back. SQL_ATTR_AUTOCOMMIT "
+                       "after reconnect: " +
+                       (readable ? (autocommit == SQL_AUTOCOMMIT_ON
+                                        ? std::string("ON (reset)")
+                                        : std::string("OFF (retained, which "
+                                                      "the handle contract "
+                                                      "allows)"))
+                                 : std::string("not readable"));
         });
 }
 

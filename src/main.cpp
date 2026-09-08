@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cctype>
 #include <functional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include <iostream>
@@ -51,12 +52,26 @@ namespace {
 // class actually reports - so --list-categories printed names that --category
 // would then refuse to match. `category_name()` is where a category's name is
 // defined; anything else is a copy waiting to drift.
-using CategoryFactory =
-    std::function<std::unique_ptr<tests::TestBase>(core::OdbcConnection&)>;
+// C13: the connection string travels with the connection, so a probe that
+// needs a second one it may break can open it.
+using CategoryFactory = std::function<std::unique_ptr<tests::TestBase>(
+    core::OdbcConnection&, const std::string&)>;
 
+// Only the categories that need a sibling connection take the string, and
+// they say so by declaring the two-argument constructor. Adding it to all 23
+// would be 46 files of boilerplate asserting a need that two of them have.
 template <typename T>
 CategoryFactory make_category() {
-    return [](core::OdbcConnection& c) { return std::make_unique<T>(c); };
+    return [](core::OdbcConnection& c, const std::string& cs)
+               -> std::unique_ptr<tests::TestBase> {
+        if constexpr (std::is_constructible_v<T, core::OdbcConnection&,
+                                              const std::string&>) {
+            return std::make_unique<T>(c, cs);
+        } else {
+            (void)cs;
+            return std::make_unique<T>(c);
+        }
+    };
 }
 
 // Order is preserved in the report. Adding a category = one line here plus
@@ -97,7 +112,7 @@ std::vector<std::string> category_names(core::OdbcConnection& conn) {
     std::vector<std::string> names;
     names.reserve(category_registry().size());
     for (const auto& factory : category_registry()) {
-        names.push_back(factory(conn)->category_name());
+        names.push_back(factory(conn, std::string{})->category_name());
     }
     return names;
 }
@@ -340,7 +355,7 @@ int main(int argc, char** argv) {
         // --category read the same names the run uses.
         std::vector<std::unique_ptr<tests::TestBase>> categories;
         for (const auto& factory : category_registry()) {
-            auto category = factory(conn);
+            auto category = factory(conn, connection_string);
             if (!only_categories.empty()) {
                 const std::string lowered = to_lower_copy(category->category_name());
                 bool wanted = false;

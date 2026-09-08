@@ -161,4 +161,62 @@ TEST_F(QuerySemanticsTest, UpdateCountsTheSameRowsSelectReturns) {
     EXPECT_EQ(ExecWithRowCount("UPDATE PRODUCTS SET NAME = 'x'"), selected);
 }
 
+// ── D65: COUNT(*) ignored the WHERE clause ───────────────────────────────
+//
+// `SELECT COUNT(*) FROM t WHERE ID = 7` returned the number of rows in the
+// table. Not an approximation — the wrong question answered confidently,
+// which a caller cannot detect. Found writing I8's probes, both of which read
+// a count back to see whether uncommitted work had become durable and got the
+// table's size instead.
+
+TEST_F(QuerySemanticsTest, CountHonoursTheWhereClause) {
+    Exec("CREATE TABLE C1 (ID INTEGER, V VARCHAR(16))");
+    Exec("INSERT INTO C1 VALUES (1, 'a')");
+    Exec("INSERT INTO C1 VALUES (2, 'b')");
+    Exec("INSERT INTO C1 VALUES (3, 'c')");
+
+    EXPECT_EQ(Column("SELECT COUNT(*) FROM C1"),
+              (std::vector<std::string>{"3"}));
+
+    // The bug: each of these used to answer "3".
+    EXPECT_EQ(Column("SELECT COUNT(*) FROM C1 WHERE ID = 2"),
+              (std::vector<std::string>{"1"}));
+    EXPECT_EQ(Column("SELECT COUNT(*) FROM C1 WHERE ID > 1"),
+              (std::vector<std::string>{"2"}));
+    // A predicate that matches nothing must count nothing — the case an
+    // "is it gone?" check depends on, and the one the old code could never
+    // report.
+    EXPECT_EQ(Column("SELECT COUNT(*) FROM C1 WHERE ID = 4242"),
+              (std::vector<std::string>{"0"}));
+
+    Exec("DROP TABLE C1");
+}
+
+TEST_F(QuerySemanticsTest, CountAgreesWithTheRowsSelectReturns) {
+    // The two paths read the same store now. They did not before: COUNT(*)
+    // returned early, so on a stock catalog table it reported ResultSetSize
+    // while SELECT materialised and filtered.
+    const auto rows = Column("SELECT CUSTOMER_ID FROM CUSTOMERS WHERE CUSTOMER_ID = 3");
+    const auto counted = Column("SELECT COUNT(*) FROM CUSTOMERS WHERE CUSTOMER_ID = 3");
+    ASSERT_EQ(counted.size(), 1u);
+    EXPECT_EQ(counted[0], std::to_string(rows.size()));
+}
+
+TEST_F(QuerySemanticsTest, CountRefusesAPredicateItCannotEvaluate) {
+    // D12's rule, which COUNT(*) was bypassing entirely: a filter that is not
+    // understood is an error, not an excuse to answer without it. A count
+    // derived from a predicate nobody evaluated is exactly the D65 bug again.
+    Exec("CREATE TABLE C2 (ID INTEGER, V VARCHAR(16))");
+    Exec("INSERT INTO C2 VALUES (1, 'a')");
+
+    SQLRETURN ret = SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT COUNT(*) FROM C2 WHERE ID BETWEEN 1 AND 9",
+        SQL_NTS);
+    EXPECT_EQ(ret, SQL_ERROR)
+        << "an unreadable predicate must not silently become no predicate";
+    SQLCloseCursor(hstmt);
+
+    Exec("DROP TABLE C2");
+}
+
 }  // namespace

@@ -12,7 +12,8 @@ std::vector<TestResult> TransactionTests::run() {
         test_manual_commit(),
         test_manual_rollback(),
         test_transaction_isolation_levels(),
-        test_rollback_with_open_cursor()
+        test_rollback_with_open_cursor(),
+        test_disconnect_rolls_back_open_transaction()   // I8
     };
 }
 
@@ -621,6 +622,132 @@ TestResult TransactionTests::test_rollback_with_open_cursor() {
 
             drop_test_table();
             restore_autocommit();
+        });
+}
+
+// I8 / PORT 9.B — SQLDisconnect with a transaction still open.
+//
+// ODBC is explicit: disconnecting with an open transaction rolls it back.
+// A driver that commits it instead loses nothing visibly and silently
+// contradicts the caller's intent, which is the class of bug this tool
+// exists to name. It cannot be probed on `conn_` — the rest of the run needs
+// that connection — so it opens one of its own, which is what C13 is for.
+TestResult TransactionTests::test_disconnect_rolls_back_open_transaction() {
+    return run_test(
+        "test_disconnect_with_open_transaction", "SQLDisconnect",
+        "25000 with the transaction intact, or a clean rollback",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLDisconnect",
+        [&](TestResult& r) {
+            auto sibling = open_sibling_connection();
+            if (!sibling) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "No connection string available to open a second "
+                           "connection with";
+                r.suggestion = "Run the tool normally; this probe cannot run "
+                               "against a connection it did not open";
+                return;
+            }
+
+            // The table lives on the *primary* connection, so it survives
+            // whatever happens to the sibling and can be read afterwards.
+            RoundTripTableGuard table(conn_, "ODBC_CRUSHER_DISCONNECT_TX",
+                                      "INTEGER");
+            if (!table.ok()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create a table to test with: " +
+                           table.last_error();
+                return;
+            }
+
+            SQLRETURN rc = SQLSetConnectAttr(
+                sibling->get_handle(), SQL_ATTR_AUTOCOMMIT,
+                reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver declined SQL_AUTOCOMMIT_OFF (" +
+                           first_sqlstate(SQL_HANDLE_DBC, sibling->get_handle(),
+                                          "no SQLSTATE") + ")";
+                return;
+            }
+
+            {
+                core::OdbcStatement stmt(*sibling);
+                stmt.execute("INSERT INTO " + table.name() + " VALUES (4242)");
+            }
+
+            // Disconnect without committing. Two answers are conformant and
+            // the probe grades neither against the other:
+            //
+            //   * SQL_ERROR with 25000 — the behaviour SQLDisconnect's own
+            //     documentation describes, transaction unchanged, connection
+            //     still open;
+            //   * success, having rolled the transaction back.
+            //
+            // The defect is the third: success having *committed*. That turns
+            // a dropped connection into durable data nobody asked to keep,
+            // and it is invisible until someone reads the table.
+            rc = SQLDisconnect(sibling->get_handle());
+            const std::string state =
+                first_sqlstate(SQL_HANDLE_DBC, sibling->get_handle(),
+                               "no SQLSTATE");
+
+            const bool refused = !SQL_SUCCEEDED(rc);
+            if (refused && state != "25000") {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "SQLDisconnect failed with SQLSTATE " + state +
+                           " rather than 25000";
+                r.suggestion = "A driver that refuses to disconnect with an "
+                               "open transaction must say 25000 (Invalid "
+                               "transaction state), so the application can "
+                               "tell this apart from a connection failure";
+                return;
+            }
+
+            if (refused) {
+                // The transaction is still open, exactly as 25000 promises.
+                // Reading the row from another connection now would be asking
+                // about isolation, not about SQLDisconnect — at READ
+                // UNCOMMITTED it is visible and nothing is wrong. End the
+                // transaction the documented way first, then ask whether the
+                // work survived, which is the question this probe is for.
+                SQLEndTran(SQL_HANDLE_DBC, sibling->get_handle(), SQL_ROLLBACK);
+            }
+
+            core::OdbcStatement check(conn_);
+            check.execute("SELECT COUNT(*) FROM " + table.name() +
+                          " WHERE ID = 4242");
+            SQLINTEGER found = -1;
+            SQLLEN ind = 0;
+            if (!check.fetch() ||
+                !SQL_SUCCEEDED(SQLGetData(check.get_handle(), 1, SQL_C_SLONG,
+                                          &found, 0, &ind))) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not read the table back to see what "
+                           "survived the disconnect";
+                return;
+            }
+
+            if (found != 0) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = "Work that was never committed survived (found " +
+                           std::to_string(found) + "; disconnect " +
+                           (refused ? "refused with " + state
+                                    : std::string("succeeded")) + ")";
+                r.suggestion = "Uncommitted work must not become durable "
+                               "because a connection closed. Roll it back on "
+                               "disconnect, or refuse with 25000 and leave it "
+                               "uncommitted — but do not commit it.";
+                return;
+            }
+
+            r.status = TestStatus::PASS;
+            r.actual = refused
+                ? "Refused with 25000 and left the transaction open and "
+                  "uncommitted, as SQLDisconnect documents"
+                : "Disconnected and rolled the open transaction back";
         });
 }
 

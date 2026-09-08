@@ -1558,3 +1558,67 @@ TEST_F(CrusherE2EFixture, FailOnDoesNotMaskAConnectionFailure) {
         << "a failed connection is not a passing run; stderr was: "
         << run.raw_stderr;
 }
+// ── I8 / PORT 9.B and 10.B — the two probes C13 unblocked ─────────────────
+
+// The failing configuration 9.B needs. FailOn=SQLDisconnect makes the
+// disconnect fail with something that is not 25000, which is exactly the
+// branch the probe grades: a driver may refuse to disconnect with an open
+// transaction, but it has to say 25000 so the application can tell that apart
+// from the connection having dropped.
+TEST_F(CrusherE2EFixture, DisconnectProbeCatchesTheWrongSqlstate) {
+    auto ok = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    auto clean = find_test(ok.report, "Transaction Tests",
+                           "test_disconnect_with_open_transaction");
+    ASSERT_TRUE(clean.has_value()) << report_outline(ok);
+    ASSERT_EQ(clean->value("status", std::string{}), "PASS")
+        << "precondition: the probe passes against a conforming driver; "
+        << clean->value("actual", std::string{});
+
+    auto bad = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Partial;FailOn=SQLDisconnect;"
+        "ErrorCode=HY000;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    auto t = find_test(bad.report, "Transaction Tests",
+                       "test_disconnect_with_open_transaction");
+    ASSERT_TRUE(t.has_value()) << report_outline(bad);
+
+    const auto status = t->value("status", std::string{});
+    const auto actual = t->value("actual", std::string{});
+    EXPECT_EQ(status, "FAIL")
+        << "a disconnect that fails with HY000 rather than 25000 must be "
+           "reported; actual was: " << actual;
+    EXPECT_NE(actual.find("25000"), std::string::npos)
+        << "the message has to name the SQLSTATE it wanted; actual was: "
+        << actual;
+}
+
+// 10.B has no fault-injection lever that reaches only its post-reconnect
+// execute — FailOn is global, so anything that breaks the second statement
+// breaks the first as well and the probe never gets that far. What is
+// asserted is therefore what can be: that it runs, grades, and reports the
+// autocommit state it deliberately does not grade. Said plainly rather than
+// left to look like coverage it is not.
+TEST_F(CrusherE2EFixture, ReconnectProbeGradesUsabilityAndReportsAutocommit) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
+    ASSERT_TRUE(run.report.contains("summary")) << run.raw_stderr;
+    auto t = find_test(run.report, "Connection Tests",
+                       "test_reconnected_handle_is_usable");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+
+    EXPECT_EQ(t->value("status", std::string{}), "PASS")
+        << t->value("actual", std::string{});
+    const auto actual = t->value("actual", std::string{});
+    // The graded half.
+    EXPECT_NE(actual.find("executes and commits normally"), std::string::npos)
+        << "actual was: " << actual;
+    // The reported-but-not-graded half. Connection attributes belong to the
+    // handle and persist across a reconnect, so a driver that keeps the
+    // caller's setting is right — the first version of this probe FAILed it,
+    // which is why the distinction is asserted rather than assumed.
+    EXPECT_NE(actual.find("SQL_ATTR_AUTOCOMMIT after reconnect"),
+              std::string::npos)
+        << "actual was: " << actual;
+}

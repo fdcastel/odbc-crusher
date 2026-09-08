@@ -5,6 +5,7 @@
 #include "core/guarded_buffer.hpp"
 #include "core/odbc_statement.hpp"
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -221,8 +222,20 @@ struct FailureClassification {
 // Base class for all ODBC tests
 class TestBase {
 public:
-    explicit TestBase(core::OdbcConnection& conn)
-        : conn_(conn) {}
+    // C13: the connection string comes with the connection now.
+    //
+    // A probe that wants to disconnect mid-transaction, or take a connection
+    // out of a pool and put it back broken, cannot use `conn_` - the rest of
+    // the run depends on it. It needs one of its own, and to open one it
+    // needs the string. `get_environment()` was already reachable; this was
+    // the missing half.
+    //
+    // Defaulted so the 23 existing categories and their tests construct
+    // unchanged; `open_sibling_connection()` says clearly what it means when
+    // the string was never supplied.
+    explicit TestBase(core::OdbcConnection& conn,
+                      std::string connection_string = {})
+        : conn_(conn), connection_string_(std::move(connection_string)) {}
 
     virtual ~TestBase() = default;
 
@@ -392,6 +405,26 @@ public:
 
 protected:
     core::OdbcConnection& conn_;
+    std::string connection_string_;   // C13
+
+    // C13: the string `conn_` was opened with, when the caller supplied it.
+    const std::string& connection_string() const { return connection_string_; }
+
+    // Open a second connection to the same target, for a probe that needs one
+    // it is allowed to damage — C13.
+    //
+    // Returns nullptr when no connection string was supplied, which is the
+    // case in unit tests that construct a category directly. A probe must
+    // treat that as "cannot run here" rather than as a driver fault: SKIP,
+    // not FAIL. Errors from `connect()` propagate as OdbcError, because a
+    // sibling that will not open *is* a finding once we know the primary did.
+    std::unique_ptr<core::OdbcConnection> open_sibling_connection() {
+        if (connection_string_.empty()) return nullptr;
+        auto sibling =
+            std::make_unique<core::OdbcConnection>(conn_.get_environment());
+        sibling->connect(connection_string_);
+        return sibling;
+    }
 
     // Helper to create test result
     TestResult make_result(

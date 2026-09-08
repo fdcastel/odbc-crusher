@@ -9,8 +9,13 @@ namespace odbc_crusher::tests {
 // Transaction tests (Phase 8)
 class TransactionTests : public TestBase {
 public:
-    explicit TransactionTests(core::OdbcConnection& conn)
-        : TestBase(conn) {}
+    // C13: this category takes the connection string, because
+    // test_disconnect_rolls_back_open_transaction needs a connection it is
+    // allowed to disconnect. Declaring the two-argument constructor is how a
+    // category asks for one.
+    explicit TransactionTests(core::OdbcConnection& conn,
+                              const std::string& connection_string = {})
+        : TestBase(conn, connection_string) {}
     
     std::vector<TestResult> run() override;
     std::string category_name() const override { return "Transaction Tests"; }
@@ -20,6 +25,7 @@ private:
     TestResult test_autocommit_off();
     TestResult test_manual_commit();
     TestResult test_manual_rollback();
+    TestResult test_disconnect_rolls_back_open_transaction();   // I8
     TestResult test_transaction_isolation_levels();
 
     // PORT plan §4.9 — cross-state interactions between transaction

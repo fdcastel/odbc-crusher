@@ -1936,15 +1936,42 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 result.column_names.push_back("COUNT");
                 result.column_types.push_back(SQL_INTEGER);
                 result.column_sizes.push_back(10);
-                long long count = 0;
-                auto rows = catalog.snapshot_inserted_rows(query.table_name);
-                if (!rows.empty()) {
-                    count = static_cast<long long>(rows.size());
-                } else if (table->remarks != "User-created table") {
-                    count = static_cast<long long>(result_set_size);
+
+                // D13: materialise the same way the row-returning path does,
+                // so COUNT(*) and SELECT * agree about what is in the table.
+                if (!catalog.has_row_store(query.table_name) &&
+                    table->remarks != "User-created table") {
+                    catalog.materialize_rows(
+                        query.table_name,
+                        generate_mock_data(*table, result_set_size));
                 }
+                auto rows = catalog.snapshot_inserted_rows(query.table_name);
+
+                // D65: this used to return here, so the count was the number
+                // of rows in the table whatever the WHERE clause said -
+                // `COUNT(*) ... WHERE ID = 4242` answering "how many rows are
+                // there". The wrong question answered confidently, which a
+                // caller cannot detect. The same filter the row path uses now
+                // runs here, refusal included: a count derived from a
+                // predicate nobody evaluated is precisely this bug again.
+                if (!query.where_clause.empty()) {
+                    auto filter = make_where_filter(*table, query.where_clause);
+                    if (!filter.understood) {
+                        result.success = false;
+                        result.error_sqlstate = filter.sqlstate;
+                        result.error_message = filter.message;
+                        return result;
+                    }
+                    std::vector<MockRow> matched;
+                    matched.reserve(rows.size());
+                    for (const auto& r : rows) {
+                        if (filter.match(r)) matched.push_back(r);
+                    }
+                    rows.swap(matched);
+                }
+
                 MockRow row;
-                row.push_back(count);
+                row.push_back(static_cast<long long>(rows.size()));
                 result.data.push_back(std::move(row));
                 return result;
             }
