@@ -56,18 +56,31 @@ TestResult BufferValidationTests::test_null_termination() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetInfo, Buffer Length",
         [&](TestResult& r) {
-            // Test that SQLGetInfo returns null-terminated strings
-            char buffer[256];
+            // Test that SQLGetInfo returns null-terminated strings.
+            //
+            // D63: guarded, and D61 was wrong to exempt it. The argument for
+            // leaving it bare was that memchr below reads only the declared
+            // region, which is true and is not where the fault was: ASan named
+            // the SQLGetInfo call on the next line, with libodbc in frame #1.
+            // The driver manager runs strlen over this buffer while filling
+            // it, before the probe looks at anything - so a probe cannot
+            // detect a missing terminator by handing the manager a buffer with
+            // no terminator in it and hoping the manager will not scan.
+            //
+            // Nothing about what this detects changes: the driver is still
+            // told 256, and memchr still reads only those 256, so an
+            // unterminated value is still nullptr and still FAILs below. The
+            // guard adds a zero one place past what the driver may write,
+            // which is where the manager's scan now stops.
+            constexpr size_t kCapacity = 256;
+            core::GuardedBuffer<char> buffer(kCapacity, 'X');
             SQLSMALLINT buffer_length = 0;
-
-            // Fill buffer with non-null sentinel value
-            std::memset(buffer, 'X', sizeof(buffer));
 
             SQLRETURN rc = SQLGetInfo(
                 conn_.get_handle(),
                 SQL_DRIVER_NAME,
-                buffer,
-                sizeof(buffer),
+                buffer.data(),
+                static_cast<SQLSMALLINT>(kCapacity),
                 &buffer_length
             );
 
@@ -90,18 +103,18 @@ TestResult BufferValidationTests::test_null_termination() {
                 //
                 // memchr is bounded, so a missing terminator comes back as
                 // nullptr rather than as a fault.
-                const void* nul = std::memchr(buffer, '\0', sizeof(buffer));
+                const void* nul = std::memchr(buffer.data(), '\0', kCapacity);
 
                 if (nul == nullptr) {
                     r.status = TestStatus::FAIL;
-                    r.actual = "No NUL within " + std::to_string(sizeof(buffer)) +
+                    r.actual = "No NUL within " + std::to_string(kCapacity) +
                                " bytes; driver reported length " +
                                std::to_string(buffer_length);
                     r.suggestion = "Driver must null-terminate string outputs";
                     r.severity = Severity::ERR;
                 } else {
                     const size_t actual_length = static_cast<size_t>(
-                        static_cast<const char*>(nul) - buffer);
+                        static_cast<const char*>(nul) - buffer.data());
 
                     if (buffer_length != static_cast<SQLSMALLINT>(actual_length)) {
                         r.status = TestStatus::FAIL;
