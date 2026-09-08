@@ -97,11 +97,6 @@ std::vector<TestResult> ArrayParamTests::run() {
             "SQL_ATTR_PARAMSET_SIZE=1 behaves like normal single-parameter execution",
             ConformanceLevel::CORE,
             "ODBC 3.x SQLSetStmtAttr: SQL_ATTR_PARAMSET_SIZE default is 1"));
-        results.push_back(make_skip("test_array_partial_error",
-            "SQLSetStmtAttr/SQLExecute",
-            "Partial failure in array execution returns SQL_SUCCESS_WITH_INFO with mixed status",
-            ConformanceLevel::LEVEL_1,
-            "ODBC 3.x Using Arrays of Parameters: Error Processing"));
         
         return results;
     }
@@ -112,7 +107,6 @@ std::vector<TestResult> ArrayParamTests::run() {
     results.push_back(test_array_with_null_values());
     results.push_back(test_param_operation_array());
     results.push_back(test_paramset_size_one());
-    results.push_back(test_array_partial_error());
     results.push_back(test_param_status_per_row_partial_failure());
     results.push_back(test_paramset_size_unsupported_returns_error());
 
@@ -936,116 +930,12 @@ TestResult ArrayParamTests::test_paramset_size_one() {
 }
 
 // ── Test 8: Array Partial Error ──────────────────────────────────────────────
-TestResult ArrayParamTests::test_array_partial_error() {
-    return run_test(
-        "test_array_partial_error", "SQLSetStmtAttr/SQLExecute",
-        "Partial failure in array execution returns SQL_SUCCESS_WITH_INFO with mixed status",
-        Severity::WARNING, ConformanceLevel::LEVEL_1,
-        "ODBC 3.x Using Arrays of Parameters: Error Processing",
-        [&](TestResult& r) {
-        // This test uses a special SQL that the mock driver will fail on for specific rows.
-        // We use the FAIL_ON_ROW syntax convention: the mock driver can be configured
-        // so that certain parameter sets fail.
-        // For the mock driver, we rely on the FailOn mechanism.
-        // Instead, we test the partial-error flow by using SQL_PARAM_IGNORE
-        // and verifying mixed status behavior is correctly reported.
-        
-        core::OdbcStatement stmt(conn_);
-        constexpr SQLULEN ARRAY_SIZE = 3;
-        
-        // Prepare
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Could not prepare statement";
-            return;
-        }
-        
-        // Configure array execution
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
-            reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
-            reinterpret_cast<SQLPOINTER>(ARRAY_SIZE), 0);
-        
-        // Set up status array and processed count
-        SQLUSMALLINT status_array[ARRAY_SIZE];
-        for (SQLULEN i = 0; i < ARRAY_SIZE; ++i) status_array[i] = 0xFFFF;
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, status_array, 0);
-        
-        SQLULEN params_processed = 0;
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, &params_processed, 0);
-        
-        // Use operation array to mark middle row as IGNORE — simulating partial processing
-        SQLUSMALLINT operation_array[ARRAY_SIZE] = {
-            SQL_PARAM_PROCEED, SQL_PARAM_IGNORE, SQL_PARAM_PROCEED
-        };
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_OPERATION_PTR, operation_array, 0);
-        
-        // Bind
-        SQLINTEGER id_array[ARRAY_SIZE] = {50, 60, 70};
-        SQLLEN id_ind[ARRAY_SIZE] = {0, 0, 0};
-        SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER,
-            0, 0, id_array, 0, id_ind);
-        
-        // Execute
-        SQLRETURN exec_ret = SQLExecute(stmt.get_handle());
-        
-        std::ostringstream actual;
-        actual << "Execute returned " << exec_ret << "; processed=" << params_processed
-               << "; status: [";
-        
-        bool has_success = false;
-        bool has_unused = false;
-        for (SQLULEN i = 0; i < ARRAY_SIZE; ++i) {
-            if (i > 0) actual << ", ";
-            switch (status_array[i]) {
-                case SQL_PARAM_SUCCESS: 
-                    actual << "SUCCESS"; has_success = true; break;
-                case SQL_PARAM_UNUSED: 
-                    actual << "UNUSED"; has_unused = true; break;
-                case SQL_PARAM_ERROR: 
-                    actual << "ERROR"; break;
-                default: 
-                    actual << "0x" << std::hex << status_array[i] << std::dec;
-                    break;
-            }
-        }
-        actual << "]";
-        r.actual = actual.str();
-        
-        if (!SQL_SUCCEEDED(exec_ret)) {
-            r.status = TestStatus::FAIL;
-            r.suggestion = "Execution with some IGNORED rows should succeed for non-ignored rows";
-        } else if (!has_success || !has_unused) {
-            r.status = TestStatus::FAIL;
-            r.suggestion = "Expected mix of SQL_PARAM_SUCCESS and SQL_PARAM_UNUSED in status array";
-        } else {
-            // Verify ignored row is UNUSED and executed rows are SUCCESS
-            if (status_array[0] != SQL_PARAM_SUCCESS || 
-                status_array[1] != SQL_PARAM_UNUSED ||
-                status_array[2] != SQL_PARAM_SUCCESS) {
-                r.status = TestStatus::FAIL;
-                r.suggestion = "Row 0,2 should be SUCCESS, row 1 should be UNUSED";
-            }
-        }
-        
-        // Reset
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
-            reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, nullptr, 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_OPERATION_PTR, nullptr, 0);
-        });
-}
-
 // ── PORT plan §4.6 — driver-detected per-row failure ────────────────────────
 //
 // Bind a 5-row INSERT batch; expect that any one row violating an integrity
 // constraint shows up as SQL_PARAM_ERROR in the per-row status array while
 // the surrounding rows show SQL_PARAM_SUCCESS. The existing
-// test_array_partial_error uses SQL_PARAM_OPERATION_PTR/IGNORE — that's
+// test_param_operation_array uses SQL_PARAM_OPERATION_PTR/IGNORE — that's
 // application-driven. This is the driver-driven shape.
 
 TestResult ArrayParamTests::test_param_status_per_row_partial_failure() {

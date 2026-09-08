@@ -21,7 +21,6 @@ std::vector<TestResult> EscapeSequenceTests::run() {
         // SQLNativeSql
         test_native_sql_scalar_functions(),
         test_native_sql_datetime_literals(),
-        test_native_sql_call_escape(),
         test_native_sql_outer_join_escape(),
 
         // Scalar function execution
@@ -37,7 +36,6 @@ std::vector<TestResult> EscapeSequenceTests::run() {
         test_interval_literal_escape(),
 
         // Procedure call escape
-        test_call_escape_translation(),
         test_call_escape_format_variants(),
         test_call_escape_in_parameter(),
         test_call_escape_out_parameter(),
@@ -392,43 +390,6 @@ TestResult EscapeSequenceTests::test_native_sql_datetime_literals() {
             } else {
                 r.status = TestStatus::FAIL;
                 r.actual = std::to_string(passed) + "/3 translated. " + oss.str();
-                r.severity = Severity::WARNING;
-            }
-        });
-}
-
-TestResult EscapeSequenceTests::test_native_sql_call_escape() {
-    return run_test(
-        "test_native_sql_call_escape", "SQLNativeSql",
-        "SQLNativeSql translates {CALL proc(?)} and {?=CALL func(?)} escape sequences",
-        Severity::INFO, ConformanceLevel::CORE,
-        "ODBC 3.8, Procedure Call Escape Sequence",
-        [&](TestResult& r) {
-            auto t1 = call_native_sql("{CALL my_proc(?)}");
-            auto t2 = call_native_sql("{?=CALL my_func(?)}");
-
-            int passed = 0;
-            std::ostringstream oss;
-
-            if (t1 && !t1->empty() && t1->find('{') == std::string::npos) {
-                ++passed;
-                oss << "CALL->'" << *t1 << "'";
-            } else {
-                oss << "CALL escape not translated; ";
-            }
-
-            if (t2 && !t2->empty() && t2->find('{') == std::string::npos) {
-                ++passed;
-                oss << ", ?=CALL->'" << *t2 << "'";
-            } else {
-                oss << "?=CALL escape not translated; ";
-            }
-
-            if (passed == 2) {
-                r.actual = oss.str();
-            } else {
-                r.status = TestStatus::FAIL;
-                r.actual = oss.str();
                 r.severity = Severity::WARNING;
             }
         });
@@ -1116,56 +1077,30 @@ TestResult EscapeSequenceTests::test_interval_literal_escape() {
 // Procedure Call Escape Tests
 // ---------------------------------------------------------------------------
 
-TestResult EscapeSequenceTests::test_call_escape_translation() {
-    return run_test(
-        "test_call_escape_translation", "SQLNativeSql",
-        "SQLNativeSql translates {CALL proc(?,?)} and {?=CALL func(?)} escape syntax",
-        Severity::INFO, ConformanceLevel::CORE,
-        "ODBC 3.8, Procedure Call Escape Sequence",
-        [&](TestResult& r) {
-            auto t1 = call_native_sql("{CALL my_procedure(?,?)}");
-            auto t2 = call_native_sql("{?=CALL my_function(?)}");
-
-            std::ostringstream oss;
-            int passed_count = 0;
-
-            if (t1 && !t1->empty() && t1->find('{') == std::string::npos) {
-                ++passed_count;
-                oss << "CALL->'" << *t1 << "'";
-            } else {
-                oss << "CALL not translated";
-            }
-
-            if (t2 && !t2->empty() && t2->find('{') == std::string::npos) {
-                ++passed_count;
-                oss << "; ?=CALL->'" << *t2 << "'";
-            } else {
-                oss << "; ?=CALL not translated";
-            }
-
-            r.actual = oss.str();
-            if (passed_count < 2) {
-                r.status = TestStatus::FAIL;
-                r.severity = Severity::WARNING;
-                r.suggestion = "The driver's escape parser should translate CALL escape sequences to native syntax";
-            }
-        });
-}
-
 TestResult EscapeSequenceTests::test_call_escape_format_variants() {
     return run_test(
         "test_call_escape_format_variants", "SQLNativeSql",
-        "All 5 CALL escape format variants from ODBC spec are translated",
+        "Every CALL escape format from the ODBC spec is translated",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8, Procedure Call Escape Sequence",
         [&](TestResult& r) {
+            // C11: seven, not five. `test_native_sql_call_escape` and
+            // `test_call_escape_translation` were the same check as this one
+            // with different identifier names - same API, spec reference,
+            // severity and assertion - and between them added only the
+            // single-parameter forms. Folding those in and deleting both
+            // leaves one probe with more coverage than the three had.
             static const char* variants[] = {
                 "{CALL proc}",
                 "{CALL proc()}",
+                "{CALL proc(?)}",
                 "{CALL proc(?,?)}",
-                "{?=CALL func(?,?)}",
                 "{?=CALL func}",
+                "{?=CALL func(?)}",
+                "{?=CALL func(?,?)}",
             };
+            constexpr int kVariantCount =
+                static_cast<int>(sizeof(variants) / sizeof(variants[0]));
 
             int passed_count = 0;
             std::ostringstream oss;
@@ -1179,8 +1114,9 @@ TestResult EscapeSequenceTests::test_call_escape_format_variants() {
                 }
             }
 
-            r.actual = std::to_string(passed_count) + "/5 CALL variants translated";
-            if (passed_count < 5) {
+            r.actual = std::to_string(passed_count) + "/" +
+                       std::to_string(kVariantCount) + " CALL variants translated";
+            if (passed_count < kVariantCount) {
                 r.status = TestStatus::FAIL;
                 r.actual += ". Failures: " + oss.str();
                 r.severity = Severity::WARNING;

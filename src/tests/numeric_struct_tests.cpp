@@ -61,25 +61,10 @@ static bool numeric_exceeds_64_bits(const SQL_NUMERIC_STRUCT& ns) {
     return false;
 }
 
-// Helper: set ARD descriptor precision/scale for SQL_C_NUMERIC retrieval
-// The ODBC spec requires this before SQLGetData with SQL_C_NUMERIC
-static bool set_numeric_descriptor(SQLHSTMT hstmt, SQLSMALLINT col,
-                                    SQLSMALLINT precision, SQLSMALLINT scale) {
-    SQLHDESC ard = SQL_NULL_HDESC;
-    SQLRETURN ret = SQLGetStmtAttr(hstmt, SQL_ATTR_APP_ROW_DESC, &ard, 0, nullptr);
-    if (!SQL_SUCCEEDED(ret) || ard == SQL_NULL_HDESC) return false;
-
-    ret = SQLSetDescField(ard, col, SQL_DESC_TYPE, reinterpret_cast<SQLPOINTER>(SQL_C_NUMERIC), 0);
-    if (!SQL_SUCCEEDED(ret)) return false;
-
-    ret = SQLSetDescField(ard, col, SQL_DESC_PRECISION, reinterpret_cast<SQLPOINTER>(static_cast<intptr_t>(precision)), 0);
-    if (!SQL_SUCCEEDED(ret)) return false;
-
-    ret = SQLSetDescField(ard, col, SQL_DESC_SCALE, reinterpret_cast<SQLPOINTER>(static_cast<intptr_t>(scale)), 0);
-    if (!SQL_SUCCEEDED(ret)) return false;
-
-    return true;
-}
+// C11: `set_numeric_descriptor` moved to TestBase. It was also written out
+// inline in datatype_edge_tests.cpp with every return code discarded, which
+// is the shape D29 found - a driver refusing SQL_DESC_PRECISION looked
+// identical to one accepting it. One checked implementation now.
 
 TestResult NumericStructTests::test_numeric_struct_binding() {
     return run_test(

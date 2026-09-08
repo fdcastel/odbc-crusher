@@ -350,6 +350,42 @@ public:
     static BoundedString bounded_string(const char* buf, size_t capacity,
                                         SQLLEN reported);
 
+    // Point an ARD field at SQL_C_NUMERIC with a precision and scale — C11.
+    //
+    // The ODBC spec requires this before SQLGetData with SQL_C_NUMERIC: the
+    // descriptor carries the precision and scale, and without setting them
+    // the driver has no way to know what shape the caller wants.
+    //
+    // It lived in numeric_struct_tests.cpp and was re-implemented inline in
+    // datatype_edge_tests.cpp **ignoring all four return codes**. That is the
+    // exact shape D29 found: SQL_C_NUMERIC ARD binding did not work at all in
+    // the mock, and two probes passed anyway because they never looked at
+    // whether the fields they set were accepted. Returns false when any step
+    // is refused, so a caller can say "the driver would not take the
+    // descriptor" instead of blaming SQLGetData for the answer that follows.
+    static bool set_numeric_descriptor(SQLHSTMT hstmt, SQLSMALLINT col,
+                                       SQLSMALLINT precision,
+                                       SQLSMALLINT scale) {
+        SQLHDESC ard = SQL_NULL_HDESC;
+        SQLRETURN ret = SQLGetStmtAttr(hstmt, SQL_ATTR_APP_ROW_DESC, &ard, 0,
+                                       nullptr);
+        if (!SQL_SUCCEEDED(ret) || ard == SQL_NULL_HDESC) return false;
+
+        ret = SQLSetDescField(ard, col, SQL_DESC_TYPE,
+                              reinterpret_cast<SQLPOINTER>(SQL_C_NUMERIC), 0);
+        if (!SQL_SUCCEEDED(ret)) return false;
+
+        ret = SQLSetDescField(
+            ard, col, SQL_DESC_PRECISION,
+            reinterpret_cast<SQLPOINTER>(static_cast<intptr_t>(precision)), 0);
+        if (!SQL_SUCCEEDED(ret)) return false;
+
+        ret = SQLSetDescField(
+            ard, col, SQL_DESC_SCALE,
+            reinterpret_cast<SQLPOINTER>(static_cast<intptr_t>(scale)), 0);
+        return SQL_SUCCEEDED(ret);
+    }
+
     // Read one character column in full, however long it is — A19.
     //
     // A single `SQLGetData` into a fixed buffer returns SQL_SUCCESS_WITH_INFO
@@ -683,6 +719,11 @@ inline const char* status_to_string(TestStatus status) {
         default: return "UNKNOWN";
     }
 }
+
+// C11: the string four probes across two files each spelled out. What it is
+// matters — a statement no engine could parse — and one definition is how
+// that stays true if it ever has to change.
+inline constexpr const char* kInvalidSql = "THIS IS NOT VALID SQL !!! @#$%";
 
 // C6: `is_skipped()` stood here with no callers. The two places that ask
 // the question - main.cpp's tally and console_reporter's - are switches

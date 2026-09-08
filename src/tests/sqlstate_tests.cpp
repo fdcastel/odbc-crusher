@@ -262,7 +262,7 @@ TestResult SqlstateTests::test_execdirect_syntax_error() {
 
             SQLRETURN rc = SQLExecDirect(
                 stmt.get_handle(),
-                (SQLCHAR*)"THIS IS NOT VALID SQL !!! @#$%",
+                (SQLCHAR*)kInvalidSql,
                 SQL_NTS
             );
 

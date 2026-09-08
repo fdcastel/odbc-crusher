@@ -38,7 +38,6 @@ private:
     TestResult test_array_with_null_values();
     TestResult test_param_operation_array();
     TestResult test_paramset_size_one();
-    TestResult test_array_partial_error();
 
     // PORT plan §4.6 — driver-detected per-row failure (mid-batch constraint
     // violation), and the SQL_ATTR_PARAMSET_SIZE-unsupported fallback path.

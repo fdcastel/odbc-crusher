@@ -879,15 +879,22 @@ TestResult DataTypeEdgeCaseTests::test_null_in_numeric_struct() {
             // Configure ARD descriptor; some drivers reject SQL_C_NUMERIC
             // without it. The struct content for a NULL is unconstrained
             // by spec — only the indicator must be SQL_NULL_DATA.
-            SQLHDESC ard = SQL_NULL_HDESC;
-            SQLGetStmtAttr(sel.get_handle(), SQL_ATTR_APP_ROW_DESC, &ard, 0, nullptr);
-            if (ard != SQL_NULL_HDESC) {
-                SQLSetDescField(ard, 1, SQL_DESC_TYPE,
-                                reinterpret_cast<SQLPOINTER>(SQL_C_NUMERIC), 0);
-                SQLSetDescField(ard, 1, SQL_DESC_PRECISION,
-                                reinterpret_cast<SQLPOINTER>(static_cast<intptr_t>(10)), 0);
-                SQLSetDescField(ard, 1, SQL_DESC_SCALE,
-                                reinterpret_cast<SQLPOINTER>(static_cast<intptr_t>(2)), 0);
+            //
+            // C11: this was the same four calls written out here with **every
+            // return code discarded**, so a driver that refused
+            // SQL_DESC_PRECISION was indistinguishable from one that accepted
+            // it — and D29 found exactly that driver. The shared helper
+            // checks each step, so a refusal is reported as a refusal rather
+            // than blamed on the SQLGetData that follows.
+            if (!set_numeric_descriptor(sel.get_handle(), 1, 10, 2)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Driver would not accept the SQL_C_NUMERIC ARD "
+                           "descriptor (type/precision/scale), so a NULL "
+                           "NUMERIC cannot be read back meaningfully";
+                r.suggestion = "SQL_DESC_PRECISION and SQL_DESC_SCALE must be "
+                               "settable on the ARD before SQLGetData with "
+                               "SQL_C_NUMERIC";
+                return;
             }
 
             SQL_NUMERIC_STRUCT ns;

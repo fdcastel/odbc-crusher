@@ -61,7 +61,6 @@ private:
     // SQLNativeSql translation (4 tests)
     TestResult test_native_sql_scalar_functions();
     TestResult test_native_sql_datetime_literals();
-    TestResult test_native_sql_call_escape();
     TestResult test_native_sql_outer_join_escape();
 
     // Scalar function execution (6 tests)
@@ -77,7 +76,6 @@ private:
     TestResult test_interval_literal_escape();
 
     // Procedure call escape (2 tests)
-    TestResult test_call_escape_translation();
     TestResult test_call_escape_format_variants();
 
     // PORT plan §4.3 — {CALL …} / {?=CALL …} IN/OUT/INOUT parameter

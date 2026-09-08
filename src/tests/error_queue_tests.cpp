@@ -87,7 +87,7 @@ TestResult ErrorQueueTests::test_multiple_errors() {
             // Execute an intentionally invalid SQL to generate at least one diagnostic
             SQLRETURN exec_rc = SQLExecDirect(
                 stmt.get_handle(),
-                (SQLCHAR*)"THIS IS NOT VALID SQL !!! @#$%",
+                (SQLCHAR*)kInvalidSql,
                 SQL_NTS
             );
 
@@ -149,7 +149,7 @@ TestResult ErrorQueueTests::test_error_clearing() {
             // Step 1: Force an error
             SQLRETURN exec_rc = SQLExecDirect(
                 stmt.get_handle(),
-                (SQLCHAR*)"THIS IS NOT VALID SQL !!! @#$%",
+                (SQLCHAR*)kInvalidSql,
                 SQL_NTS
             );
 
@@ -290,7 +290,7 @@ TestResult ErrorQueueTests::test_field_extraction() {
             // Force an error to populate diagnostics
             SQLRETURN exec_rc = SQLExecDirect(
                 stmt.get_handle(),
-                (SQLCHAR*)"THIS IS NOT VALID SQL !!! @#$%",
+                (SQLCHAR*)kInvalidSql,
                 SQL_NTS
             );
 
