@@ -166,82 +166,49 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
         }
     }
 
-    // Per-platform tolerance baselines. Windows holds to the §7.10 contract
-    // (every probe PASSes). Linux carries pre-existing mock↔unixODBC
-    // integration gaps — diagnostic-path FAILs and W-function / array-param
-    // SKIPs surfaced when §7.10 tightened this canary. macOS carries three
-    // FAILs that are not gaps at all but a defect in the platform's own
-    // driver manager — see below. Tracked in IMPROVEMENT_PLAN §8; the bound
-    // is locked in so any new regression beyond baseline still trips this
-    // test, and the improvement detector below nudges anyone who fixes one of
-    // the underlying gaps.
-#ifdef __linux__
-    // B3 moved four of these from the skip column to the fail column without
-    // changing what is broken: 6 fail + 23 skip and 10 fail + 19 skip are the
-    // same 29 non-passing probes. The four are the three Catalog Function
-    // Depth probes and Diagnostic Depth's test_diagfield_sqlstate, all of
-    // which used to report SKIP_INCONCLUSIVE without reading a SQLSTATE.
-    // SQLTables, SQLStatistics and "a SQL_ERROR carries diagnostic record 1"
-    // are Core requirements, so a Linux driver failing them is a failure —
-    // that it was previously counted as a skip is precisely the defect B3
-    // exists to fix, and skips do not affect the exit code.
+    // Per-platform tolerance baselines.
     //
-    // B1 then moved two more the same way, for the same reason: 10 fail + 19
-    // skip and 12 fail + 17 skip are again the same 29 non-passing probes.
-    // The two are Catalog Function Depth's test_procedures_result and
-    // test_privileges_result, which used to answer "not supported by driver"
-    // for *any* failure of SQLProcedures / SQLTablePrivileges /
-    // SQLColumnPrivileges. They now classify by SQLSTATE, so a driver that
-    // says HYC00 or IM001 still skips - and on Linux these do not say that,
-    // which is the D1 gap becoming visible rather than growing.
+    // Windows holds to the §7.10 contract: every probe PASSes. Linux and
+    // macOS carry the same three failures, for the same reason, and it is not
+    // a gap in the mock or in the probes — see below.
     //
-    // The total held at 29 non-passing probes for two phases. B11 moved it
-    // to 32, and this is the first time the number has grown rather than
-    // shifted between the two columns - so it is recorded rather than
-    // absorbed. B11 added three probes for the SQLGetDiagField header fields
-    // nothing used to read, and on Linux all three land in gaps that already
-    // exist:
+    // The bound is locked in so a regression past it still trips this test,
+    // and the improvement detector below nudges anyone who moves it.
+#if defined(__linux__) || defined(__APPLE__)
+    // D1, re-measured after D2: **3 failed, 0 skipped**, down from 13 and 19.
     //
-    //   * test_diagfield_return_code joins the failing diagnostic cluster
-    //     alongside test_diagfield_sqlstate, test_diagfield_record_count and
-    //     test_multiple_diagnostic_records - the same I1 routing gap, one
-    //     more field;
-    //   * test_diagfield_dynamic_function and test_diagfield_cursor_row_count
-    //     both SKIP because no SELECT variant executes at all through the W
-    //     path on Linux, which is what already makes test_diagfield_row_count
-    //     skip there. That is the D1/D2 export-surface gap, not a property of
-    //     the new probes.
+    // D2 gave the .so the Windows DLL's export surface, and that closed the
+    // whole of §8 in one change — the diagnostic cluster (I1), the eight
+    // array-parameter skips (I5), the SQLWCHAR-width probes (I2), the catalog
+    // patterns (I3) and the cursor probes (I4). Every one of them was a
+    // consequence of unixODBC reaching the driver's ANSI entry points, which
+    // the Windows driver manager never could. The numbers were locked in
+    // rather than deleted precisely so that this would show up as a drop.
     //
-    // Nothing new is broken: three probes were added and each landed in a
-    // hole the plan already tracks. If the number moves again for any other
-    // reason, this canary is what says so.
-    //
-    // These are the IMPROVEMENT_PLAN section 8 gaps, tracked as D1 and I1-I5.
-    // Phase 6 drives both numbers to zero and B5 then deletes them.
-    constexpr int kMaxFailed = 13;
-    constexpr int kMaxSkipped = 19;
-#elif defined(__APPLE__)
-    // D59. Three probes fail here, and all three are one defect in the
-    // platform's driver manager: it writes the declared number of characters
-    // and then a terminator one place past the end of the buffer. Measured at
-    // three sizes, which is what makes it a rule rather than a coincidence —
-    // the `actual` of each names the byte and the offset:
+    // What is left is three probes on both POSIX platforms, reporting
+    // byte-for-byte the same thing at three different buffer sizes:
     //
     //   test_buffer_overflow_protection  offset 10 of a 10-byte buffer
     //   test_truncation_indicators       offset  3 of a 3-byte buffer
     //   test_undersized_buffer           offset  1 of a 1-byte buffer
     //
-    // These are true positives. The mock is not involved, and neither is the
-    // probes' logic: they detected a one-byte overrun of application memory,
-    // which is what they exist for. So the canary's own advice — "fix the
-    // mock or update the probe" — is wrong in both directions here, and the
-    // baseline is the only honest place to put it. Windows does not do this
-    // (its reference run is 191/191 with every guard intact) and unixODBC
-    // reads past rather than writing past, which ASan caught instead (D58).
+    // Each says `holds 0x00`: the driver manager writes the declared number
+    // of characters and then a terminator one place past the end. It counts
+    // BufferLength as characters available for text rather than as the total
+    // including the terminator. Three sizes and two platforms make that a
+    // rule rather than a coincidence.
     //
-    // Nothing in this repository can fix it, so unlike the Linux numbers this
-    // one is not expected to fall. If it changes at all, that is a change in
-    // the runner's driver manager and worth knowing about.
+    // These are true positives, and nothing in this repository can fix them.
+    // The mock is not involved — Windows runs the same mock through the same
+    // probes and reports 191/191 with every guard intact — and the probes'
+    // logic is not at fault either: they detected a one-byte overrun of
+    // application memory, which is what they exist to do. So the canary's own
+    // advice, "fix the mock or update the probe", is wrong in both directions
+    // here, and this baseline is the only honest place for it. See D58, D59
+    // and D64; only the guards those added made the write visible at all.
+    //
+    // Unlike the numbers this replaces, these are not expected to fall. If
+    // they change, a driver manager changed.
     constexpr int kMaxFailed = 3;
     constexpr int kMaxSkipped = 0;
 #else
@@ -299,6 +266,9 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
 #else
     constexpr const char* kBaselineTag = "[macos-baseline]";
 #endif
+    // D1: both POSIX platforms sit at the same three now, so a drop below
+    // means a driver manager was fixed rather than that someone closed a gap
+    // in here. Worth the same notice either way.
     const int observed_failed = summary.value("failed", -1);
     const int observed_skipped = summary.value("skipped", -1);
     // Phase 6 works by pushing a change and reading this line out of the CI
@@ -317,16 +287,27 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
     if (!skipped_names.empty()) {
         std::cerr << kBaselineTag << " skipped: " << skipped_names << std::endl;
     }
-    if (observed_failed >= 0 && observed_failed < kMaxFailed) {
-        std::cerr << "[notice] failed=" << observed_failed
-                  << " is below baseline " << kMaxFailed
-                  << " — consider tightening kMaxFailed (see IMPROVEMENT_PLAN §8)\n";
-    }
-    if (observed_skipped >= 0 && observed_skipped < kMaxSkipped) {
-        std::cerr << "[notice] skipped=" << observed_skipped
-                  << " is below baseline " << kMaxSkipped
-                  << " — consider tightening kMaxSkipped (see IMPROVEMENT_PLAN §8)\n";
-    }
+    // B5: a ratchet, not a suggestion. This used to write a `[notice]` to
+    // stderr and pass, which ctest swallows for a passing test - so a closed
+    // gap left the bound where it was and the canary went slack by exactly
+    // the amount that had been fixed. Dropping below baseline now fails, and
+    // the only way to make it pass again is to lower the constant.
+    //
+    // It reads oddly to fail a build for an improvement, and that is the
+    // point: the failure is trivially fixed by editing one number, and
+    // nothing else forces that number down. Everything above still fails on a
+    // regression, so the bound is closed on both sides.
+    EXPECT_GE(observed_failed, kMaxFailed)
+        << "failed=" << observed_failed << " is BELOW the baseline of "
+        << kMaxFailed << ", which means something was fixed. Lower "
+        << "kMaxFailed to " << observed_failed << " in this file and record "
+        << "what closed it (IMPROVEMENT_PLAN §8). This is the ratchet B5 "
+        << "asks for - the test fails until the bound follows the "
+        << "improvement.\n  Still failing: " << failed_names;
+    EXPECT_GE(observed_skipped, kMaxSkipped)
+        << "skipped=" << observed_skipped << " is BELOW the baseline of "
+        << kMaxSkipped << ". Lower kMaxSkipped to " << observed_skipped
+        << " and record what closed it.\n  Still skipped: " << skipped_names;
 #endif
 
     EXPECT_TRUE(run.report.contains("driver_info"));
