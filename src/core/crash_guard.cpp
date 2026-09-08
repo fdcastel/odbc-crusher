@@ -6,6 +6,7 @@
 #include <csignal>
 #include <csetjmp>
 #include <cstdio>
+#include <cstdlib>   // D70: getenv
 #endif
 
 #include <sstream>
@@ -47,7 +48,26 @@ static void trampoline(void* ctx) {
 CrashGuardResult execute_with_crash_guard(const std::function<void()>& func) {
     CrashGuardResult result;
     unsigned int code = 0;
-    
+
+    // D70: ODBC_CRUSHER_NO_CRASH_GUARD=1 runs the body bare.
+    //
+    // The guard installs its handlers after ASan's and so overrides them,
+    // which means a real memory error inside a category is swallowed here and
+    // reported as one "(DRIVER CRASH)" entry with no stack, no address and no
+    // probe name. Three CI rounds of buffer guarding produced exactly that and
+    // nothing else. With this set, whatever is underneath - ASan, or the
+    // platform's own fault reporting - gets to say what happened.
+    //
+    // Off by default: the guard is what keeps one driver crash from taking the
+    // whole run down, which is the tool's "never crash" contract. It has a
+    // cost even when it works - see D63, where a faulting category makes its
+    // probes vanish from the report rather than fail.
+    if (const char* off = std::getenv("ODBC_CRUSHER_NO_CRASH_GUARD");
+        off && off[0] == '1') {
+        func();
+        return result;
+    }
+
     // Pass the std::function by pointer through a C-style trampoline
     auto* func_ptr = &func;
     if (seh_call(trampoline, const_cast<void*>(static_cast<const void*>(func_ptr)), &code)) {
@@ -111,7 +131,26 @@ static void crash_signal_handler(int sig) {
 
 CrashGuardResult execute_with_crash_guard(const std::function<void()>& func) {
     CrashGuardResult result;
-    
+
+    // D70: ODBC_CRUSHER_NO_CRASH_GUARD=1 runs the body bare.
+    //
+    // The guard installs its handlers after ASan's and so overrides them,
+    // which means a real memory error inside a category is swallowed here and
+    // reported as one "(DRIVER CRASH)" entry with no stack, no address and no
+    // probe name. Three CI rounds of buffer guarding produced exactly that and
+    // nothing else. With this set, whatever is underneath - ASan, or the
+    // platform's own fault reporting - gets to say what happened.
+    //
+    // Off by default: the guard is what keeps one driver crash from taking the
+    // whole run down, which is the tool's "never crash" contract. It has a
+    // cost even when it works - see D63, where a faulting category makes its
+    // probes vanish from the report rather than fail.
+    if (const char* off = std::getenv("ODBC_CRUSHER_NO_CRASH_GUARD");
+        off && off[0] == '1') {
+        func();
+        return result;
+    }
+
     // Flush all output before entering the guard, so if the process dies
     // during the guarded section, all prior output is preserved.
     std::cout << std::flush;
