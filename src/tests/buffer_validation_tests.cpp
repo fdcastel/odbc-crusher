@@ -1,5 +1,6 @@
 #include "buffer_validation_tests.hpp"
 #include "core/odbc_error.hpp"
+#include "tests/guarded_buffer.hpp"
 #include <cstring>
 #include <algorithm>
 #include <string>
@@ -233,8 +234,14 @@ TestResult BufferValidationTests::test_truncation_indicators() {
             }
 
             // Step 2: Use a buffer that's definitely too small — half the actual length
+            //
+            // D58: guarded, because this exact call is where ASan caught
+            // unixODBC calling strlen() on a 3-byte heap buffer and reading
+            // byte 4. The length declared to ODBC is unchanged; only the
+            // allocation is bigger, so an overrun lands in a sentinel this
+            // probe owns.
             SQLSMALLINT small_buffer_size = std::max((SQLSMALLINT)2, (SQLSMALLINT)(full_length / 2));
-            std::vector<char> small_buf(small_buffer_size, 0);
+            GuardedBuffer<char> small_buf(static_cast<size_t>(small_buffer_size));
             SQLSMALLINT buffer_length = 0;
 
             SQLRETURN rc = SQLGetInfo(
@@ -244,6 +251,24 @@ TestResult BufferValidationTests::test_truncation_indicators() {
                 small_buffer_size,
                 &buffer_length
             );
+
+            // A write past the declared length is a more serious finding than
+            // whatever the truncation semantics turn out to be, so it is
+            // reported first and on its own.
+            if (auto breach = small_buf.guard_breach()) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.actual = "Wrote past the " +
+                           std::to_string(small_buffer_size) +
+                           "-byte buffer while truncating: offset " +
+                           std::to_string(*breach) + ", guard area " +
+                           small_buf.guard_hex() + ", declared length " +
+                           std::to_string(buffer_length);
+                r.suggestion =
+                    "A truncating driver must write no more than "
+                    "BufferLength bytes, terminator included";
+                return;
+            }
 
             // Should return SQL_SUCCESS_WITH_INFO when truncated
             if (rc == SQL_SUCCESS_WITH_INFO) {
@@ -302,7 +327,10 @@ TestResult BufferValidationTests::test_undersized_buffer() {
             // Test with various small buffer sizes
             bool all_passed = true;
             for (SQLSMALLINT size = 1; size <= 10; ++size) {
-                std::vector<char> buffer(size);
+                // D58: guarded. A probe whose whole claim is "no crash with
+                // small buffers" must not be the thing that crashes, and an
+                // exactly-sized heap allocation made that a matter of luck.
+                GuardedBuffer<char> buffer(static_cast<size_t>(size));
                 SQLSMALLINT buffer_length = 0;
 
                 SQLRETURN rc = SQLGetInfo(
@@ -317,6 +345,16 @@ TestResult BufferValidationTests::test_undersized_buffer() {
                 if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) {
                     all_passed = false;
                     r.actual = "Failed with buffer size " + std::to_string(size);
+                    break;
+                }
+
+                if (auto breach = buffer.guard_breach()) {
+                    all_passed = false;
+                    r.actual = "Wrote past the " + std::to_string(size) +
+                               "-byte buffer: offset " +
+                               std::to_string(*breach) + ", guard area " +
+                               buffer.guard_hex();
+                    r.suggestion = "Driver wrote beyond buffer boundary";
                     break;
                 }
             }

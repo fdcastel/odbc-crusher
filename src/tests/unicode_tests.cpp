@@ -2,6 +2,7 @@
 #include "core/odbc_statement.hpp"
 #include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
+#include "tests/guarded_buffer.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <iomanip>
@@ -419,11 +420,27 @@ TestResult UnicodeTests::test_string_truncation_wchar() {
             tiny_byte_len = static_cast<SQLSMALLINT>(
                 (tiny_byte_len / sizeof(SQLWCHAR)) * sizeof(SQLWCHAR));
 
-            std::vector<SQLWCHAR> tiny_buf(tiny_byte_len / sizeof(SQLWCHAR), 0);
+            // D58: guarded, for the same reason as the narrow probes - a
+            // manager that writes its terminator one place past the declared
+            // length corrupts the heap here otherwise. The byte length handed
+            // to SQLGetInfoW is unchanged.
+            GuardedBuffer<SQLWCHAR> tiny_buf(tiny_byte_len / sizeof(SQLWCHAR));
             SQLSMALLINT needed_len = 0;
 
             SQLRETURN ret = SQLGetInfoW(conn_.get_handle(), chosen_type,
                                         tiny_buf.data(), tiny_byte_len, &needed_len);
+
+            if (auto breach = tiny_buf.guard_breach()) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                r.actual = "Wrote past the " + std::to_string(tiny_byte_len) +
+                           "-byte buffer: element " + std::to_string(*breach) +
+                           ", guard area " + tiny_buf.guard_hex();
+                r.suggestion =
+                    "A truncating driver must write no more than "
+                    "BufferLength bytes, terminator included";
+                return;
+            }
 
             if (ret == SQL_SUCCESS_WITH_INFO) {
                 // A21: both `expected` and `actual` claim this checks for
