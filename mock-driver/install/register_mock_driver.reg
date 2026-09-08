@@ -1,9 +1,34 @@
 Windows Registry Editor Version 5.00
 
-; Register Mock ODBC Driver
+; ─────────────────────────────────────────────────────────────────────────
+;  TEMPLATE — this file will NOT work as-is.  Prefer register.ps1.
+; ─────────────────────────────────────────────────────────────────────────
+;
+;  IMPROVEMENT_PLAN.md H6: this file used to carry a hard-coded
+;  "C:\temp\new\odbc-crusher\mock-driver\build\Release\mockodbc.dll" — an
+;  absolute path from a checkout that no longer exists. Importing it
+;  registered a driver pointing at a missing DLL, and the failure surfaced
+;  later as "Data source name not found" or a load error, a long way from
+;  the cause.
+;
+;  register.ps1 is what CI uses and what you should use. It finds the DLL
+;  (Release or Debug), resolves the path, refuses to run unelevated or from
+;  a 32-bit shell where the registration would silently go nowhere, and
+;  reads the registration back to confirm the Driver Manager sees the
+;  binary it just wrote — see H6 and D30:
+;
+;      .\register.ps1
+;      .\register.ps1 -DriverPath C:\full\path\to\mockodbc.dll
+;
+;  If you must use this file, replace BOTH occurrences of the placeholder
+;  below with the real absolute path, doubling every backslash. The
+;  placeholder is deliberately not a valid path: a .reg import succeeds
+;  whatever the string says, so a wrong path here is silent, and a path
+;  that cannot exist at least fails at load time with something to go on.
+
 [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\Mock ODBC Driver]
-"Driver"="C:\\temp\\new\\odbc-crusher\\mock-driver\\build\\Release\\mockodbc.dll"
-"Setup"="C:\\temp\\new\\odbc-crusher\\mock-driver\\build\\Release\\mockodbc.dll"
+"Driver"="<<REPLACE-WITH-ABSOLUTE-PATH-TO>>\\mockodbc.dll"
+"Setup"="<<REPLACE-WITH-ABSOLUTE-PATH-TO>>\\mockodbc.dll"
 "APILevel"="2"
 "ConnectFunctions"="YYY"
 "DriverODBCVer"="03.80"

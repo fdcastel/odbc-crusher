@@ -14,6 +14,18 @@ You can also use `gh` to look up upstream issues / changelog entries on
 the driver's GitHub repo at `<REPO>` if a finding looks like it might be
 known.
 
+## Known driver quirks to state, not re-derive
+
+**DuckDB `SQL_DRIVER_VER`.** DuckDB answers `SQLGetInfo(SQL_DRIVER_VER)`
+with `03.51.0000` — its ODBC *compliance level*, not its product version.
+A report that compares that against the manifest's `1.5.2.0` and calls it
+a provenance mismatch is wrong. Use `SQL_DBMS_VER`, or the version in the
+`actual_version.txt` the workflow writes next to the report.
+
+H10: this lives in `SKILL.md` and was missing here, so every generated
+report re-derived it and the committed DuckDB report had the note added
+by hand. A quirk the skill already knows should arrive in the template.
+
 ## Inputs
 
 - **Crusher JSON report**: `<REPORT_PATH>`

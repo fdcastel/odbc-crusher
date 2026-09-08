@@ -5,7 +5,7 @@
 
 A command-line tool that tests ODBC drivers for correctness and spec compliance.
 
-Point it at any ODBC connection string and it will run **195 tests** covering connections, statements, metadata, data types, transactions, Unicode handling (including non-ASCII round-trip), catalog functions, diagnostics, cursor behavior, parameter binding (including `{?=CALL …}` IN/OUT/INOUT), error handling, buffer validation, NUMERIC byte-equality, escape sequence translation, and state machine compliance — then report what passed, failed, or was skipped.
+Point it at any ODBC connection string and it will run **205 checks** covering connections, statements, metadata, data types, transactions, Unicode handling (including non-ASCII round-trip), catalog functions, diagnostics, cursor behavior, parameter binding (including `{?=CALL …}` IN/OUT/INOUT), error handling, buffer validation, NUMERIC byte-equality, escape sequence translation, and state machine compliance — then report what passed, failed, or was skipped.
 
 ## Quick Start
 
@@ -123,7 +123,7 @@ Statement Tests:                                 2 passed, 2 failed, 11 skipped
   ...
 
 SUMMARY:
-  Total Tests:  195
+  Total Tests:  205
   Passed:       142 (72.8%)
   Failed:       16
   Skipped:      37
@@ -277,11 +277,11 @@ odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
 - **Scrollable cursors** (static cursors with SQL_FETCH_FIRST/LAST/PRIOR/ABSOLUTE/RELATIVE)
 - **Parameter binding** (SQLBindParameter with value substitution in literal SELECTs)
 
-Against `Mode=Success` the mock driver scores **185/185 scored probes (100%)**, with
-17 further probes reported as `INFORMATIONAL` — 202 results in total. Nine of those
+Against `Mode=Success` the mock driver scores **190/190 scored probes (100%)**, with
+15 further probes reported as `INFORMATIONAL` — 205 results in total. Six of those
 record what the driver answered where the spec leaves no right answer to grade (an
 optional attribute's value, a `SQLGetInfo` bitmask, the type `COUNT(*)` comes back
-as). The other eight are enforced by the **driver manager** rather than the driver:
+as). The other nine are enforced by the **driver manager** rather than the driver:
 both the Windows DM and unixODBC check the ODBC state-transition table before
 dispatching a call, so those results describe the stack you are running on and not
 the driver you are testing. Neither group counts toward the pass rate — a guaranteed
@@ -362,7 +362,7 @@ In verbose mode (`-v`), each test also shows:
 ## Tested Databases
 
 The `stress-test` GitHub Actions workflow exercises crusher against
-five real ODBC drivers plus the in-repo mock. Driver versions, install
+six real ODBC drivers plus the in-repo mock. Driver versions, install
 methods, source repos, and tags are all pinned in
 [.github/drivers.json](./.github/drivers.json) — single source of truth
 consumed by both the workflow (at runtime via `jq`) and the
@@ -375,11 +375,8 @@ consumed by both the workflow (at runtime via `jq`) and the
 | **MySQL Connector/ODBC** | 9.7.0 | [mysql/mysql-connector-odbc](https://github.com/mysql/mysql-connector-odbc) |
 | **DuckDB ODBC** | 1.5.2.0 | [duckdb/duckdb-odbc](https://github.com/duckdb/duckdb-odbc) |
 | **ClickHouse ODBC** | 1.5.3.20260311 | [ClickHouse/clickhouse-odbc](https://github.com/ClickHouse/clickhouse-odbc) |
+| **Firebird ODBC Driver** | 3.5.0-rc1 | [FirebirdSQL/firebird-odbc-driver](https://github.com/FirebirdSQL/firebird-odbc-driver) |
 | **Mock ODBC Driver** (in-repo) | tracks master | `mock-driver/` |
-
-> **Firebird ODBC Driver** is not yet in the matrix — intentionally
-> deferred until the upstream driver refactor stabilizes. The manifest
-> schema reserves a slot.
 
 ## Stress-Test Workflow
 

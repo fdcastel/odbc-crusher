@@ -9,7 +9,7 @@ argument-hint: "[driver-name]"
 You have been invoked with one argument (`$ARGUMENTS`): the driver
 name. The complete list of valid driver names is whatever appears in
 `.github/drivers.json` (currently: `postgresql`, `mariadb`, `mysql`,
-`duckdb`, `clickhouse`, `mock-driver`).
+`duckdb`, `clickhouse`, `firebird`, `mock-driver`).
 
 Your job is to drive seven steps in order. **Do not skip steps; do not
 reorder them.** If anything in steps 1–5 fails, abort with a clear
@@ -72,6 +72,11 @@ propagate stderr to the user and stop.
 
 While CI is running, clone the driver source locally so the analysis
 agent has somewhere to grep. Skip the clone for `mock-driver`.
+
+> H9: `tmp/triage/` is gitignored on purpose — most triages are working
+> output, accurate for a snapshot of a driver on one day and misleading a
+> month later. A report worth keeping gets promoted to `reports/`; see
+> `reports/README.md`.
 
 ```bash
 mkdir -p ./tmp/triage/$DRIVER

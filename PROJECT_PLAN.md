@@ -1,8 +1,16 @@
 # ODBC Crusher — Project Plan
 
-**Version**: 3.1  
+**Version**: 3.2  
 **Purpose**: A command-line tool for ODBC driver developers to validate driver correctness, discover capabilities, and identify spec violations.  
-**Last Updated**: February 23, 2026
+**Last Updated**: September 8, 2026
+
+> H3: the figures below are measured, not remembered — 23 categories and 205
+> probes come from `odbc-crusher --list-categories` and a `Mode=Success` run,
+> and the dependency versions from `cmake/Dependencies.cmake`. This document
+> had drifted five months and, more to the point, `catalog_depth_tests.cpp`
+> had believed its mock-schema section rather than the driver (**A24**).
+> Anything here that a command can answer should be checked against the
+> command before it is trusted.
 
 ---
 
@@ -27,7 +35,7 @@ odbc-crusher <connection_string> [--verbose] [-o console|json] [-f file.json]
 | **CLI entry point** | `src/main.cpp` | Argument parsing, orchestration |
 | **ODBC wrappers** | `src/core/` | RAII handles for HENV, HDBC, HSTMT; error translation |
 | **Discovery** | `src/discovery/` | `DriverInfo`, `TypeInfo`, `FunctionInfo` — driver capability probes |
-| **Test suites** | `src/tests/` | 12 test categories, each a `TestBase` subclass |
+| **Test suites** | `src/tests/` | 23 test categories, each a `TestBase` subclass |
 | **Reporting** | `src/reporting/` | `ConsoleReporter`, `JsonReporter` |
 | **Mock driver** | `mock-driver/` | Standalone ODBC DLL for CI/offline testing |
 | **Unit tests** | `tests/` | GTest suite for regression testing |
@@ -36,7 +44,7 @@ odbc-crusher <connection_string> [--verbose] [-o console|json] [-f file.json]
 
 1. Parse CLI → create reporter → connect to data source
 2. **Phase 1 (Discovery)**: Collect driver info, type info, function support, scalar function bitmasks
-3. **Phase 2 (Testing)**: Run 12 test categories, collect `TestResult` vectors
+3. **Phase 2 (Testing)**: Run 23 test categories, collect `TestResult` vectors
 4. **Phase 3 (Reporting)**: Format everything for the target audience
 
 ---
@@ -46,7 +54,7 @@ odbc-crusher <connection_string> [--verbose] [-o console|json] [-f file.json]
 Refer to [`docs/IMPROVEMENT_PLAN.md`](docs/IMPROVEMENT_PLAN.md)
 
 
-## 4. Test Categories (131 tests)
+## 4. Test Categories (205 probes)
 
 | Category | Tests | Key ODBC Functions | Conformance |
 |----------|:-----:|----------------|-------------|
@@ -93,10 +101,17 @@ Every test must:
 
 ### Mock Schema (Default preset)
 
+Five tables, taken from `mock-driver/src/mock/mock_catalog.cpp` — the code
+that answers `SQLTables`, and therefore the only version of this that can be
+right. H3/A24: this section listed three, and `catalog_depth_tests.cpp`
+believed it.
+
 ```
-CUSTOMERS (CUSTOMER_ID INT PK, NAME VARCHAR, EMAIL VARCHAR, CREATED_DATE DATE, IS_ACTIVE BIT, BALANCE DECIMAL)
-ORDERS    (ORDER_ID INT PK, CUSTOMER_ID INT FK, ORDER_DATE DATE, TOTAL_AMOUNT DECIMAL, STATUS VARCHAR)
-PRODUCTS  (PRODUCT_ID INT PK, NAME VARCHAR, DESCRIPTION VARCHAR, PRICE DECIMAL, STOCK INT)
+CUSTOMERS   (CUSTOMER_ID INT PK, NAME VARCHAR, EMAIL VARCHAR, CREATED_DATE DATE, IS_ACTIVE BIT, BALANCE DECIMAL)
+USERS       (USER_ID INT PK, USERNAME VARCHAR, EMAIL VARCHAR, CREATED_DATE DATE, IS_ACTIVE BIT, BALANCE DECIMAL)
+ORDERS      (ORDER_ID INT PK, CUSTOMER_ID INT FK, ORDER_DATE DATE, TOTAL_AMOUNT DECIMAL, STATUS VARCHAR)
+PRODUCTS    (PRODUCT_ID INT PK, NAME VARCHAR, DESCRIPTION VARCHAR, PRICE DECIMAL, STOCK INT)
+ORDER_ITEMS (ORDER_ITEM_ID INT PK, ORDER_ID INT FK→ORDERS, PRODUCT_ID INT FK→PRODUCTS, QUANTITY INT, UNIT_PRICE DECIMAL)
 ```
 
 ### Consonant Development Rule
@@ -114,9 +129,9 @@ All changes must maintain feature parity:
 |-----------|-----------|-------|
 | Language | C++17 | Direct ODBC API access, `std::optional`, `std::string_view` |
 | Build | CMake 3.20+ | CTest integration, FetchContent for deps |
-| Test framework | Google Test 1.14 | GTest + GMock |
-| CLI parsing | CLI11 2.4.2 | Header-only |
-| JSON | nlohmann/json 3.11.3 | Header-only |
+| Test framework | Google Test 1.17.0 | GTest + GMock |
+| CLI parsing | CLI11 2.6.2 | Header-only |
+| JSON | nlohmann/json 3.12.0 | Header-only |
 | ODBC | System | odbc32.lib (Windows) / unixODBC (Linux/macOS) |
 
 ---
@@ -193,7 +208,7 @@ Potential areas for future development (not yet scheduled):
 
 21. **Always validate against real drivers with source access.** Running against Firebird revealed that 17 of 27 non-passing results were bugs in odbc-crusher, not the driver. Mock-only testing is insufficient.
 
-22. **The mock driver is not enough.** Even with 131/131 tests passing against the mock, 17 tests failed against a real driver due to assumptions baked into the mock schema. Real-world testing is essential.
+22. **The mock driver is not enough.** Even with every probe passing against the mock, 17 failed against a real driver because of assumptions baked into the mock schema. Real-world testing is essential. *(H3: the "131/131" this lesson was first written about is a February figure; the point survives the arithmetic. The stress run of 2026-09-08 has the mock at 190/190 and PostgreSQL at 87.1%, MySQL at 57.7% — and the Firebird driver segfaulted.)*
 
 23. **`dynamic_cast` across DLL boundaries doesn't work on Windows.** Solved with opaque handle + magic number validation in the mock driver.
 

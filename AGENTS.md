@@ -41,7 +41,13 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `
 3. Namespace: `odbc_crusher::tests`
 4. Return `std::vector<TestResult>` from `run()`
 5. Register in `src/main.cpp` and add to `src/tests/CMakeLists.txt`
-6. Add GTest unit tests in `tests/` and register in `tests/CMakeLists.txt`
+6. Add an **e2e scenario** in `tests/e2e/test_e2e_scenarios.cpp` with a mock
+   configuration that makes the new probe *fail* — a probe with no failing
+   configuration has not been shown to detect anything. (H4: this step used
+   to say "add GTest unit tests in `tests/`"; the per-category wrappers it
+   refers to were retired in `cb2f639`, so following it produced a test file
+   with nothing to register it against. `tests/unit/` is still the right
+   place for a pure function — see `test_guarded_buffer.cpp`.)
 7. Update mock driver if new ODBC functions are exercised
 
 ### Preserve the primary exception on rollback-path failure

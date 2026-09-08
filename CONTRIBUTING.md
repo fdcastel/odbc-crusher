@@ -29,7 +29,6 @@ src/
   discovery/      Driver introspection (DriverInfo, TypeInfo, FunctionInfo)
   tests/          ODBC conformance test suites (the tests that odbc-crusher runs)
   reporting/      Console and JSON output formatters
-  cli/            CLI argument parsing
   main.cpp        Entry point
 tests/            GTest unit tests for the above
 mock-driver/      A mock ODBC driver DLL for CI testing
