@@ -30,7 +30,6 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
         "100 rapid SELECT->Fetch->Close cycles complete without leaks or degradation",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8, Cursor Management",
         [&](TestResult& r) {
-            auto overall_start = std::chrono::high_resolution_clock::now();
             constexpr int iterations = 100;
             int successful = 0;
             std::chrono::microseconds first_10_duration{0};
@@ -99,12 +98,13 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
                 if (i >= iterations - 10) last_10_duration += iter_dur;
             }
 
-            // E5: `total` was computed here and never read. G6 moved the raw
-            // microsecond figures out of `actual` - they made two consecutive
-            // reports differ in this field every time - and left the variable
-            // behind. The per-probe duration is reported as duration_us.
-            auto overall_end = std::chrono::high_resolution_clock::now();
-            (void)overall_end;
+            // E5: an overall_start/overall_end/total trio stood here and across
+            // the loop above, all of it dead since G6 moved the raw microsecond
+            // figures out of `actual` - they made two consecutive reports differ
+            // in this field every time. The per-probe duration is reported as
+            // duration_us. Removed whole: silencing one half of a dead pair
+            // just moves the warning to the other half, which is what the first
+            // attempt at this did.
 
             std::ostringstream oss;
             // G6: the raw microsecond figures used to live here, which made
