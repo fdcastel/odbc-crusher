@@ -50,7 +50,14 @@ std::optional<std::string> crashed_category(const CrusherRun& run) {
 
 std::string report_outline(const CrusherRun& run) {
     std::ostringstream out;
-    if (const auto& summary = run.report["summary"]; !summary.is_null()) {
+    // D74: `contains` first, and never `operator[]` on a const json that may
+    // not be an object. When crusher writes no report at all `run.report` is
+    // null, and nlohmann's const operator[] asserts on that - so the helper
+    // built to explain a missing report aborted the test binary whenever the
+    // report was missing. Caught by three macOS scenarios turning from
+    // `Failed` into `Subprocess aborted` in the first CI run after D74.
+    if (run.report.is_object() && run.report.contains("summary")) {
+        const auto& summary = run.report["summary"];
         out << "summary: total=" << summary.value("total_tests", -1)
             << " passed=" << summary.value("passed", -1)
             << " failed=" << summary.value("failed", -1)
@@ -59,7 +66,11 @@ std::string report_outline(const CrusherRun& run) {
     } else {
         out << "no summary in the report\n";
     }
-    out << "complete=" << (run.report.value("complete", false) ? "true" : "false")
+    // D74: `value()` throws on a non-object as surely as `operator[]` does,
+    // so guarding only the line above would have moved the abort down two.
+    const bool complete = run.report.is_object() &&
+                          run.report.value("complete", false);
+    out << "complete=" << (complete ? "true" : "false")
         << " timed_out=" << (run.timed_out ? "true" : "false")
         << " exit_code=" << run.exit_code << "\n";
     if (run.report.contains("categories")) {
@@ -1742,4 +1753,35 @@ TEST_F(CrusherE2EFixture, OmittedTerminatorsAreGradedByOneProbeNotTwelve) {
     EXPECT_NE(nul->value("actual", std::string{}),
               nul_clean->value("actual", std::string{}))
         << "BufferValidation=Lenient reached no probe at all";
+}
+
+
+// ── D74: the diagnostic must survive the case it exists for ───────────────
+//
+// report_outline is what a scenario prints when something has already gone
+// wrong, so the input it has to handle is a run that produced nothing. It did
+// not: `run.report["summary"]` on a const json asserts when the report is
+// null, and three macOS scenarios turned from `Failed` into
+// `Subprocess aborted` - the gtest binary itself dying inside the helper meant
+// to explain the failure.
+TEST(ReportOutlineTest, SurvivesARunThatProducedNoReportAtAll) {
+    CrusherRun nothing;                    // null report, exit code 0
+    const std::string out = report_outline(nothing);
+
+    EXPECT_NE(out.find("no summary in the report"), std::string::npos) << out;
+    EXPECT_NE(out.find("exit_code="), std::string::npos)
+        << "the exit code is the whole reason this is printed; " << out;
+    EXPECT_NE(out.find("no categories key at all"), std::string::npos) << out;
+}
+
+TEST(ReportOutlineTest, SurvivesAReportThatIsNotAnObject) {
+    // A truncated or half-written file can parse as something that is not an
+    // object at all. `value()` throws on those exactly as `operator[]` does.
+    CrusherRun odd;
+    odd.report = nlohmann::json::array({1, 2, 3});
+    odd.exit_code = 134;
+
+    const std::string out = report_outline(odd);
+    EXPECT_NE(out.find("no summary in the report"), std::string::npos) << out;
+    EXPECT_NE(out.find("exit_code=134"), std::string::npos) << out;
 }
