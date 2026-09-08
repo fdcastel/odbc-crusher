@@ -27,6 +27,12 @@ protected:
 private:
     // C9: the two attributes that make an array execution an
     // array execution, set together and - unlike before - checked.
+    // D66: set one attribute and report if the driver refuses it, rather
+    // than carrying on and grading the driver on values we wrote ourselves.
+    bool set_stmt_attr_or_skip(core::OdbcStatement& stmt, TestResult& r,
+                               SQLINTEGER attr, SQLPOINTER value,
+                               const char* attr_name);
+
     bool configure_array_exec(core::OdbcStatement& stmt,
                               TestResult& r, SQLULEN paramset_size);
 

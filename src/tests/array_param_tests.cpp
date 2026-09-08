@@ -117,6 +117,31 @@ std::vector<TestResult> ArrayParamTests::run() {
 }
 
 // ── Test 1: Column-Wise Array Binding ────────────────────────────────────────
+// D66: set one statement attribute and report if the driver will not take it.
+//
+// The array probes set the attributes their assertions depend on and threw
+// the return code away - 21 of them. SQL_ATTR_PARAM_STATUS_PTR is the
+// sharpest case: a probe that sets it, does not check, and then reads the
+// array it passed is reading *its own initialisation* and grading the driver
+// on it. If the attribute was refused the array is untouched, and `{}` or
+// `0xFFFF` is what gets reported.
+//
+// Same family as D29 (the SQL_C_NUMERIC ARD fields nothing checked) and C11
+// (the same helper re-implemented inline with its return codes dropped).
+bool ArrayParamTests::set_stmt_attr_or_skip(core::OdbcStatement& stmt,
+                                            TestResult& r, SQLINTEGER attr,
+                                            SQLPOINTER value,
+                                            const char* attr_name) {
+    SQLRETURN ret = SQLSetStmtAttr(stmt.get_handle(), attr, value, 0);
+    if (SQL_SUCCEEDED(ret)) return true;
+    r.status = TestStatus::SKIP_INCONCLUSIVE;
+    r.actual = std::string("Driver refused SQLSetStmtAttr(") + attr_name +
+               "), so this probe has nothing to assert about";
+    r.suggestion = std::string("A driver claiming array-parameter support "
+                               "must accept ") + attr_name;
+    return false;
+}
+
 // C9: the two attributes that make an array execution an array execution.
 //
 // These were set inline at a dozen sites and the return code discarded at
@@ -708,7 +733,8 @@ TestResult ArrayParamTests::test_array_with_null_values() {
         if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
         
         SQLUSMALLINT status_array[ARRAY_SIZE] = {};
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, status_array, 0);
+        if (!set_stmt_attr_or_skip(stmt, r, SQL_ATTR_PARAM_STATUS_PTR,
+                                   status_array, "SQL_ATTR_PARAM_STATUS_PTR")) return;
         
         // Bind integer array — row 1 is NULL
         SQLINTEGER id_array[ARRAY_SIZE] = {100, 200, 300};
@@ -807,10 +833,13 @@ TestResult ArrayParamTests::test_param_operation_array() {
         // Set up status array to check results
         SQLUSMALLINT status_array[ARRAY_SIZE];
         for (SQLULEN i = 0; i < ARRAY_SIZE; ++i) status_array[i] = 0xFFFF;
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, status_array, 0);
+        if (!set_stmt_attr_or_skip(stmt, r, SQL_ATTR_PARAM_STATUS_PTR,
+                                   status_array, "SQL_ATTR_PARAM_STATUS_PTR")) return;
         
         SQLULEN params_processed = 0;
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, &params_processed, 0);
+        if (!set_stmt_attr_or_skip(stmt, r, SQL_ATTR_PARAMS_PROCESSED_PTR,
+                                   &params_processed,
+                                   "SQL_ATTR_PARAMS_PROCESSED_PTR")) return;
         
         // Bind parameter array
         SQLINTEGER id_array[ARRAY_SIZE] = {10, 20, 30, 40};
@@ -988,8 +1017,15 @@ TestResult ArrayParamTests::test_param_status_per_row_partial_failure() {
                 return;
             }
 
-            SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
-                reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
+            // D66: this was unchecked while the PARAMSET_SIZE call just
+            // below it was checked — the probe already knew the question
+            // was worth asking, and asked it of only one of the two.
+            if (!set_stmt_attr_or_skip(
+                    stmt, r, SQL_ATTR_PARAM_BIND_TYPE,
+                    reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN),
+                    "SQL_ATTR_PARAM_BIND_TYPE")) {
+                return;
+            }
             SQLRETURN ps_ret = SQLSetStmtAttr(stmt.get_handle(),
                 SQL_ATTR_PARAMSET_SIZE,
                 reinterpret_cast<SQLPOINTER>(kSize), 0);
