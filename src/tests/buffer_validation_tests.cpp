@@ -141,19 +141,22 @@ TestResult BufferValidationTests::test_buffer_overflow_protection() {
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 SQLGetInfo, Buffer Length",
         [&](TestResult& r) {
-            // Use a very small buffer and verify driver doesn't overflow
+            // Use a very small buffer and verify driver doesn't overflow.
+            //
+            // D64: this probe hand-rolled the guard - five bytes of 'Z' past
+            // what it declared - and GuardedBuffer is that idea with the one
+            // piece it was missing, a zero at the end so a driver manager
+            // scanning for a terminator stops inside our memory rather than
+            // past it. Same declared length, same sentinel, more room.
             const SQLSMALLINT small_buffer_size = 10;
-            char buffer[small_buffer_size + 5];  // Extra space to detect overflow
+            core::GuardedBuffer<char> buffer(
+                static_cast<size_t>(small_buffer_size), 'Z', 'Z');
             SQLSMALLINT buffer_length = 0;
-
-            // Fill entire buffer with sentinel value
-            const char sentinel = 'Z';
-            std::memset(buffer, sentinel, sizeof(buffer));
 
             SQLRETURN rc = SQLGetInfo(
                 conn_.get_handle(),
                 SQL_DRIVER_NAME,
-                buffer,
+                buffer.data(),
                 small_buffer_size,
                 &buffer_length
             );
@@ -165,16 +168,10 @@ TestResult BufferValidationTests::test_buffer_overflow_protection() {
                 r.severity = Severity::ERR;
             } else {
                 // Verify the guard area after the buffer wasn't touched
-                size_t overflow_at = sizeof(buffer);
-                for (size_t i = static_cast<size_t>(small_buffer_size);
-                     i < sizeof(buffer); ++i) {
-                    if (buffer[i] != sentinel) {
-                        overflow_at = i;
-                        break;
-                    }
-                }
+                const auto breach = buffer.guard_breach();
 
-                if (overflow_at < sizeof(buffer)) {
+                if (breach.has_value()) {
+                    const size_t overflow_at = *breach;
                     r.status = TestStatus::FAIL;
                     // D54: this said only "guard area corrupted", which names
                     // neither the offset nor the byte. A CRITICAL finding on a
@@ -188,11 +185,8 @@ TestResult BufferValidationTests::test_buffer_overflow_protection() {
                                std::to_string(small_buffer_size) +
                                "-byte buffer: offset " +
                                std::to_string(overflow_at) + " holds " +
-                               hex_byte(buffer[overflow_at]) +
-                               ", guard area " + hex_bytes(
-                                   buffer + small_buffer_size,
-                                   sizeof(buffer) -
-                                       static_cast<size_t>(small_buffer_size)) +
+                               hex_byte(buffer.data()[overflow_at]) +
+                               ", guard area " + buffer.guard_hex() +
                                ", declared length " +
                                std::to_string(buffer_length);
                     r.suggestion = "Driver wrote beyond buffer boundary";
@@ -225,15 +219,19 @@ TestResult BufferValidationTests::test_truncation_indicators() {
                 { SQL_SERVER_NAME, "SQL_SERVER_NAME" },
             };
 
-            char full_buf[256] = {0};
+            // D64: guarded. D58 guarded Step 2's buffer and left this one,
+            // declared thirty lines above its call and so invisible to the
+            // proximity grep that found the others; ASan named it directly.
+            constexpr size_t kFullCapacity = 256;
+            core::GuardedBuffer<char> full_buf(kFullCapacity, '\0');
             SQLSMALLINT full_length = 0;
             SQLUSMALLINT info_type = 0;
 
             for (const auto& p : probes) {
                 full_length = 0;
                 SQLRETURN probe_rc = SQLGetInfo(
-                    conn_.get_handle(), p.type,
-                    full_buf, sizeof(full_buf), &full_length);
+                    conn_.get_handle(), p.type, full_buf.data(),
+                    static_cast<SQLSMALLINT>(kFullCapacity), &full_length);
                 if (SQL_SUCCEEDED(probe_rc) && full_length >= 4) {
                     info_type = p.type;
                     break;
@@ -393,13 +391,19 @@ TestResult BufferValidationTests::test_sentinel_values() {
             // bypass the DM's ANSI↔Wide conversion layer, which can write extra
             // bytes beyond the null terminator and produce false failures.
             // The DM intercepts SQL_DRIVER_NAME itself, so we avoid that.
+            // D64: guarded. The declared region keeps the 0xAA sentinel this
+            // probe checks; the guard past it is what stops a manager scanning
+            // for a wide terminator that the driver never wrote.
             const size_t buffer_size = 128;          // wide characters
             const size_t byte_size = buffer_size * sizeof(SQLWCHAR);
-            std::vector<unsigned char> raw(byte_size);
             const unsigned char sentinel = 0xAA;
-            std::memset(raw.data(), sentinel, byte_size);
+            core::GuardedBuffer<SQLWCHAR> guarded(
+                buffer_size, static_cast<SQLWCHAR>(0xAAAA),
+                static_cast<SQLWCHAR>(0xAAAA));
 
-            SQLWCHAR* wbuf = reinterpret_cast<SQLWCHAR*>(raw.data());
+            SQLWCHAR* wbuf = guarded.data();
+            const unsigned char* raw =
+                reinterpret_cast<const unsigned char*>(wbuf);
             SQLSMALLINT buffer_length = 0;
 
             SQLRETURN rc = SQLGetInfoW(

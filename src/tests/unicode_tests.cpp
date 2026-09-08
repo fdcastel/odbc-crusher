@@ -73,10 +73,13 @@ TestResult UnicodeTests::test_getinfo_wchar_strings() {
             std::ostringstream details;
 
             for (const auto& t : tests) {
-                SQLWCHAR wbuf[256] = {0};
+                // D64: guarded, like every other SQLGetInfo buffer.
+                constexpr size_t kUnits = 256;
+                core::GuardedBuffer<SQLWCHAR> wbuf(kUnits, 0);
                 SQLSMALLINT len = 0;
-                SQLRETURN ret = SQLGetInfoW(conn_.get_handle(), t.info_type,
-                                            wbuf, sizeof(wbuf), &len);
+                SQLRETURN ret = SQLGetInfoW(
+                    conn_.get_handle(), t.info_type, wbuf.data(),
+                    static_cast<SQLSMALLINT>(kUnits * sizeof(SQLWCHAR)), &len);
                 if (SQL_SUCCEEDED(ret) && len > 0) {
                     success_count++;
                     // Verify the length is in bytes and is a multiple of sizeof(SQLWCHAR)
@@ -391,10 +394,14 @@ TestResult UnicodeTests::test_string_truncation_wchar() {
             SQLSMALLINT full_byte_len = 0;     // bytes, excluding NUL
 
             for (const auto& p : probes) {
-                SQLWCHAR full_buf[256] = {0};
+                // D64: guarded — Step 1 of the same shape as the narrow
+                // truncation search, and missed for the same reason.
+                constexpr size_t kUnits = 256;
+                core::GuardedBuffer<SQLWCHAR> full_buf(kUnits, 0);
                 SQLSMALLINT len = 0;
-                SQLRETURN probe_ret = SQLGetInfoW(conn_.get_handle(), p.type,
-                                                  full_buf, sizeof(full_buf), &len);
+                SQLRETURN probe_ret = SQLGetInfoW(
+                    conn_.get_handle(), p.type, full_buf.data(),
+                    static_cast<SQLSMALLINT>(kUnits * sizeof(SQLWCHAR)), &len);
                 if (SQL_SUCCEEDED(probe_ret) && len > static_cast<SQLSMALLINT>(sizeof(SQLWCHAR))) {
                     // Need at least 2 characters of data for truncation to be meaningful
                     if (len > full_byte_len) {
