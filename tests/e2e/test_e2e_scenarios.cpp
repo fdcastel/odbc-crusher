@@ -151,8 +151,7 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
         "ResultSetSize=10;");
 
     ASSERT_TRUE(run.launched) << "Failed to launch crusher binary";
-    ASSERT_TRUE(run.report.contains("summary"))
-        << "stderr: " << run.raw_stderr;
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
 
     // Walk every probe once and collect the non-PASS ones grouped by status,
     // so the EXPECT failure messages can name the offenders. Without this the
@@ -747,7 +746,7 @@ TEST_F(CrusherE2EFixture, ReportCarriesSchemaVersionAndIso8601Timestamp) {
         "ResultSetSize=10;");
 
     ASSERT_TRUE(run.launched);
-    ASSERT_TRUE(run.report.contains("summary")) << "stderr: " << run.raw_stderr;
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
 
     ASSERT_TRUE(run.report.contains("schema_version"))
         << "The report must be self-describing (G4).";
@@ -795,7 +794,7 @@ TEST_F(CrusherE2EFixture, ReportCarriesSchemaVersionAndIso8601Timestamp) {
 TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
     auto ok = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
-    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    ASSERT_TRUE(ok.report.contains("summary")) << report_outline(ok);
     if (auto why = baseline_blocker(ok.report, "Buffer Validation",
                                     "test_null_termination")) GTEST_SKIP() << *why;
     auto clean = find_test(ok.report, "Buffer Validation",
@@ -806,7 +805,7 @@ TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
     auto bad = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
         "BufferValidation=Lenient;");
-    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    ASSERT_TRUE(bad.report.contains("summary")) << report_outline(bad);
     auto t = find_test(bad.report, "Buffer Validation", "test_null_termination");
     ASSERT_TRUE(t.has_value()) << report_outline(bad);
     const auto status = t->value("status", std::string{});
@@ -854,14 +853,14 @@ TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
 TEST_F(CrusherE2EFixture, BindColIntegerProbeCatchesAWrongValue) {
     auto ok = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
-    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    ASSERT_TRUE(ok.report.contains("summary")) << report_outline(ok);
     if (auto why = baseline_blocker(ok.report, "Statement Tests",
                                     "test_bind_col_integer")) GTEST_SKIP() << *why;
 
     auto bad = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
         "SilentCorruption=SkewNumeric;");
-    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    ASSERT_TRUE(bad.report.contains("summary")) << report_outline(bad);
     auto t = find_test(bad.report, "Statement Tests", "test_bind_col_integer");
     ASSERT_TRUE(t.has_value()) << report_outline(bad);
     EXPECT_EQ(t->value("status", std::string{}), "FAIL")
@@ -876,7 +875,7 @@ TEST_F(CrusherE2EFixture, BindColIntegerProbeCatchesAWrongValue) {
 TEST_F(CrusherE2EFixture, FetchBoundVsGetDataProbeCatchesADisagreement) {
     auto ok = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
-    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    ASSERT_TRUE(ok.report.contains("summary")) << report_outline(ok);
     if (auto why = baseline_blocker(ok.report, "Statement Tests",
                                     "test_fetch_bound_vs_getdata")) GTEST_SKIP() << *why;
 
@@ -885,7 +884,7 @@ TEST_F(CrusherE2EFixture, FetchBoundVsGetDataProbeCatchesADisagreement) {
     auto bad = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
         "SilentCorruption=SkewNumericBound;");
-    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    ASSERT_TRUE(bad.report.contains("summary")) << report_outline(bad);
     auto t = find_test(bad.report, "Statement Tests", "test_fetch_bound_vs_getdata");
     ASSERT_TRUE(t.has_value()) << report_outline(bad);
     EXPECT_EQ(t->value("status", std::string{}), "FAIL")
@@ -903,7 +902,7 @@ TEST_F(CrusherE2EFixture, FetchBoundVsGetDataProbeCatchesADisagreement) {
 TEST_F(CrusherE2EFixture, ParamsetSizeOneSkipsRatherThanFailsWhenAttrsDeclined) {
     auto ok = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
-    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    ASSERT_TRUE(ok.report.contains("summary")) << report_outline(ok);
     if (auto why = baseline_blocker(ok.report, "Array Parameter Tests",
                                     "test_paramset_size_one")) GTEST_SKIP() << *why;
 
@@ -913,7 +912,7 @@ TEST_F(CrusherE2EFixture, ParamsetSizeOneSkipsRatherThanFailsWhenAttrsDeclined) 
     auto declined = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
         "SupportsArrayBind=false;");
-    ASSERT_TRUE(declined.report.contains("summary")) << declined.raw_stderr;
+    ASSERT_TRUE(declined.report.contains("summary")) << report_outline(declined);
     auto t = find_test(declined.report, "Array Parameter Tests",
                        "test_paramset_size_one");
     ASSERT_TRUE(t.has_value()) << report_outline(declined);
@@ -936,9 +935,9 @@ TEST_F(CrusherE2EFixture, PerRowWarningsDoNotTruncateFetchLoops) {
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;";
 
     auto quiet = run_crusher(base);
-    ASSERT_TRUE(quiet.report.contains("summary")) << quiet.raw_stderr;
+    ASSERT_TRUE(quiet.report.contains("summary")) << report_outline(quiet);
     auto warning = run_crusher(base + "FetchReturnsWarning=true;");
-    ASSERT_TRUE(warning.report.contains("summary")) << warning.raw_stderr;
+    ASSERT_TRUE(warning.report.contains("summary")) << report_outline(warning);
 
     const auto& q = quiet.report["summary"];
     const auto& w = warning.report["summary"];
@@ -972,8 +971,8 @@ TEST_F(CrusherE2EFixture, TwoRunsDifferOnlyInTimings) {
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;";
     auto a = run_crusher(conn);
     auto b = run_crusher(conn);
-    ASSERT_TRUE(a.report.contains("summary")) << a.raw_stderr;
-    ASSERT_TRUE(b.report.contains("summary")) << b.raw_stderr;
+    ASSERT_TRUE(a.report.contains("summary")) << report_outline(a);
+    ASSERT_TRUE(b.report.contains("summary")) << report_outline(b);
 
     // Flatten to leaf paths so a difference can be named precisely.
     std::function<void(const nlohmann::json&, const std::string&,
@@ -1041,12 +1040,12 @@ TEST_F(CrusherE2EFixture, WrongValueIsAFailureNotAnInconclusiveSkip) {
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;";
 
     auto quiet = run_crusher(base);
-    ASSERT_TRUE(quiet.report.contains("summary")) << quiet.raw_stderr;
+    ASSERT_TRUE(quiet.report.contains("summary")) << report_outline(quiet);
     if (auto why = baseline_blocker(quiet.report, "Data Type Tests",
                                     "test_integer_types")) GTEST_SKIP() << *why;
 
     auto skewed = run_crusher(base + "SilentCorruption=SkewNumeric;");
-    ASSERT_TRUE(skewed.report.contains("summary")) << skewed.raw_stderr;
+    ASSERT_TRUE(skewed.report.contains("summary")) << report_outline(skewed);
 
     for (const char* probe : {"test_integer_types", "test_decimal_types",
                               "test_float_types"}) {
@@ -1119,7 +1118,7 @@ TEST_F(CrusherE2EFixture, DeclinedOptionalFeatureSkipsAndNamesItsSqlstate) {
     auto run = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
         "SupportsArrayBind=false;");
-    ASSERT_TRUE(run.report.contains("summary")) << run.raw_stderr;
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
 
     auto t = find_test(run.report, "Array Parameter Tests", "test_param_status_array");
     ASSERT_TRUE(t.has_value()) << report_outline(run);
@@ -1436,7 +1435,7 @@ TEST_F(CrusherE2EFixture, CategoryFilterRunsOnlyWhatWasAskedFor) {
     auto run = run_crusher_with_args(
         "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;",
         {"--category", "Connection Tests"});
-    ASSERT_TRUE(run.report.contains("summary")) << run.raw_stderr;
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
 
     ASSERT_TRUE(run.report.contains("categories"));
     ASSERT_EQ(run.report["categories"].size(), 1u) << report_outline(run);
@@ -1459,7 +1458,7 @@ TEST_F(CrusherE2EFixture, AFilteredReportSaysThatItWasFiltered) {
     auto filtered = run_crusher_with_args(
         "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;",
         {"--category", "Connection Tests"});
-    ASSERT_TRUE(filtered.report.contains("summary")) << filtered.raw_stderr;
+    ASSERT_TRUE(filtered.report.contains("summary")) << report_outline(filtered);
 
     ASSERT_TRUE(filtered.report.contains("categories_selected"))
         << "a filtered report must say so: " << report_outline(filtered);
@@ -1469,7 +1468,7 @@ TEST_F(CrusherE2EFixture, AFilteredReportSaysThatItWasFiltered) {
 
     auto full = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;");
-    ASSERT_TRUE(full.report.contains("summary")) << full.raw_stderr;
+    ASSERT_TRUE(full.report.contains("summary")) << report_outline(full);
     EXPECT_FALSE(full.report.contains("categories_selected"))
         << "an unfiltered run must not claim to be filtered";
 }
@@ -1512,7 +1511,7 @@ TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
         "ResultSetSize=10;BufferValidation=Lenient;";
 
     auto baseline = run_crusher(conn);
-    ASSERT_TRUE(baseline.report.contains("summary")) << baseline.raw_stderr;
+    ASSERT_TRUE(baseline.report.contains("summary")) << report_outline(baseline);
     ASSERT_GT(baseline.report["summary"].value("failed", -1), 0)
         << "this configuration must produce something to grade\n"
         << report_outline(baseline);
@@ -1558,7 +1557,7 @@ TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
             << levels[worst] << "-severity failure; " << stricter.raw_stderr;
         // The probe still ran and still failed — the threshold changes the
         // exit code, not the report. Reporting less would be a different tool.
-        ASSERT_TRUE(stricter.report.contains("summary")) << stricter.raw_stderr;
+        ASSERT_TRUE(stricter.report.contains("summary")) << report_outline(stricter);
         EXPECT_EQ(stricter.report["summary"].value("failed", -1),
                   baseline.report["summary"].value("failed", -1));
     } else {
@@ -1570,7 +1569,7 @@ TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
     // And the escape hatch. The report half is unconditional; the exit-code
     // half is not, and D71 is why.
     auto none = run_crusher_with_args(conn, {"--fail-on", "none"});
-    ASSERT_TRUE(none.report.contains("summary")) << none.raw_stderr;
+    ASSERT_TRUE(none.report.contains("summary")) << report_outline(none);
     EXPECT_EQ(none.report["summary"].value("failed", -1),
               baseline.report["summary"].value("failed", -1))
         << "--fail-on=none must silence the exit code, not the report";
@@ -1611,7 +1610,7 @@ TEST_F(CrusherE2EFixture, FailOnDoesNotMaskAConnectionFailure) {
 TEST_F(CrusherE2EFixture, DisconnectProbeCatchesTheWrongSqlstate) {
     auto ok = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
-    ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
+    ASSERT_TRUE(ok.report.contains("summary")) << report_outline(ok);
     auto clean = find_test(ok.report, "Transaction Tests",
                            "test_disconnect_with_open_transaction");
     ASSERT_TRUE(clean.has_value()) << report_outline(ok);
@@ -1622,7 +1621,7 @@ TEST_F(CrusherE2EFixture, DisconnectProbeCatchesTheWrongSqlstate) {
     auto bad = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Partial;FailOn=SQLDisconnect;"
         "ErrorCode=HY000;Catalog=Default;ResultSetSize=10;");
-    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    ASSERT_TRUE(bad.report.contains("summary")) << report_outline(bad);
     auto t = find_test(bad.report, "Transaction Tests",
                        "test_disconnect_with_open_transaction");
     ASSERT_TRUE(t.has_value()) << report_outline(bad);
@@ -1646,7 +1645,7 @@ TEST_F(CrusherE2EFixture, DisconnectProbeCatchesTheWrongSqlstate) {
 TEST_F(CrusherE2EFixture, ReconnectProbeGradesUsabilityAndReportsAutocommit) {
     auto run = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;");
-    ASSERT_TRUE(run.report.contains("summary")) << run.raw_stderr;
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
     auto t = find_test(run.report, "Connection Tests",
                        "test_reconnected_handle_is_usable");
     ASSERT_TRUE(t.has_value()) << report_outline(run);
@@ -1691,9 +1690,9 @@ TEST_F(CrusherE2EFixture, OmittedTerminatorsAreGradedByOneProbeNotTwelve) {
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;";
 
     auto clean = run_crusher(base);
-    ASSERT_TRUE(clean.report.contains("summary")) << clean.raw_stderr;
+    ASSERT_TRUE(clean.report.contains("summary")) << report_outline(clean);
     auto bad = run_crusher(base + "BufferValidation=Lenient;");
-    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+    ASSERT_TRUE(bad.report.contains("summary")) << report_outline(bad);
 
     // The probes D68 fixed, by the category they live in.
     const std::vector<std::pair<std::string, std::string>> graded = {
