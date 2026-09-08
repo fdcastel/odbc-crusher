@@ -94,7 +94,10 @@ ctest --test-dir build --output-on-failure
 
 Before considering work complete:
 
-- [ ] Code compiles without warnings on Windows and Linux
+- [ ] Code compiles without warnings on Windows, Linux and macOS
+      (enforced: `/WX` on MSVC, `-Werror` on GCC/Clang — E5. The non-MSVC
+      set deliberately omits `-Wold-style-cast`, `-Wsign-conversion` and
+      `-Wuseless-cast`; see `cmake/CompilerWarnings.cmake` for why.)
 - [ ] All unit tests pass (`ctest --test-dir build`)
 - [ ] RAII used for all ODBC handles
 - [ ] Error handling extracts full diagnostic records
