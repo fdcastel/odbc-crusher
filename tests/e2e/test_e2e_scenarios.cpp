@@ -6,6 +6,7 @@
 // — an environment problem, not a regression to flag.
 #include <cstdlib>
 #include <gtest/gtest.h>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -1467,36 +1468,84 @@ TEST_F(CrusherE2EFixture, ACategoryThatMatchesNothingIsAnError) {
 // sets continue-on-error and nobody reads it.
 
 TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
-    // BufferValidation=Lenient produces exactly one FAIL, at severity ERROR,
-    // which puts a threshold on either side of it.
+    // The threshold to test comes from the report, not from an assumption
+    // about what fails here.
+    //
+    // The first version of this asserted that BufferValidation=Lenient
+    // produces exactly one FAIL at severity ERROR, and that --fail-on=critical
+    // therefore exits 0. Both are true on Windows and neither is true on
+    // POSIX, where the driver managers' buffer overrun (D1, D59) adds two
+    // more failures, one of them CRITICAL — so --fail-on=critical correctly
+    // exits non-zero there and this test called that a bug. Same shape as
+    // D53: a scenario asserting a platform's behaviour as though it were the
+    // tool's.
     const std::string conn =
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
         "ResultSetSize=10;BufferValidation=Lenient;";
 
     auto baseline = run_crusher(conn);
     ASSERT_TRUE(baseline.report.contains("summary")) << baseline.raw_stderr;
-    ASSERT_EQ(baseline.report["summary"].value("failed", -1), 1)
+    ASSERT_GT(baseline.report["summary"].value("failed", -1), 0)
+        << "this configuration must produce something to grade\n"
         << report_outline(baseline);
     EXPECT_NE(baseline.exit_code, 0)
         << "the default must keep failing on any FAIL — G3 is opt-in";
 
-    // Above the failure's severity: nothing to report, exit clean.
-    auto critical = run_crusher_with_args(conn, {"--fail-on", "critical"});
-    EXPECT_EQ(critical.exit_code, 0)
-        << "an ERROR-severity failure must not trip a CRITICAL threshold; "
-        << critical.raw_stderr;
-    // The probe still ran and still failed — the threshold changes the exit
-    // code, not the report. Reporting less would be a different tool.
-    ASSERT_TRUE(critical.report.contains("summary")) << critical.raw_stderr;
-    EXPECT_EQ(critical.report["summary"].value("failed", -1), 1);
+    // Most severe first, matching the enum's order.
+    const std::vector<std::string> levels = {"critical", "error", "warning",
+                                             "info"};
+    size_t worst = levels.size();
+    for (const auto& cat : baseline.report["categories"]) {
+        for (const auto& t : cat["tests"]) {
+            const auto status = t.value("status", std::string{});
+            if (status != "FAIL" && status != "ERROR") continue;
+            const auto sev = t.value("severity", std::string{});
+            for (size_t i = 0; i < levels.size(); ++i) {
+                std::string upper = levels[i];
+                for (auto& c : upper) c = static_cast<char>(std::toupper(c));
+                if (sev == upper && i < worst) worst = i;
+            }
+        }
+    }
+    ASSERT_LT(worst, levels.size())
+        << "no failure carried a severity this test recognises\n"
+        << report_outline(baseline);
 
-    // At the failure's severity, and below it.
-    EXPECT_NE(run_crusher_with_args(conn, {"--fail-on", "error"}).exit_code, 0);
-    EXPECT_NE(run_crusher_with_args(conn, {"--fail-on", "warning"}).exit_code, 0);
-    EXPECT_NE(run_crusher_with_args(conn, {"--fail-on", "info"}).exit_code, 0);
+    // A threshold at the worst severity present must trip, and so must every
+    // less severe one — those are the levels that include it.
+    for (size_t i = worst; i < levels.size(); ++i) {
+        auto run = run_crusher_with_args(conn, {"--fail-on", levels[i]});
+        EXPECT_NE(run.exit_code, 0)
+            << "--fail-on=" << levels[i] << " must trip on a "
+            << levels[worst] << "-severity failure; " << run.raw_stderr;
+    }
 
-    // And the escape hatch.
-    EXPECT_EQ(run_crusher_with_args(conn, {"--fail-on", "none"}).exit_code, 0);
+    // A threshold stricter than anything present must not trip. There is no
+    // level above CRITICAL, so this is skipped when the worst is already that
+    // — which is the case on Linux and macOS.
+    if (worst > 0) {
+        auto stricter = run_crusher_with_args(conn, {"--fail-on", levels[worst - 1]});
+        EXPECT_EQ(stricter.exit_code, 0)
+            << "--fail-on=" << levels[worst - 1] << " must not trip on a "
+            << levels[worst] << "-severity failure; " << stricter.raw_stderr;
+        // The probe still ran and still failed — the threshold changes the
+        // exit code, not the report. Reporting less would be a different tool.
+        ASSERT_TRUE(stricter.report.contains("summary")) << stricter.raw_stderr;
+        EXPECT_EQ(stricter.report["summary"].value("failed", -1),
+                  baseline.report["summary"].value("failed", -1));
+    } else {
+        std::cout << "[ G3 ] worst severity present is CRITICAL, so the "
+                     "\"stricter threshold does not trip\" half is not "
+                     "reachable on this platform\n";
+    }
+
+    // And the escape hatch, which is unconditional.
+    auto none = run_crusher_with_args(conn, {"--fail-on", "none"});
+    EXPECT_EQ(none.exit_code, 0) << none.raw_stderr;
+    ASSERT_TRUE(none.report.contains("summary")) << none.raw_stderr;
+    EXPECT_EQ(none.report["summary"].value("failed", -1),
+              baseline.report["summary"].value("failed", -1))
+        << "--fail-on=none must silence the exit code, not the report";
 }
 
 TEST_F(CrusherE2EFixture, FailOnDoesNotMaskAConnectionFailure) {
