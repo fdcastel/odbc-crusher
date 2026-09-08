@@ -53,6 +53,18 @@ bool apply_silent_corruption(MockRow& row, const MockTable& table,
     switch (mode) {
         case Mode::None:
             return true;
+
+        // E5: these four used to fall off the end of the switch into the
+        // trailing `return true`, which is the right answer and said nothing
+        // about why. All four corrupt on the *fetch* path - they change what
+        // a value looks like on the way out, not what is stored - so there is
+        // nothing for this function to do. Written as cases so -Wswitch keeps
+        // being the reminder it is when a fifth mode is added.
+        case Mode::NullAsEmpty:
+        case Mode::MangleUnicode:
+        case Mode::SkewNumeric:
+        case Mode::SkewNumericBound:
+            return true;
         case Mode::DropInserts:
             return false;
         case Mode::MangleVarchar: {

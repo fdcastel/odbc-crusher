@@ -107,21 +107,31 @@ CellValue read_param_value(
             return static_cast<double>(*reinterpret_cast<const SQLREAL*>(data_ptr));
         case SQL_C_TYPE_DATE: {
             const auto* d = reinterpret_cast<const DATE_STRUCT*>(data_ptr);
-            char buf[16];
+            // E5: was char[16], sized for a plausible date rather than a
+            // possible one. `month` and `day` are SQLUSMALLINT and a bound
+            // parameter may hold 65535 in either - five digits each - and
+            // `year` is a signed SQLSMALLINT that can print six. The worst
+            // case is 19 bytes. snprintf truncated rather than overflowed,
+            // so this was silently wrong rather than unsafe, which for a
+            // conformance fixture is the worse of the two.
+            char buf[32];
             std::snprintf(buf, sizeof(buf), "%04d-%02u-%02u",
                           d->year, d->month, d->day);
             return std::string(buf);
         }
         case SQL_C_TYPE_TIME: {
             const auto* t = reinterpret_cast<const TIME_STRUCT*>(data_ptr);
-            char buf[16];
+            char buf[32];          // E5: 18 in the worst case, see above
             std::snprintf(buf, sizeof(buf), "%02u:%02u:%02u",
                           t->hour, t->minute, t->second);
             return std::string(buf);
         }
         case SQL_C_TYPE_TIMESTAMP: {
             const auto* ts = reinterpret_cast<const TIMESTAMP_STRUCT*>(data_ptr);
-            char buf[40];
+            // E5: was char[40]. `fraction` is a SQLUINTEGER printed with
+            // %09u, which is a floor and not a ceiling - ten digits fit in
+            // the type - so the worst case is 48.
+            char buf[64];
             if (ts->fraction == 0) {
                 std::snprintf(buf, sizeof(buf), "%04d-%02u-%02u %02u:%02u:%02u",
                               ts->year, ts->month, ts->day,

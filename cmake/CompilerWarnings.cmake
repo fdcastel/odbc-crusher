@@ -63,6 +63,12 @@ else()
         -Wunused
         -Woverloaded-virtual
         -Wconversion
+        # Clang folds -Wsign-conversion into -Wconversion; GCC keeps
+        # them separate. Turning it back off here is what makes the
+        # decision above mean the same thing on both compilers -
+        # without it macOS re-enabled 667 warnings this set is
+        # deliberately not asking for, and only macOS.
+        -Wno-sign-conversion
         -Wnull-dereference
         -Wdouble-promotion
         -Wformat=2
