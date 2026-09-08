@@ -704,6 +704,10 @@ TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
     ASSERT_TRUE(ok.report.contains("summary")) << ok.raw_stderr;
     if (auto why = baseline_blocker(ok.report, "Buffer Validation",
                                     "test_null_termination")) GTEST_SKIP() << *why;
+    auto clean = find_test(ok.report, "Buffer Validation",
+                           "test_null_termination");
+    ASSERT_TRUE(clean.has_value());
+    const auto clean_actual = clean->value("actual", std::string{});
 
     auto bad = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
@@ -711,11 +715,43 @@ TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
     ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
     auto t = find_test(bad.report, "Buffer Validation", "test_null_termination");
     ASSERT_TRUE(t.has_value());
-    EXPECT_EQ(t->value("status", std::string{}), "FAIL")
-        << "BufferValidation=Lenient returns SQL_DRIVER_NAME without its NUL; "
-           "the probe must notice.";
-    EXPECT_NE(t->value("actual", std::string{}).find("No NUL"), std::string::npos)
-        << "actual was: " << t->value("actual", std::string{});
+    const auto status = t->value("status", std::string{});
+    const auto actual = t->value("actual", std::string{});
+
+    // D53: this used to assert FAIL unconditionally, and that is a claim about
+    // the driver manager rather than about the probe. The mock writes
+    // "mockodbc.dll" and, under Lenient, overwrites the terminator at index 12
+    // with an 'X'. Whether the application ever sees an unterminated string
+    // depends on who is in the middle: since D2 the driver exports only its W
+    // entry points, so every driver manager converts, and each does it
+    // differently. Windows and unixODBC hand the un-terminated run through;
+    // the macOS manager rescans its own zeroed buffer, finds the NUL one byte
+    // later and re-terminates - so the application gets a well-formed
+    // 13-character string instead of a broken 12-character one.
+    //
+    // What D33 and A5 actually promise is that the injected fault reaches the
+    // application and that the probe grades it, so that is what is asserted.
+    // Laundering it away entirely - the same result as the clean run - would
+    // mean the lever does nothing, and that still fails here.
+    EXPECT_NE(actual, clean_actual)
+        << "BufferValidation=Lenient changed nothing the application can see; "
+           "the fault-injection lever is not reaching SQLGetInfo.";
+
+    if (status == "FAIL") {
+        // A5's fix: the probe used to call strlen() on an unterminated buffer
+        // and its FAIL branch was a tautology. This is the branch that proves
+        // it can now report the thing it is named for.
+        EXPECT_NE(actual.find("No NUL"), std::string::npos)
+            << "actual was: " << actual;
+    } else {
+        EXPECT_EQ(status, "PASS") << "actual was: " << actual;
+        // The manager re-terminated. The filler byte must still be visible as
+        // one extra character, or the corruption never left the driver.
+        EXPECT_NE(actual.find("13 bytes"), std::string::npos)
+            << "the driver manager re-terminated the string, so the 'X' that "
+               "replaced the NUL should show up as a 13th character; "
+               "actual was: " << actual;
+    }
 }
 
 // A6 — the value check was `value == 42 || indicator != SQL_NULL_DATA`. The

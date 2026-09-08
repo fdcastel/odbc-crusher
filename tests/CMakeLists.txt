@@ -22,6 +22,7 @@ add_executable(odbc_crusher_tests
     unit/test_stale_table_reuse.cpp
     unit/test_console_reporter.cpp
     unit/test_json_reporter.cpp
+    unit/test_utf8_sanitize.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE

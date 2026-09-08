@@ -1,4 +1,5 @@
 #include "json_reporter.hpp"
+#include "utf8_sanitize.hpp"
 #include <ctime>
 #include <filesystem>
 #include <iostream>
@@ -129,6 +130,12 @@ void JsonReporter::maybe_write_snapshot() {
 void JsonReporter::write_snapshot(bool complete) {
     if (output_file_.empty()) return;
 
+    // D52: every string below came from the driver, and nothing guarantees it
+    // is UTF-8. Done in place on the accumulators so each value is inspected
+    // once however many snapshots follow it.
+    sanitize_utf8_in_place(root_);
+    sanitize_utf8_in_place(categories_);
+
     nlohmann::json doc = root_;
     doc["categories"] = categories_;
     doc["complete"] = complete;
@@ -157,10 +164,16 @@ void JsonReporter::write_snapshot(bool complete) {
         // machine-read after a kill, and re-serialising a pretty-printed
         // ~100 KB document after each of 23 categories measurably lengthened
         // the run. Only the final report is indented.
+        // D52: `replace` is the backstop behind sanitize_utf8_in_place - if
+        // an ill-formed byte ever reaches here by a route the walk above does
+        // not cover, it becomes U+FFFD and the report is still written. Losing
+        // the whole document to one byte is the one outcome this tool cannot
+        // afford: the report is the product.
+        constexpr auto kReplace = nlohmann::json::error_handler_t::replace;
         if (complete) {
-            file << std::setw(2) << doc << std::endl;
+            file << doc.dump(2, ' ', false, kReplace) << std::endl;
         } else {
-            file << doc << std::endl;
+            file << doc.dump(-1, ' ', false, kReplace) << std::endl;
         }
     }
 
@@ -180,9 +193,13 @@ void JsonReporter::report_end() {
     if (output_file_.empty()) {
         // Print to stdout: exactly one document, so there is nothing partial
         // to mark, but it must still carry the same keys as the file form.
+        sanitize_utf8_in_place(root_);            // D52
+        sanitize_utf8_in_place(categories_);
         root_["categories"] = categories_;
         root_["complete"] = true;
-        std::cout << std::setw(2) << root_ << std::endl;
+        std::cout << root_.dump(2, ' ', false,
+                                nlohmann::json::error_handler_t::replace)
+                  << std::endl;
     } else {
         write_snapshot(true);
         if (!write_failed_) {

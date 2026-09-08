@@ -1,6 +1,7 @@
 # Reporting library
 add_library(odbc_crusher_reporting
     console_reporter.cpp
+    utf8_sanitize.cpp
     json_reporter.cpp
 )
 

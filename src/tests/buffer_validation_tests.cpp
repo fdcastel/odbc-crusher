@@ -2,6 +2,7 @@
 #include "core/odbc_error.hpp"
 #include <cstring>
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #ifdef _WIN32
@@ -11,6 +12,28 @@
 #include <sqlext.h>
 
 namespace odbc_crusher::tests {
+
+namespace {
+
+// D54: a failing buffer probe has to say what it found, and the bytes are
+// rarely printable - a sentinel run interrupted by a stray NUL is the usual
+// shape. std::to_string on a char would render it as a number and hide that.
+std::string hex_byte(char c) {
+    static const char kDigits[] = "0123456789ABCDEF";
+    const auto b = static_cast<unsigned char>(c);
+    return std::string("0x") + kDigits[(b >> 4) & 0x0F] + kDigits[b & 0x0F];
+}
+
+std::string hex_bytes(const char* data, size_t count) {
+    std::string out;
+    for (size_t i = 0; i < count; ++i) {
+        if (i) out += ' ';
+        out += hex_byte(data[i]);
+    }
+    return out;
+}
+
+}  // namespace
 
 BufferValidationTests::BufferValidationTests(core::OdbcConnection& connection)
     : TestBase(connection) {}
@@ -128,17 +151,36 @@ TestResult BufferValidationTests::test_buffer_overflow_protection() {
                 r.severity = Severity::ERR;
             } else {
                 // Verify the guard area after the buffer wasn't touched
-                bool overflow_detected = false;
-                for (int i = small_buffer_size; i < sizeof(buffer); ++i) {
+                size_t overflow_at = sizeof(buffer);
+                for (size_t i = static_cast<size_t>(small_buffer_size);
+                     i < sizeof(buffer); ++i) {
                     if (buffer[i] != sentinel) {
-                        overflow_detected = true;
+                        overflow_at = i;
                         break;
                     }
                 }
 
-                if (overflow_detected) {
+                if (overflow_at < sizeof(buffer)) {
                     r.status = TestStatus::FAIL;
-                    r.actual = "Buffer overflow detected - guard area corrupted";
+                    // D54: this said only "guard area corrupted", which names
+                    // neither the offset nor the byte. A CRITICAL finding on a
+                    // platform you cannot attach a debugger to then tells you
+                    // nothing you can act on - the position the macOS runner
+                    // put us in. The offset, the byte and the length the
+                    // driver declared are what separate the two candidate
+                    // causes: a whole string written past the limit, or a
+                    // terminator placed one byte late.
+                    r.actual = "Wrote past the " +
+                               std::to_string(small_buffer_size) +
+                               "-byte buffer: offset " +
+                               std::to_string(overflow_at) + " holds " +
+                               hex_byte(buffer[overflow_at]) +
+                               ", guard area " + hex_bytes(
+                                   buffer + small_buffer_size,
+                                   sizeof(buffer) -
+                                       static_cast<size_t>(small_buffer_size)) +
+                               ", declared length " +
+                               std::to_string(buffer_length);
                     r.suggestion = "Driver wrote beyond buffer boundary";
                     r.severity = Severity::CRITICAL;
                 } else {

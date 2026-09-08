@@ -348,12 +348,19 @@ jobs:
         print('[baseline]', {k: summary.get(k) for k in keys})
         for bucket in ('FAIL', 'ERROR', 'SKIP_UNSUPPORTED',
                        'SKIP_INCONCLUSIVE'):
-            names = [t['test_name']
-                     for c in report['categories']
-                     for t in c.get('tests', [])
-                     if t.get('status') == bucket]
-            if names:
-                print('[baseline]', bucket, len(names), sorted(names))
+            rows = [t for c in report['categories']
+                    for t in c.get('tests', [])
+                    if t.get('status') == bucket]
+            if not rows:
+                continue
+            print('[baseline]', bucket, len(rows),
+                  sorted(t['test_name'] for t in rows))
+            # The reason, not just the name: orders 45-47 are about
+            # *why* each of these does not pass on this platform, and
+            # the name alone has never been enough to tell.
+            for t in sorted(rows, key=lambda r: r['test_name']):
+                print('[why]', t['test_name'], '::',
+                      (t.get('actual') or '(no actual)')[:200])
         PY
 
     - name: Upload build artifacts

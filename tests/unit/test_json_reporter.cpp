@@ -81,6 +81,56 @@ protected:
 
 }  // namespace
 
+// D52: the report is the product. A driver that returns a byte which is not
+// UTF-8 — which is exactly the driver this tool exists to find — used to take
+// the whole document down with it: nlohmann::json::dump() throws
+// type_error.316 and crusher wrote nothing at all. Observed on Linux and
+// macOS as soon as D2 made the .so export only its W entry points.
+TEST_F(JsonReporterFixture, ADriverByteThatIsNotUtf8DoesNotCostTheWholeReport) {
+    auto bad = make("t1", tests::TestStatus::FAIL);
+    bad.actual = "No NUL within 256 bytes; buffer was mockodbc.dll\x83XX";
+    bad.diagnostic = "[HY000] driver said \xFF\xFE";
+
+    reporting::JsonReporter rep(path_.string());
+    rep.report_start("Driver={X}");
+    rep.report_category("Buffer Validation", {bad});
+    rep.report_summary(1, 0, 1, 0, 0, 0, std::chrono::microseconds(1));
+    rep.report_end();
+
+    ASSERT_TRUE(fs::exists(path_)) << "no report written at all";
+    const auto j = read_back();                 // throws if it is not JSON
+    ASSERT_TRUE(j.contains("summary"));
+    EXPECT_EQ(j["summary"].value("failed", -1), 1);
+
+    // The byte is not merely dropped: a driver developer needs to see which
+    // one it was and where.
+    const auto actual =
+        j["categories"][0]["tests"][0].value("actual", std::string{});
+    EXPECT_NE(actual.find("mockodbc.dll<0x83>XX"), std::string::npos)
+        << "actual was: " << actual;
+    const auto diag =
+        j["categories"][0]["tests"][0].value("diagnostic", std::string{});
+    EXPECT_NE(diag.find("<0xFF><0xFE>"), std::string::npos)
+        << "diagnostic was: " << diag;
+}
+
+// The same must hold for the snapshots, which is where a killed run's only
+// report comes from — and they are written compact, by a different call.
+TEST_F(JsonReporterFixture, SnapshotsSurviveANonUtf8ByteToo) {
+    auto bad = make("t1", tests::TestStatus::FAIL);
+    bad.actual = "trailing \x80";
+
+    reporting::JsonReporter rep(path_.string());
+    rep.report_start("Driver={X}");
+    rep.report_category("First", {bad});
+    // No report_end() — this is the state a SIGKILL leaves.
+
+    ASSERT_TRUE(fs::exists(path_));
+    const auto j = read_back();
+    EXPECT_EQ(j["categories"][0]["tests"][0].value("actual", std::string{}),
+              "trailing <0x80>");
+}
+
 // The core F2 contract: a report exists on disk before the run ends.
 TEST_F(JsonReporterFixture, WritesAUsableReportBeforeTheRunFinishes) {
     reporting::JsonReporter rep(path_.string());
