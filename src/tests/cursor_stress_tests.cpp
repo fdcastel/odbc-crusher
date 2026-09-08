@@ -99,8 +99,12 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
                 if (i >= iterations - 10) last_10_duration += iter_dur;
             }
 
+            // E5: `total` was computed here and never read. G6 moved the raw
+            // microsecond figures out of `actual` - they made two consecutive
+            // reports differ in this field every time - and left the variable
+            // behind. The per-probe duration is reported as duration_us.
             auto overall_end = std::chrono::high_resolution_clock::now();
-            auto total = std::chrono::duration_cast<std::chrono::microseconds>(overall_end - overall_start);
+            (void)overall_end;
 
             std::ostringstream oss;
             // G6: the raw microsecond figures used to live here, which made

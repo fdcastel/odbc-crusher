@@ -44,6 +44,31 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+# E5: fetched dependencies get SYSTEM include directories, so our warning set
+# stops being an opinion about their code.
+#
+# -Werror turned two -Wnull-dereference hits inside
+# `_deps/json-src/include/nlohmann/json.hpp` into build failures. The only
+# ways out are patching a vendored header on every update, or dropping a flag
+# that protects our own code - neither of which is a trade worth making for a
+# warning about somebody else's implementation. SYSTEM is the mechanism that
+# exists for this.
+#
+# Applied to every fetched target rather than to the one that tripped first:
+# the next dependency to warn should not need this discovered again.
+# `INTERFACE_SYSTEM_INCLUDE_DIRECTORIES` rather than FetchContent's SYSTEM
+# option, which needs CMake 3.25 and this project requires 3.20.
+foreach(_dep_target nlohmann_json CLI11 gtest gtest_main gmock gmock_main)
+    if(TARGET ${_dep_target})
+        get_target_property(_dep_includes ${_dep_target}
+                            INTERFACE_INCLUDE_DIRECTORIES)
+        if(_dep_includes)
+            set_target_properties(${_dep_target} PROPERTIES
+                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_dep_includes}")
+        endif()
+    endif()
+endforeach()
+
 # Add subdirectories
 add_subdirectory(src)
 add_subdirectory(tests)
