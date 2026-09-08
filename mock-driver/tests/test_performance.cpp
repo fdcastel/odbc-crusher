@@ -76,7 +76,7 @@ TEST_F(PerformanceTest, RapidConnectDisconnect) {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     
     std::cout << "100 connections in " << duration.count() << "ms ("
-              << (duration.count() / static_cast<double>(iterations)) << "ms average)\n";
+              << (static_cast<double>(duration.count()) / static_cast<double>(iterations)) << "ms average)\n";
     
     // Should be reasonably fast - less than 50ms average per connection
     EXPECT_LT(duration.count() / iterations, 50) << "Connection overhead too high";
@@ -100,7 +100,7 @@ TEST_F(PerformanceTest, GetTypeInfoOverhead) {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     
     std::cout << "100 SQLGetTypeInfo calls in " << duration.count() << "ms ("
-              << (duration.count() / static_cast<double>(iterations)) << "ms average)\n";
+              << (static_cast<double>(duration.count()) / static_cast<double>(iterations)) << "ms average)\n";
     
     // Should be very fast - less than 5ms average
     EXPECT_LT(duration.count() / iterations, 5) << "SQLGetTypeInfo overhead too high";
@@ -128,7 +128,7 @@ TEST_F(PerformanceTest, FetchPerformance) {
     
     std::cout << "Fetched " << rowCount << " type info rows in " << duration.count() << "ms";
     if (rowCount > 0) {
-        std::cout << " (" << (duration.count() / static_cast<double>(rowCount)) << "ms per row)";
+        std::cout << " (" << (static_cast<double>(duration.count()) / static_cast<double>(rowCount)) << "ms per row)";
     }
     std::cout << "\n";
     
@@ -157,7 +157,7 @@ TEST_F(PerformanceTest, HandleAllocationPerformance) {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     
     std::cout << "1000 handle allocations in " << duration.count() << "ms ("
-              << (duration.count() / static_cast<double>(iterations)) << "ms average)\n";
+              << (static_cast<double>(duration.count()) / static_cast<double>(iterations)) << "ms average)\n";
     
     // Should be reasonably fast - less than 0.5ms average (500ms total for 1000)
     // CI runners may be slower, so threshold is generous
