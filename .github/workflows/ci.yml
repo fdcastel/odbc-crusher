@@ -551,7 +551,12 @@ jobs:
         ASAN_OPTIONS="detect_leaks=0" timeout --kill-after=5 60 ./build-san/src/odbc-crusher "$CONN" -o json -f /tmp/d71.json >/dev/null 2>&1
         ACTUAL=$(grep -o '"[A-Za-z/ ]* (DRIVER CRASH)"' /tmp/d71.json 2>/dev/null | sort -u | tr '\n' ' ')
         rm -f /tmp/d71.json
-        EXPECTED='"Parameter Binding Tests (DRIVER CRASH)" '
+        # D81: empty since I6 Stage A. D71's wild write inside unixODBC
+        # needed state that earlier categories built up, and the per-connection
+        # write buffer changed what accumulates - so the mock no longer walks
+        # the manager into it. The driver-manager bug is not fixed; we stopped
+        # provoking it. If it comes back, this line is what says so.
+        EXPECTED=''
         echo "[D71] expected: $EXPECTED"
         echo "[D71] actual:   $ACTUAL"
         if [ "$ACTUAL" != "$EXPECTED" ]; then
