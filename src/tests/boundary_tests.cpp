@@ -13,14 +13,11 @@ namespace {
 // this shape across the tree into one helper and **B3** builds
 // classify_failure() on top of it. Phase 2 is localized probe fixes with no
 // refactor, so this is a stand-in that C5 deletes.
-std::string first_sqlstate(SQLSMALLINT handle_type, SQLHANDLE handle) {
-    try {
-        auto err = core::OdbcError::from_handle(handle_type, handle, "");
-        if (!err.diagnostics().empty()) return err.diagnostics()[0].sqlstate;
-    } catch (...) {
-    }
-    return "";
-}
+// C5/E5: the anonymous-namespace `first_sqlstate` that stood here is gone.
+// Nothing called it - the call sites below resolve to TestBase's static
+// member of the same name, because unqualified lookup inside a member
+// function finds the member before the namespace. It survived C5's sweep and
+// -Werror is what finally pointed at it.
 
 }  // namespace
 

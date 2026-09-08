@@ -25,6 +25,11 @@ void ConsoleReporter::report_category(const std::string& category_name,
             case tests::TestStatus::SKIP_UNSUPPORTED:
             case tests::TestStatus::SKIP_INCONCLUSIVE: skipped++; break;
             case tests::TestStatus::ERR: errors++; break;
+            // B2: reported, and deliberately not counted in any of the four
+            // buckets above. Written out rather than left to fall off the end
+            // of the switch, so -Wswitch keeps working as the reminder it is
+            // when someone adds a sixth status.
+            case tests::TestStatus::INFORMATIONAL: break;
         }
         if (result.status == tests::TestStatus::FAIL ||
             result.status == tests::TestStatus::ERR) {
@@ -106,7 +111,9 @@ void ConsoleReporter::report_summary(size_t total_tests, size_t passed, size_t f
     out_ << "  Passed:       " << passed;
     if (scored > 0) {
         out_ << " (" << std::fixed << std::setprecision(1)
-             << (passed * 100.0 / scored) << "% of " << scored << " scored)";
+             << (static_cast<double>(passed) * 100.0 /
+                 static_cast<double>(scored))
+             << "% of " << scored << " scored)";
     }
     out_ << "\n";
 
@@ -188,11 +195,13 @@ std::string ConsoleReporter::format_duration(std::chrono::microseconds duration)
         return std::to_string(us) + " us";
     } else if (us < 1000000) {
         std::ostringstream oss;
-        oss << std::fixed << std::setprecision(2) << (us / 1000.0) << " ms";
+        oss << std::fixed << std::setprecision(2)
+            << (static_cast<double>(us) / 1000.0) << " ms";
         return oss.str();
     } else {
         std::ostringstream oss;
-        oss << std::fixed << std::setprecision(2) << (us / 1000000.0) << " s";
+        oss << std::fixed << std::setprecision(2)
+            << (static_cast<double>(us) / 1000000.0) << " s";
         return oss.str();
     }
 }

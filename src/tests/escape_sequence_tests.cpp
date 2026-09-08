@@ -587,19 +587,10 @@ TestResult EscapeSequenceTests::test_numeric_scalar_functions() {
                 const char* name;
             };
 
-            // We accept multiple representations (e.g. "5" or "5.000000")
-            auto match = [](const std::string& val, const std::vector<std::string>& expected) {
-                for (const auto& e : expected) {
-                    if (val == e) return true;
-                    // Try numeric comparison
-                    try {
-                        double v1 = std::stod(val);
-                        double v2 = std::stod(e);
-                        if (std::abs(v1 - v2) < 0.001) return true;
-                    } catch (...) {}
-                }
-                return false;
-            };
+            // C6/E5: a `match` lambda stood here, accepting several spellings of
+            // the same number ("5" vs "5.000000"). Nothing called it: the loop
+            // below compares numerically with a 0.01 tolerance, which is the
+            // same idea done directly. -Werror is what pointed at it.
 
             struct SimpleTest {
                 SQLUINTEGER flag;

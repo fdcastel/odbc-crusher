@@ -17,10 +17,24 @@ if (-not $DriverPath) {
     if (Test-Path $candidate) {
         $DriverPath = (Resolve-Path $candidate).Path
     } else {
-        # Try: build output relative to script (development layout)
-        $candidate = Join-Path $PSScriptRoot "..\build\Release\mockodbc.dll"
-        if (Test-Path $candidate) {
-            $DriverPath = (Resolve-Path $candidate).Path
+        # Try: build output relative to script (development layout).
+        #
+        # D30: this looked only in ..\build\Release\, while this repo builds
+        # to build\Debug\ as often as not - so on a Debug tree the script
+        # fell through to "Driver DLL not found" and the developer had to
+        # discover -DriverPath. Both are searched now, newest first, because
+        # whichever was built most recently is the one being worked on.
+        $candidates = @(
+            (Join-Path $PSScriptRoot "..\build\Release\mockodbc.dll"),
+            (Join-Path $PSScriptRoot "..\build\Debug\mockodbc.dll")
+        ) | Where-Object { Test-Path $_ } |
+            Sort-Object { (Get-Item $_).LastWriteTime } -Descending
+
+        if ($candidates) {
+            $DriverPath = (Resolve-Path $candidates[0]).Path
+            if ($candidates.Count -gt 1) {
+                Write-Host "Found more than one build; using the most recent: $DriverPath"
+            }
         }
     }
 }
@@ -46,15 +60,47 @@ Write-Host "Driver path: $DriverPath"
 # Check if running as Administrator
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Warning "This script should be run as Administrator for system-wide installation."
-    Write-Host "Attempting user-level registration instead..."
-    
-    # Register in HKEY_CURRENT_USER instead
-    $registryPath = "HKCU:\SOFTWARE\ODBC\ODBCINST.INI"
-} else {
-    # Register in HKEY_LOCAL_MACHINE for system-wide
-    $registryPath = "HKLM:\SOFTWARE\ODBC\ODBCINST.INI"
+    # D30: this used to fall back to HKCU\SOFTWARE\ODBC\ODBCINST.INI and then
+    # print "registered successfully!". The Windows Driver Manager reads
+    # ODBCINST.INI from HKLM only - the per-user hive holds DSNs (ODBC.INI),
+    # not drivers - so that registration did nothing whatsoever, and the
+    # developer went looking for the bug in their connection string.
+    #
+    # Failing is the honest answer. A fallback that cannot work is worse than
+    # no fallback, because it costs the time it takes to find out.
+    Write-Error @"
+Administrator rights are required to register an ODBC driver.
+
+The Windows Driver Manager reads driver registrations from
+HKLM:\SOFTWARE\ODBC\ODBCINST.INI, which needs elevation. There is no
+per-user equivalent for drivers - HKCU holds DSNs, not drivers - so an
+unelevated registration would silently do nothing.
+
+Re-run this from an elevated PowerShell prompt.
+"@
+    exit 1
 }
+
+# D30: WOW64. A 32-bit PowerShell writes HKLM:\SOFTWARE\... into
+# WOW6432Node, where a 64-bit application's Driver Manager never looks - the
+# registration appears to succeed and the driver is invisible. The mock is
+# built 64-bit, so registering it from a 32-bit shell is always a mistake.
+if (-not [Environment]::Is64BitProcess) {
+    Write-Error @"
+This is a 32-bit PowerShell process.
+
+HKLM:\SOFTWARE\ODBC\ODBCINST.INI is redirected to WOW6432Node here, so the
+driver would be registered where 64-bit applications never look. The mock
+driver is built 64-bit.
+
+Re-run this from a 64-bit PowerShell (%SystemRoot%\System32\WindowsPowerShell
+or pwsh).
+"@
+    exit 1
+}
+
+# Register in HKEY_LOCAL_MACHINE for system-wide
+$registryPath = "HKLM:\SOFTWARE\ODBC\ODBCINST.INI"
 
 # Create driver entry
 $driverKey = "$registryPath\Mock ODBC Driver"
@@ -78,7 +124,30 @@ if (-not (Test-Path $driversKey)) {
 }
 Set-ItemProperty -Path $driversKey -Name "Mock ODBC Driver" -Value "Installed"
 
+# D30: read it back rather than announce. Every failure this row lists shares
+# one shape - the script says "registered" and the registration is not one the
+# Driver Manager will use - so the last thing it does is ask the Driver
+# Manager what it sees.
+$seen = Get-OdbcDriver -Name "Mock ODBC Driver" -Platform "64-bit" -ErrorAction SilentlyContinue
+if (-not $seen) {
+    Write-Error "Registration wrote the keys but the Driver Manager does not list the driver. Check $driverKey."
+    exit 1
+}
+$seenPath = $seen.Attribute["Driver"]
+if ($seenPath -ne $DriverPath) {
+    Write-Error @"
+The Driver Manager lists a different binary than the one just registered.
+
+  wanted:     $DriverPath
+  registered: $seenPath
+
+An earlier registration is probably still in place.
+"@
+    exit 1
+}
+
 Write-Host "Mock ODBC Driver registered successfully!" -ForegroundColor Green
+Write-Host "Driver Manager reports: $seenPath"
 Write-Host ""
 Write-Host "You can now use it with connection strings like:"
 Write-Host '  "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=100;"' -ForegroundColor Cyan

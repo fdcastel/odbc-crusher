@@ -3,6 +3,11 @@ old-odbc-crusher/
 
 # Build directories
 build/
+# E4: CONTRIBUTING.md tells contributors to configure a second, Ninja
+# tree here for clang-tidy, because CMAKE_EXPORT_COMPILE_COMMANDS does
+# nothing under the Visual Studio generator. Following the docs should
+# not leave an untracked directory behind.
+build-tidy/
 cmake-build-*/
 out/
 

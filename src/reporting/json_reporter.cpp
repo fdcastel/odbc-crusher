@@ -106,7 +106,8 @@ void JsonReporter::report_summary(size_t total_tests, size_t passed, size_t fail
     summary["total_duration_us"] = total_duration.count();
 
     if (scored > 0) {
-        summary["pass_rate"] = (passed * 100.0) / scored;
+        summary["pass_rate"] =
+            (static_cast<double>(passed) * 100.0) / static_cast<double>(scored);
     } else {
         summary["pass_rate"] = 0.0;
     }

@@ -972,8 +972,8 @@ TEST_F(CrusherE2EFixture, TwoRunsDifferOnlyInTimings) {
     // Fields that are *expected* to move between runs.
     const auto is_volatile = [](const std::string& key) {
         return key == "/timestamp" ||
-               key.size() >= 12 &&
-                   key.compare(key.size() - 12, 12, "/duration_us") == 0 ||
+               (key.size() >= 12 &&
+                key.compare(key.size() - 12, 12, "/duration_us") == 0) ||
                key == "/summary/total_duration_us";
     };
 

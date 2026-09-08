@@ -25,14 +25,9 @@ std::string hex_byte(char c) {
     return std::string("0x") + kDigits[(b >> 4) & 0x0F] + kDigits[b & 0x0F];
 }
 
-std::string hex_bytes(const char* data, size_t count) {
-    std::string out;
-    for (size_t i = 0; i < count; ++i) {
-        if (i) out += ' ';
-        out += hex_byte(data[i]);
-    }
-    return out;
-}
+// D64/E5: `hex_bytes` stood here until GuardedBuffer::guard_hex() took
+// over the job in test_buffer_overflow_protection. `hex_byte` below is
+// still used for the single offending byte.
 
 }  // namespace
 

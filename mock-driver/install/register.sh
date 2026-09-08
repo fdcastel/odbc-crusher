@@ -92,9 +92,54 @@ FileUsage        = 0
 UsageCount       = 1
 EOF
 
+# D30: `odbcinst -i -d` on a section that already exists bumps UsageCount and
+# leaves Driver= alone, so rebuilding into a different directory left the old
+# path registered while this script printed "registered." Every mock-backed
+# test then loaded yesterday's binary, or nothing at all.
+#
+# Uninstall first when the section is there. `-u` decrements UsageCount and
+# removes the section when it reaches zero, so this loops: a section written
+# by several earlier runs has a count above one and one -u will not clear it.
+# Bounded, because a driver whose count cannot be driven to zero would
+# otherwise spin here forever.
+# shellcheck disable=SC2086
+if "$ODBCINST" -q -d $INI_FLAG 2>/dev/null | grep -q '^\[Mock ODBC Driver\]$'; then
+    echo "Existing registration found; removing it so Driver= is rewritten."
+    attempts=0
+    # shellcheck disable=SC2086
+    while "$ODBCINST" -q -d $INI_FLAG 2>/dev/null | grep -q '^\[Mock ODBC Driver\]$'; do
+        attempts=$((attempts + 1))
+        if [ "$attempts" -gt 10 ]; then
+            echo "ERROR: could not remove the existing [Mock ODBC Driver] section" >&2
+            echo "       after 10 attempts. Edit the odbcinst.ini by hand:" >&2
+            echo "       ${INI_PATH:-run 'odbcinst -j' to find it}" >&2
+            exit 1
+        fi
+        # shellcheck disable=SC2086
+        "$ODBCINST" -u -d $INI_FLAG -n "Mock ODBC Driver" >/dev/null 2>&1 || break
+    done
+fi
+
 # -i install, -d driver-section, -f template file. -h sets user scope.
 # shellcheck disable=SC2086
 "$ODBCINST" -i -d $INI_FLAG -f "$template"
+
+# D30: verify rather than announce. `odbcinst -i` can succeed and still leave
+# a Driver= that is not the one we asked for - which is the whole bug above -
+# so the script reads it back and fails loudly if it disagrees.
+# shellcheck disable=SC2086
+registered="$("$ODBCINST" -q -d $INI_FLAG -n "Mock ODBC Driver" 2>/dev/null \
+    | sed -n 's/^ *Driver *= *//p' | head -1)"
+if [ -z "$registered" ]; then
+    echo "ERROR: the driver section is missing after install." >&2
+    exit 1
+fi
+if [ "$registered" != "$DRIVER_PATH" ]; then
+    echo "ERROR: registration points at the wrong binary." >&2
+    echo "  wanted:     $DRIVER_PATH" >&2
+    echo "  registered: $registered" >&2
+    exit 1
+fi
 
 echo
 echo "Mock ODBC Driver registered."
