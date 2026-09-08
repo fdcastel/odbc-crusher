@@ -1,6 +1,6 @@
 #include "buffer_validation_tests.hpp"
 #include "core/odbc_error.hpp"
-#include "tests/guarded_buffer.hpp"
+#include "core/guarded_buffer.hpp"
 #include <cstring>
 #include <algorithm>
 #include <string>
@@ -241,7 +241,7 @@ TestResult BufferValidationTests::test_truncation_indicators() {
             // allocation is bigger, so an overrun lands in a sentinel this
             // probe owns.
             SQLSMALLINT small_buffer_size = std::max((SQLSMALLINT)2, (SQLSMALLINT)(full_length / 2));
-            GuardedBuffer<char> small_buf(static_cast<size_t>(small_buffer_size));
+            core::GuardedBuffer<char> small_buf(static_cast<size_t>(small_buffer_size));
             SQLSMALLINT buffer_length = 0;
 
             SQLRETURN rc = SQLGetInfo(
@@ -330,7 +330,7 @@ TestResult BufferValidationTests::test_undersized_buffer() {
                 // D58: guarded. A probe whose whole claim is "no crash with
                 // small buffers" must not be the thing that crashes, and an
                 // exactly-sized heap allocation made that a matter of luck.
-                GuardedBuffer<char> buffer(static_cast<size_t>(size));
+                core::GuardedBuffer<char> buffer(static_cast<size_t>(size));
                 SQLSMALLINT buffer_length = 0;
 
                 SQLRETURN rc = SQLGetInfo(

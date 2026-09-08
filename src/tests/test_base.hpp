@@ -2,6 +2,7 @@
 
 #include "core/odbc_connection.hpp"
 #include "core/odbc_error.hpp"
+#include "core/guarded_buffer.hpp"
 #include "core/odbc_statement.hpp"
 #include <functional>
 #include <string>
@@ -177,11 +178,11 @@ private:
 
 // Result of turning a driver-filled character buffer into a std::string
 // without trusting the driver's reported length — A3.
-struct BoundedString {
-    std::string value;
-    bool truncated = false;        // driver had more than the buffer could hold
-    bool length_unknown = false;   // driver returned SQL_NO_TOTAL, or a negative
-};
+// D60: the definition moved to core/guarded_buffer.hpp so the discovery layer
+// can use it too — it had grown an unbounded `reinterpret_cast<char*>(buf)`
+// for want of exactly this. The name stays visible here, and every existing
+// caller and test is unaffected.
+using core::BoundedString;
 
 // One dialect variant that failed to execute, and why — C2.
 struct DialectFailure {

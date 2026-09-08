@@ -1,4 +1,5 @@
 #include "type_info.hpp"
+#include "core/guarded_buffer.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
@@ -27,21 +28,28 @@ void TypeInfo::collect() {
     }
     
     // Bind columns - use SQLGetData instead of SQLBindCol for better compatibility
+    //
+    // D60: these were bare SQLCHAR arrays, and every string below was built
+    // with `reinterpret_cast<char*>(buf)` - which reads until it finds a zero
+    // byte. Against a driver that does not terminate its output, that is an
+    // out-of-bounds read by crusher itself, in the code whose job is to find
+    // drivers that do not terminate their output. Guarded buffers stop the
+    // scan inside memory we own, and bounded_string() below trusts neither
+    // the terminator nor the driver's reported length.
     DataTypeInfo type_info;
-    SQLCHAR type_name[128] = {0};
-    SQLCHAR literal_prefix[10] = {0};
-    SQLCHAR literal_suffix[10] = {0};
-    SQLCHAR create_params[128] = {0};
-    SQLCHAR local_type_name[128] = {0};
+    core::GuardedBuffer<char> type_name(128, '\0');
+    core::GuardedBuffer<char> literal_prefix(10, '\0');
+    core::GuardedBuffer<char> literal_suffix(10, '\0');
+    core::GuardedBuffer<char> create_params(128, '\0');
+    core::GuardedBuffer<char> local_type_name(128, '\0');
     
     // Fetch all rows using SQLGetData instead of SQLBindCol
     while (stmt.fetch()) {
         SQLLEN indicator = 0;
         
         // Column 1: TYPE_NAME (required)
-        SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR, type_name, sizeof(type_name), &indicator);
-        type_info.type_name = (indicator != SQL_NULL_DATA && indicator != SQL_NO_TOTAL) 
-            ? reinterpret_cast<char*>(type_name) : "";
+        SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR, type_name.data(), 128, &indicator);
+        type_info.type_name = core::bounded_string(type_name.data(), 128, indicator).value;
         
         // Column 2: DATA_TYPE (required)
         SQLGetData(stmt.get_handle(), 2, SQL_C_SSHORT, &type_info.data_type, 0, nullptr);
@@ -50,19 +58,16 @@ void TypeInfo::collect() {
         SQLGetData(stmt.get_handle(), 3, SQL_C_SLONG, &type_info.column_size, 0, nullptr);
         
         // Column 4: LITERAL_PREFIX
-        SQLGetData(stmt.get_handle(), 4, SQL_C_CHAR, literal_prefix, sizeof(literal_prefix), &indicator);
-        type_info.literal_prefix = (indicator != SQL_NULL_DATA && indicator != SQL_NO_TOTAL)
-            ? reinterpret_cast<char*>(literal_prefix) : "";
+        SQLGetData(stmt.get_handle(), 4, SQL_C_CHAR, literal_prefix.data(), 10, &indicator);
+        type_info.literal_prefix = core::bounded_string(literal_prefix.data(), 10, indicator).value;
         
         // Column 5: LITERAL_SUFFIX
-        SQLGetData(stmt.get_handle(), 5, SQL_C_CHAR, literal_suffix, sizeof(literal_suffix), &indicator);
-        type_info.literal_suffix = (indicator != SQL_NULL_DATA && indicator != SQL_NO_TOTAL)
-            ? reinterpret_cast<char*>(literal_suffix) : "";
+        SQLGetData(stmt.get_handle(), 5, SQL_C_CHAR, literal_suffix.data(), 10, &indicator);
+        type_info.literal_suffix = core::bounded_string(literal_suffix.data(), 10, indicator).value;
         
         // Column 6: CREATE_PARAMS
-        SQLGetData(stmt.get_handle(), 6, SQL_C_CHAR, create_params, sizeof(create_params), &indicator);
-        type_info.create_params = (indicator != SQL_NULL_DATA && indicator != SQL_NO_TOTAL)
-            ? reinterpret_cast<char*>(create_params) : "";
+        SQLGetData(stmt.get_handle(), 6, SQL_C_CHAR, create_params.data(), 128, &indicator);
+        type_info.create_params = core::bounded_string(create_params.data(), 128, indicator).value;
         
         // Column 7: NULLABLE
         SQLGetData(stmt.get_handle(), 7, SQL_C_SSHORT, &type_info.nullable, 0, nullptr);
@@ -83,9 +88,8 @@ void TypeInfo::collect() {
         SQLGetData(stmt.get_handle(), 12, SQL_C_SSHORT, &type_info.auto_unique_value, 0, nullptr);
         
         // Column 13: LOCAL_TYPE_NAME
-        SQLGetData(stmt.get_handle(), 13, SQL_C_CHAR, local_type_name, sizeof(local_type_name), &indicator);
-        type_info.local_type_name = (indicator != SQL_NULL_DATA && indicator != SQL_NO_TOTAL)
-            ? reinterpret_cast<char*>(local_type_name) : "";
+        SQLGetData(stmt.get_handle(), 13, SQL_C_CHAR, local_type_name.data(), 128, &indicator);
+        type_info.local_type_name = core::bounded_string(local_type_name.data(), 128, indicator).value;
         
         // Column 14: MINIMUM_SCALE
         SQLGetData(stmt.get_handle(), 14, SQL_C_SSHORT, &type_info.minimum_scale, 0, nullptr);
@@ -104,12 +108,15 @@ void TypeInfo::collect() {
         
         types_.push_back(type_info);
         
-        // Clear buffers for next row
-        memset(type_name, 0, sizeof(type_name));
-        memset(literal_prefix, 0, sizeof(literal_prefix));
-        memset(literal_suffix, 0, sizeof(literal_suffix));
-        memset(create_params, 0, sizeof(create_params));
-        memset(local_type_name, 0, sizeof(local_type_name));
+        // Clear buffers for next row. D60: the declared region only -
+        // memset over the whole allocation would take the guard's
+        // sentinel and its trailing stopper with it, and the next row
+        // would have neither.
+        type_name.clear_declared();
+        literal_prefix.clear_declared();
+        literal_suffix.clear_declared();
+        create_params.clear_declared();
+        local_type_name.clear_declared();
     }
 }
 

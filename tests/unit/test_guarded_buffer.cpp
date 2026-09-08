@@ -12,12 +12,13 @@
 // a driver manager does, and assert the guard turns that into a finding.
 #include <gtest/gtest.h>
 
-#include "tests/guarded_buffer.hpp"
+#include "core/guarded_buffer.hpp"
 
 #include <cstring>
 #include <string>
 
-using odbc_crusher::tests::GuardedBuffer;
+using odbc_crusher::core::GuardedBuffer;
+namespace core = odbc_crusher::core;
 
 TEST(GuardedBufferTest, DeclaredLengthIsWhatTheDriverIsTold) {
     GuardedBuffer<char> buf(10);
@@ -94,4 +95,18 @@ TEST(GuardedBufferTest, SentinelAndFillDifferSoAnOverrunIsVisible) {
     buf.data()[4] = buf.data()[0];          // the region's fill byte
     EXPECT_TRUE(buf.guard_breach().has_value())
         << "the guard sentinel must differ from the region fill";
+}
+
+// D60: the one exception worth keeping here, because it is a property of the
+// guard rather than of bounded_string: even the crudest possible reader -
+// strlen straight off the pointer, which is what unixODBC does - terminates
+// inside the allocation. A3's exhaustive bounded_string cases live in
+// test_test_base.cpp and were not duplicated.
+TEST(GuardedBufferTest, AGuardedBufferStopsARunawayScanInsideItsOwnMemory) {
+    core::GuardedBuffer<char> buf(32, 'X');           // no zero in the region
+    const size_t scanned = std::strlen(buf.data());
+    EXPECT_EQ(scanned, 32u + core::GuardedBuffer<char>::kSentinelElements)
+        << "the scan must stop at the guard's stopper, not run past it";
+    EXPECT_FALSE(buf.guard_breach().has_value())
+        << "and reading must not look like a write";
 }

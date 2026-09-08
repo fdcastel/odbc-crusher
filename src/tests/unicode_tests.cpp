@@ -2,7 +2,7 @@
 #include "core/odbc_statement.hpp"
 #include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
-#include "tests/guarded_buffer.hpp"
+#include "core/guarded_buffer.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <iomanip>
@@ -424,7 +424,7 @@ TestResult UnicodeTests::test_string_truncation_wchar() {
             // manager that writes its terminator one place past the declared
             // length corrupts the heap here otherwise. The byte length handed
             // to SQLGetInfoW is unchanged.
-            GuardedBuffer<SQLWCHAR> tiny_buf(tiny_byte_len / sizeof(SQLWCHAR));
+            core::GuardedBuffer<SQLWCHAR> tiny_buf(tiny_byte_len / sizeof(SQLWCHAR));
             SQLSMALLINT needed_len = 0;
 
             SQLRETURN ret = SQLGetInfoW(conn_.get_handle(), chosen_type,

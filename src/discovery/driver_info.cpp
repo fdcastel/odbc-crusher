@@ -1,4 +1,5 @@
 #include "driver_info.hpp"
+#include "core/guarded_buffer.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <iomanip>
@@ -122,15 +123,25 @@ void DriverInfo::collect() {
 }
 
 std::optional<std::string> DriverInfo::get_info_string(SQLUSMALLINT info_type) {
-    SQLCHAR buffer[1024] = {0};
+    // D60: this was a bare `SQLCHAR buffer[1024]`, and ASan caught unixODBC
+    // running strlen off the end of it - READ of size 1026 - the moment
+    // BufferValidation=Lenient made the mock omit its terminator, which is
+    // the behaviour this whole tool exists to catch. The guard's trailing
+    // zero bounds that scan inside memory we own; `buffer_length` is no
+    // longer taken at face value either, since a driver that lies about a
+    // length is no less likely than one that forgets a NUL.
+    constexpr size_t kCapacity = 1024;
+    core::GuardedBuffer<char> buffer(kCapacity, '\0');
     SQLSMALLINT buffer_length = 0;
-    
-    SQLRETURN ret = SQLGetInfo(conn_.get_handle(), info_type, buffer, sizeof(buffer), &buffer_length);
-    
+
+    SQLRETURN ret = SQLGetInfo(conn_.get_handle(), info_type, buffer.data(),
+                               static_cast<SQLSMALLINT>(kCapacity),
+                               &buffer_length);
+
     if (SQL_SUCCEEDED(ret)) {
-        return std::string(reinterpret_cast<char*>(buffer), buffer_length);
+        return core::bounded_string(buffer.data(), kCapacity, buffer_length).value;
     }
-    
+
     return std::nullopt;
 }
 
