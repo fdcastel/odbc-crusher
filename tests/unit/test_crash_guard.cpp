@@ -34,9 +34,23 @@ TEST(CrashGuardTest, CppExceptionPropagatesThrough) {
 
 TEST(CrashGuardTest, CatchesAccessViolation) {
     auto result = execute_with_crash_guard([]() {
-        // Deliberately cause an access violation
+        // Deliberately cause an access violation.
+        //
+        // E5: -Wnull-dereference is right about this line and the test is the
+        // one place in the tree where it is wrong to act on it - dereferencing
+        // null is the entire point. Suppressed here, with the reason, rather
+        // than by dropping the flag: it is worth having everywhere else, and a
+        // warning switched off globally to accommodate one deliberate site
+        // stops protecting the other several hundred.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnull-dereference"
+#endif
         volatile int* ptr = nullptr;
         *ptr = 42;  // BOOM
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     });
     
     EXPECT_TRUE(result.crashed);

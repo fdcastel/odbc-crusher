@@ -1629,8 +1629,13 @@ TestResult EscapeSequenceTests::test_scalar_function_claim_vs_execute() {
 
             std::ostringstream summary;
             std::ostringstream broken_list;
+            // C6/E5: `total_passed` was accumulated here and never read. It
+            // sat between two counters that *are* read, which is what made it
+            // look deliberate - the summary reports claimed and broken and
+            // has never mentioned passed. Removed rather than reported,
+            // because inventing a use for a number nothing asked for is how
+            // dead code becomes permanent.
             int total_claimed = 0;
-            int total_passed  = 0;
             int total_broken  = 0;
 
             for (size_t s = 0; s < sizeof(sections) / sizeof(sections[0]); ++s) {
@@ -1661,7 +1666,7 @@ TestResult EscapeSequenceTests::test_scalar_function_claim_vs_execute() {
                 }
                 summary << sec.label << ":" << passed_count << "/" << claimed;
                 total_claimed += claimed;
-                total_passed  += passed_count;
+
             }
 
             std::ostringstream actual;
