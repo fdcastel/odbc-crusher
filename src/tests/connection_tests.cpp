@@ -1,4 +1,5 @@
 #include "connection_tests.hpp"
+#include "core/guarded_buffer.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
@@ -22,22 +23,30 @@ TestResult ConnectionTests::test_connection_info() {
         "Can retrieve connection information",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetInfo",
         [&](TestResult& r) {
-            SQLCHAR dbname[256] = {0};
+            // D61: guarded. ASan caught unixODBC running strlen off the end
+            // of the sibling buffer below - READ of size 258 - once the mock
+            // was told to omit its terminator, which is the one driver
+            // behaviour this probe is most likely to meet in the field. The
+            // length declared to SQLGetInfo is unchanged.
+            constexpr size_t kDbNameCapacity = 256;
+            core::GuardedBuffer<char> dbname(kDbNameCapacity, '\0');
             SQLSMALLINT dbname_len = 0;
 
             SQLRETURN ret = SQLGetInfo(conn_.get_handle(), SQL_DATABASE_NAME,
-                                       dbname, sizeof(dbname), &dbname_len);
+                                       dbname.data(),
+                                       static_cast<SQLSMALLINT>(kDbNameCapacity),
+                                       &dbname_len);
 
             if (SQL_SUCCEEDED(ret)) {
                 // A3: dbname_len is the total available length, and
                 // SQL_SUCCEEDED accepts the 01004 that comes with truncation.
                 // Firebird's SQL_DATABASE_NAME is a filesystem path, so >255
                 // is realistic rather than theoretical.
-                const auto db = bounded_string(reinterpret_cast<const char*>(dbname),
-                                               sizeof(dbname), dbname_len);
+                const auto db = bounded_string(dbname.data(), kDbNameCapacity,
+                                               dbname_len);
                 r.actual = "Database name: " + db.value;
                 if (db.truncated) {
-                    r.actual += " (truncated at " + std::to_string(sizeof(dbname) - 1) +
+                    r.actual += " (truncated at " + std::to_string(kDbNameCapacity - 1) +
                                 " bytes; driver reported " +
                                 std::to_string(dbname_len) + ")";
                 }
@@ -67,17 +76,21 @@ TestResult ConnectionTests::test_connection_string_format() {
         "Connection is active and driver name is retrievable",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetInfo",
         [&](TestResult& r) {
-            SQLCHAR driver_name[256] = {0};
+            // D61: guarded — this is the call ASan flagged.
+            constexpr size_t kDriverNameCapacity = 256;
+            core::GuardedBuffer<char> driver_name(kDriverNameCapacity, '\0');
             SQLSMALLINT driver_name_len = 0;
 
             SQLRETURN ret = SQLGetInfo(conn_.get_handle(), SQL_DRIVER_NAME,
-                                       driver_name, sizeof(driver_name), &driver_name_len);
+                                       driver_name.data(),
+                                       static_cast<SQLSMALLINT>(kDriverNameCapacity),
+                                       &driver_name_len);
             core::check_odbc_result(ret, SQL_HANDLE_DBC, conn_.get_handle(),
                                     "SQLGetInfo(SQL_DRIVER_NAME)");
 
             // A3: see test_connection_info above.
-            const auto name = bounded_string(reinterpret_cast<const char*>(driver_name),
-                                             sizeof(driver_name), driver_name_len);
+            const auto name = bounded_string(driver_name.data(),
+                                             kDriverNameCapacity, driver_name_len);
             r.actual = "Driver: " + name.value;
             if (name.truncated) {
                 r.actual += " (truncated; driver reported " +

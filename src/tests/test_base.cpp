@@ -293,13 +293,16 @@ bool TestBase::is_bare_identifier(const std::string& ident) {
 std::string TestBase::quote_identifier(const std::string& ident) {
     if (is_bare_identifier(ident)) return ident;
 
-    char quote[8] = {0};
+    // D61: guarded, like every other SQLGetInfo string path.
+    constexpr size_t kQuoteCapacity = 8;
+    core::GuardedBuffer<char> quote(kQuoteCapacity, '\0');
     SQLSMALLINT len = 0;
     SQLRETURN rc = SQLGetInfo(conn_.get_handle(), SQL_IDENTIFIER_QUOTE_CHAR,
-                              quote, sizeof(quote), &len);
+                              quote.data(),
+                              static_cast<SQLSMALLINT>(kQuoteCapacity), &len);
     if (!SQL_SUCCEEDED(rc)) return ident;
 
-    BoundedString q = bounded_string(quote, sizeof(quote), len);
+    BoundedString q = bounded_string(quote.data(), kQuoteCapacity, len);
     // The spec spells "this driver does not support quoting" as a single
     // blank, so an empty or blank answer means: leave the name alone.
     if (q.value.empty() || q.value == " ") return ident;

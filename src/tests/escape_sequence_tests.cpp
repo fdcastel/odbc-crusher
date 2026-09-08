@@ -1,4 +1,5 @@
 #include "escape_sequence_tests.hpp"
+#include "core/guarded_buffer.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
 #include <algorithm>
@@ -868,17 +869,22 @@ TestResult EscapeSequenceTests::test_like_escape_sequence() {
         "ODBC 3.8, LIKE Escape Sequence",
         [&](TestResult& r) {
             // Check SQL_LIKE_ESCAPE_CLAUSE
-            SQLCHAR buf[16] = {0};
+            // D61: guarded, like every other SQLGetInfo string path.
+            constexpr size_t kCapacity = 16;
+            core::GuardedBuffer<char> buf(kCapacity, '\0');
             SQLSMALLINT len = 0;
             SQLRETURN ret = SQLGetInfo(conn_.get_handle(), SQL_LIKE_ESCAPE_CLAUSE,
-                                       buf, sizeof(buf), &len);
+                                       buf.data(),
+                                       static_cast<SQLSMALLINT>(kCapacity), &len);
             if (!SQL_SUCCEEDED(ret)) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "SQL_LIKE_ESCAPE_CLAUSE not supported";
                 return;
             }
 
-            std::string like_support(reinterpret_cast<char*>(buf), len);
+            // D61: the driver's length is an upper bound, not a promise.
+            const std::string like_support =
+                bounded_string(buf.data(), kCapacity, len).value;
             if (like_support == "N") {
                 r.status = TestStatus::SKIP_UNSUPPORTED;
                 r.actual = "Driver reports SQL_LIKE_ESCAPE_CLAUSE = 'N'";

@@ -1,4 +1,5 @@
 #include "sqlstate_tests.hpp"
+#include "core/guarded_buffer.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
 
@@ -343,14 +344,19 @@ TestResult SqlstateTests::test_getinfo_invalid_type() {
         "SQL_ERROR with SQLSTATE HY096 for invalid info type",
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetInfo",
         [&](TestResult& r) {
-            char buffer[256] = {0};
+            // D61: guarded, like every other SQLGetInfo string path. This
+            // one asks for an info type no driver knows, so the buffer should
+            // come back untouched - but "should" is the assumption the guard
+            // exists to stop the tool from making.
+            constexpr size_t kCapacity = 256;
+            core::GuardedBuffer<char> buffer(kCapacity, '\0');
             SQLSMALLINT len = 0;
 
             // Use an invalid info type (65535)
             SQLRETURN rc = SQLGetInfo(
                 conn_.get_handle(),
                 65535,
-                buffer, sizeof(buffer), &len
+                buffer.data(), static_cast<SQLSMALLINT>(kCapacity), &len
             );
 
             if (rc == SQL_ERROR) {
