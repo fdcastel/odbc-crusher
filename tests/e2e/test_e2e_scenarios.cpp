@@ -26,6 +26,28 @@ using namespace odbc_crusher::e2e;
 // probe absent from the report is indistinguishable from a probe present and
 // wrong - and from a run the harness killed. The categories, their sizes and
 // the run's own stderr are all to hand; this puts them in the failure.
+// D71: did a category fault during this run?
+//
+// main.cpp replaces a faulting category with a single "<name> (DRIVER CRASH)"
+// entry (D63), so this is how a scenario asks whether what it is about to
+// assert is still about the tool. Under BufferValidation=Lenient on Linux the
+// answer is yes: unixODBC takes a wild write inside SQLExecDirect, and after
+// that the process's exit status belongs to the sanitizer rather than to any
+// flag the scenario passed.
+std::optional<std::string> crashed_category(const CrusherRun& run) {
+    if (!run.report.contains("categories")) return std::nullopt;
+    for (const auto& cat : run.report["categories"]) {
+        if (!cat.contains("tests")) continue;
+        for (const auto& t : cat["tests"]) {
+            const auto name = t.value("test_name", std::string{});
+            if (name.find("(DRIVER CRASH)") != std::string::npos) {
+                return name + " - " + t.value("actual", std::string{});
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 std::string report_outline(const CrusherRun& run) {
     std::ostringstream out;
     if (const auto& summary = run.report["summary"]; !summary.is_null()) {
@@ -1545,13 +1567,28 @@ TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
                      "reachable on this platform\n";
     }
 
-    // And the escape hatch, which is unconditional.
+    // And the escape hatch. The report half is unconditional; the exit-code
+    // half is not, and D71 is why.
     auto none = run_crusher_with_args(conn, {"--fail-on", "none"});
-    EXPECT_EQ(none.exit_code, 0) << none.raw_stderr;
     ASSERT_TRUE(none.report.contains("summary")) << none.raw_stderr;
     EXPECT_EQ(none.report["summary"].value("failed", -1),
               baseline.report["summary"].value("failed", -1))
         << "--fail-on=none must silence the exit code, not the report";
+
+    if (auto crash = crashed_category(none)) {
+        // D71: the driver manager faulted, so the exit status is no longer
+        // about --fail-on. The crash guard's siglongjmp abandons the
+        // category's results, LeakSanitizer reports that at exit, and
+        // abort_on_error turns it into an abort - none of which the flag
+        // controls. Asserting through it would be asserting the platform's
+        // behaviour as though it were the tool's, which is D53's mistake.
+        //
+        // The report half above still ran, which is what the flag actually
+        // promises: silence the exit code, not the report.
+        std::cout << "[ D71 ] exit-code half skipped: " << *crash << "\n";
+    } else {
+        EXPECT_EQ(none.exit_code, 0) << none.raw_stderr;
+    }
 }
 
 TEST_F(CrusherE2EFixture, FailOnDoesNotMaskAConnectionFailure) {
