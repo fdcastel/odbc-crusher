@@ -70,6 +70,28 @@ static void record_dynamic_function(StatementHandle* stmt,
 
 namespace mock_odbc {
 
+// I6: what this statement's connection may see and where its writes go.
+//
+// Keyed on autocommit being OFF, deliberately **not** on
+// ConnectionHandle::in_transaction_ - that is set *after* the executor runs
+// (below, and in SQLExecute), so during a transaction's first statement it is
+// still false. Autocommit is also the correct ODBC model: there is no BEGIN,
+// the statement opens the transaction.
+static TxnContext txn_context_for(StatementHandle* stmt) {
+    auto* conn = stmt ? stmt->connection() : nullptr;
+    if (!conn || !conn->pending_writes()) return {};
+
+    TxnContext ctx;
+    ctx.buffered = (conn->autocommit_ == SQL_AUTOCOMMIT_OFF);
+    ctx.read_uncommitted =
+        (conn->txn_isolation_ == SQL_TXN_READ_UNCOMMITTED);
+    ctx.writes = conn->pending_writes();
+    ctx.conn_id = conn->id();
+    return ctx;
+}
+
+
+
 // D18: SQLFetch and SQLFetchScroll each had their own copy of this loop,
 // and they drifted. This one went through write_numeric_as when D11 rebuilt
 // the conversion table; the copy in driver_main.cpp kept the original
@@ -240,7 +262,8 @@ SQLRETURN SQL_API SQLExecDirect(
         return SQL_ERROR;
     }
     
-    auto result = execute_query(parsed, config.result_set_size);
+    auto result = execute_query(parsed, config.result_set_size,
+                                txn_context_for(stmt));
 
     if (!result.success) {
         stmt->add_diagnostic(result.error_sqlstate, 0, result.error_message);
@@ -360,7 +383,8 @@ SQLRETURN SQL_API SQLPrepare(
     if (cursor_statement) {
         ParsedQuery shape = parsed;
         shape.where_clause.clear();
-        auto described = execute_query(shape, config.result_set_size);
+        auto described = execute_query(shape, config.result_set_size,
+                                       txn_context_for(stmt));
         if (described.success) {
             stmt->num_result_cols_ =
                 static_cast<SQLSMALLINT>(described.column_names.size());
@@ -463,7 +487,8 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
             // Execute with current parameter set — substitute bound param values
             ParsedQuery row_parsed = parsed;
             substitute_params(row_parsed, stmt->parameter_bindings_, i, stmt->param_bind_type_);
-            auto result = execute_query(row_parsed, config.result_set_size);
+            auto result = execute_query(row_parsed, config.result_set_size,
+                                        txn_context_for(stmt));
 
             if (result.success) {
                 if (stmt->param_status_ptr_) {
@@ -530,7 +555,8 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     // Substitute bound parameter values into the parsed query (INSERT and literal SELECT)
     substitute_params(parsed, stmt->parameter_bindings_, 0, stmt->param_bind_type_);
     
-    auto result = execute_query(parsed, config.result_set_size);
+    auto result = execute_query(parsed, config.result_set_size,
+                                txn_context_for(stmt));
 
     if (!result.success) {
         stmt->add_diagnostic(result.error_sqlstate, 0, result.error_message);

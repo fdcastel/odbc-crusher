@@ -5,6 +5,7 @@
 #include "driver/diagnostics.hpp"
 #include "mock/behaviors.hpp"
 #include "mock/mock_catalog.hpp"
+#include "mock/mock_txn.hpp"   // I6
 #include "driver/entry_guard.hpp"
 
 using namespace mock_odbc;
@@ -54,8 +55,23 @@ SQLRETURN SQL_API SQLEndTran(
         // driver was reporting a failed commit - the fixture could not
         // produce the one shape A22 exists to report. A failed ROLLBACK is
         // left alone: there, the rows may legitimately still be there.
+        //
+        // I6: D40's rationale, without D40's collateral damage. This used to
+        // call clear_inserted_data(), which deletes every row of every table
+        // for every connection - so a failed commit on one connection erased
+        // work another had committed. Discarding this connection's buffer is
+        // what "did not commit" actually means.
         if (fType == SQL_COMMIT) {
-            MockCatalog::instance().clear_inserted_data();
+            if (tx_conn && tx_conn->pending_writes()) {
+                tx_conn->pending_writes()->discard();
+            }
+            if (tx_env) {
+                for (auto* conn : tx_env->connections_) {
+                    if (conn && conn->pending_writes()) {
+                        conn->pending_writes()->discard();
+                    }
+                }
+            }
         }
         return SQL_ERROR;
     }
@@ -69,7 +85,6 @@ SQLRETURN SQL_API SQLEndTran(
     // purpose is validating "the rows persisted" assertions was the thing
     // deleting the rows.
     auto end_transaction = [&](ConnectionHandle* conn) {
-        const bool had_transaction = conn->in_transaction_;
         conn->in_transaction_ = false;
         for (auto* stmt : conn->statements_) {
             stmt->cursor_open_ = false;
@@ -78,8 +93,25 @@ SQLRETURN SQL_API SQLEndTran(
                 stmt->result_data_.clear();
             }
         }
-        if (fType == SQL_ROLLBACK && had_transaction) {
-            MockCatalog::instance().clear_inserted_data();
+
+        // I6: the transaction's own writes, and nobody else's.
+        //
+        // This used to be `clear_inserted_data()` guarded by
+        // `had_transaction` - it deleted every row of every table for every
+        // connection, so a rollback here destroyed data another connection had
+        // committed. Two probes in the tool were reading a store this had
+        // already wiped and passing whatever the driver did.
+        //
+        // The guard goes with it. It existed because a rollback in autocommit
+        // mode used to delete data (D28); with a buffer there is nothing to
+        // discard in autocommit mode, so the right answer falls out instead of
+        // being special-cased.
+        auto* writes = conn->pending_writes();
+        if (!writes) return;
+        if (fType == SQL_ROLLBACK) {
+            writes->discard();
+        } else {
+            MockCatalog::instance().apply_write_ops(writes->take_all());
         }
     };
 

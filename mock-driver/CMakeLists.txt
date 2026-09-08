@@ -62,6 +62,7 @@ set(MOCK_DRIVER_CORE_SOURCES
     src/driver/config.cpp
     src/driver/entry_guard.cpp
     src/mock/mock_catalog.cpp
+    src/mock/mock_txn.cpp
     src/mock/mock_types.cpp
     src/mock/mock_data.cpp
     src/mock/behaviors.cpp
@@ -214,6 +215,7 @@ add_executable(mock-odbc-tests
     tests/test_buffer_copy.cpp
     tests/test_c_types.cpp
     tests/test_handle_lifetime.cpp
+    tests/test_transaction_isolation.cpp
     $<TARGET_OBJECTS:mock_core>
 )
 

@@ -2,6 +2,7 @@
 
 #include "../driver/common.hpp"
 #include "mock_catalog.hpp"
+#include "mock_txn.hpp"   // I6: TxnContext
 #include <string>
 #include <vector>
 #include <variant>
@@ -115,6 +116,10 @@ struct QueryResult {
     std::vector<CellValue> proc_output_values;
 };
 
-QueryResult execute_query(const ParsedQuery& query, int result_set_size);
+// I6: `txn` says whether this statement's writes are buffered, and what it
+// may see. No default: four call sites is cheap, and a default would quietly
+// give a future caller committed-store semantics.
+QueryResult execute_query(const ParsedQuery& query, int result_set_size,
+                          const TxnContext& txn);
 
 } // namespace mock_odbc

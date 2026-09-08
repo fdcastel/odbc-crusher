@@ -12,6 +12,10 @@
 
 namespace mock_odbc {
 
+// I6: one buffered change, defined in mock_txn.hpp. Forward-declared because
+// that header includes this one.
+struct WriteOp;
+
 // Forward declaration for CellValue
 using CellValue = std::variant<std::monostate, long long, double, std::string>;
 using MockRow = std::vector<CellValue>;
@@ -170,6 +174,16 @@ public:
     size_t erase_matching_rows(
         const std::string& table_name,
         const std::function<bool(const MockRow&)>& predicate);
+
+    // I6: make one connection's buffered writes real. The COMMIT path.
+    //
+    // Takes the catalog mutex **once** and applies the ops inline. It must not
+    // reach for insert_row or erase_matching_rows, which lock again - mu_ is
+    // not recursive, which is also why find_table_locked exists.
+    //
+    // A merge, not a replace: the ops are applied to whatever is committed at
+    // this moment, so two connections committing to the same table both land.
+    void apply_write_ops(const std::vector<WriteOp>& ops);
 
     // Column operations
     std::vector<MockColumn> get_columns(const std::string& table_name,

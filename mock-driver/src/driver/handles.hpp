@@ -3,9 +3,14 @@
 #include "common.hpp"
 #include "diagnostics.hpp"
 #include <cstdint>
+#include <memory>
 #include <mutex>
 
 namespace mock_odbc {
+
+// I6: defined in mock/mock_txn.hpp. Forward-declared so the handle definitions
+// stay free of the mock layer.
+class TxnBuffer;
 
 // Base class for all ODBC handles
 class OdbcHandle {
@@ -92,9 +97,21 @@ class ConnectionHandle : public OdbcHandle {
 public:
     explicit ConnectionHandle(EnvironmentHandle* env);
     ~ConnectionHandle() override;
-    
+
     EnvironmentHandle* environment() const { return env_; }
     bool is_connected() const { return connected_; }
+
+    // I6: this connection's identity and its uncommitted writes.
+    //
+    // The buffer is created at connect and released at disconnect, so a
+    // reconnected handle starts with an empty one - which is what
+    // test_reused_connection_starts_clean is about. It is deliberately *not*
+    // tied to MockCatalog::attach: attach is refcounted across connections,
+    // and a transaction belongs to exactly one.
+    uint64_t id() const { return id_; }
+    TxnBuffer* pending_writes() const { return writes_.get(); }
+    void open_write_buffer();
+    void close_write_buffer();
     
     // Connection state
     bool connected_ = false;
@@ -121,9 +138,14 @@ public:
     
     // Allocated statements
     std::vector<StatementHandle*> statements_;
-    
+
 private:
     EnvironmentHandle* env_;
+
+    // I6. `writes_` holds an incomplete type, which is fine because
+    // ~ConnectionHandle is defined out of line.
+    uint64_t id_;
+    std::shared_ptr<TxnBuffer> writes_;
 };
 
 // Statement Handle

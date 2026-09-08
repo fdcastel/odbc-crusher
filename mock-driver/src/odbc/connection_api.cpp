@@ -4,6 +4,7 @@
 #include "driver/config.hpp"
 #include "driver/diagnostics.hpp"
 #include "mock/mock_catalog.hpp"
+#include "mock/mock_txn.hpp"   // I6
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
 #include "driver/entry_guard.hpp"
@@ -90,6 +91,7 @@ SQLRETURN SQL_API SQLConnect(
     // D6 makes this a no-op when the preset is already loaded, so a second
     // connect no longer empties the first connection's tables.
     MockCatalog::instance().attach(config.catalog);   // D47
+    conn->open_write_buffer();                       // I6
 
     conn->connected_ = true;
     return SQL_SUCCESS;
@@ -147,6 +149,7 @@ SQLRETURN SQL_API SQLDriverConnect(
     
     // Initialize catalog
     MockCatalog::instance().attach(config.catalog);   // D47
+    conn->open_write_buffer();                       // I6
     
     // Set up transaction mode
     if (config.transaction_mode == "ReadOnly") {
@@ -224,6 +227,12 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC hdbc) MOCK_ENTRY_TRY {
     // D47: the last connection out resets the process-global catalog,
     // so the next connect starts from the preset rather than from
     // whatever the previous connection left behind.
+    // I6: the connection's uncommitted writes go with it. SQLDisconnect
+    // refuses with 25000 while a transaction is open (above), so reaching here
+    // means there was nothing to commit - but a buffer left in the registry
+    // would be read by a READ UNCOMMITTED peer that no longer has a peer.
+    conn->close_write_buffer();
+
     MockCatalog::instance().detach();
     conn->connection_string_.clear();
     conn->dsn_.clear();
@@ -367,6 +376,13 @@ SQLRETURN SQL_API SQLSetConnectAttr(
                 && conn->autocommit_ == SQL_AUTOCOMMIT_OFF
                 && conn->in_transaction_) {
                 conn->in_transaction_ = false;   // committed
+                // I6: "committed" has to mean something now. Before the write
+                // buffer existed the rows were already in the store and
+                // clearing the flag was the whole job; now they are pending,
+                // and switching to autocommit has to make them real.
+                if (auto* writes = conn->pending_writes()) {
+                    MockCatalog::instance().apply_write_ops(writes->take_all());
+                }
             }
             conn->autocommit_ = want;
             break;

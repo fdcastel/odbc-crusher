@@ -1745,7 +1745,70 @@ ParsedQuery parse_sql(const std::string& sql) {
     return result;
 }
 
-QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
+// ── I6: reads and writes that respect the transaction ─────────────────────
+//
+// Before this the mock had no uncommitted state at all: every write landed in
+// the process-global store immediately, and ROLLBACK "undid" it by deleting
+// every row of every table for every connection.
+//
+// `visible_rows` is committed rows, then (at READ UNCOMMITTED) other
+// connections' pending ops, then this connection's own - own last, so a
+// connection always sees its own writes whatever the isolation level.
+static std::vector<MockRow> visible_rows(MockCatalog& catalog,
+                                         const std::string& table,
+                                         const TxnContext& txn) {
+    auto rows = catalog.snapshot_inserted_rows(table);
+    const std::string key = to_upper(table);
+    if (txn.read_uncommitted) {
+        apply_ops(rows, TxnRegistry::instance().peer_ops(txn.conn_id, key), key);
+    }
+    if (txn.buffered && txn.writes) {
+        apply_ops(rows, txn.writes->ops_for(key), key);
+    }
+    return rows;
+}
+
+static void write_insert(MockCatalog& catalog, const std::string& table,
+                         MockRow row, const TxnContext& txn) {
+    const std::string key = to_upper(table);
+    if (txn.buffered && txn.writes) {
+        WriteOp op;
+        op.kind = WriteOp::Kind::Insert;
+        op.table = key;
+        op.row = std::move(row);
+        txn.writes->record(std::move(op));
+        return;
+    }
+    catalog.insert_row(key, std::move(row));
+}
+
+// Returns the number of rows the statement claims to have removed, counted
+// over what this connection can see - so a DELETE inside a transaction reports
+// on rows the transaction itself inserted.
+static size_t write_delete(MockCatalog& catalog, const std::string& table,
+                           const std::function<bool(const MockRow&)>& match,
+                           const TxnContext& txn) {
+    const std::string key = to_upper(table);
+    if (!txn.buffered || !txn.writes) {
+        return catalog.erase_matching_rows(key, match);
+    }
+    // Count against the transaction's own view before recording the tombstone,
+    // because the committed store has not changed and cannot answer.
+    auto rows = visible_rows(catalog, table, txn);
+    size_t n = 0;
+    for (const auto& row : rows) {
+        if (match(row)) ++n;
+    }
+    WriteOp op;
+    op.kind = WriteOp::Kind::Delete;
+    op.table = key;
+    op.match = match;
+    txn.writes->record(std::move(op));
+    return n;
+}
+
+QueryResult execute_query(const ParsedQuery& query, int result_set_size,
+                          const TxnContext& txn) {
     QueryResult result;
     
     if (!query.is_valid) {
@@ -1957,7 +2020,7 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                         query.table_name,
                         generate_mock_data(*table, result_set_size));
                 }
-                auto rows = catalog.snapshot_inserted_rows(query.table_name);
+                auto rows = visible_rows(catalog, query.table_name, txn);
 
                 // D65: this used to return here, so the count was the number
                 // of rows in the table whatever the WHERE clause said -
@@ -2040,7 +2103,7 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 catalog.materialize_rows(query.table_name,
                                          generate_mock_data(*table, result_set_size));
             }
-            result.data = catalog.snapshot_inserted_rows(query.table_name);
+            result.data = visible_rows(catalog, query.table_name, txn);
             
             // D13: this used to re-implement WHERE filtering rather than
             // call the shared predicate builder, and the copy was weaker in three
@@ -2198,7 +2261,7 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                     }
                     auto corruption = BehaviorController::instance().config().silent_corruption;
                     if (apply_silent_corruption(row, *table, corruption)) {
-                        catalog.insert_row(to_upper(query.table_name), std::move(row));
+                        write_insert(catalog, query.table_name, std::move(row), txn);
                     }
                 }
                 result.affected_rows = static_cast<long long>(query.insert_row_count);
@@ -2230,7 +2293,7 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                         row.push_back(std::monostate{});
                 }
                 if (apply_silent_corruption(row, *table, corruption)) {
-                    catalog.insert_row(to_upper(query.table_name), std::move(row));
+                    write_insert(catalog, query.table_name, std::move(row), txn);
                     ++inserted;
                 }
             }
@@ -2258,8 +2321,16 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                 catalog.materialize_rows(query.table_name,
                                          generate_mock_data(*table, result_set_size));
             }
-            result.affected_rows = static_cast<long long>(
-                catalog.count_matching_rows(query.table_name, filter.match));
+            // I6: counted over what this connection can see, so an UPDATE
+            // inside a transaction counts rows the transaction inserted.
+            {
+                auto rows = visible_rows(catalog, query.table_name, txn);
+                size_t n = 0;
+                for (const auto& row : rows) {
+                    if (filter.match(row)) ++n;
+                }
+                result.affected_rows = static_cast<long long>(n);
+            }
             break;
         }
         case ParsedQuery::QueryType::Delete: {
@@ -2279,7 +2350,7 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size) {
                                          generate_mock_data(*table, result_set_size));
             }
             result.affected_rows = static_cast<long long>(
-                catalog.erase_matching_rows(query.table_name, filter.match));
+                write_delete(catalog, query.table_name, filter.match, txn));
             break;
         }
             

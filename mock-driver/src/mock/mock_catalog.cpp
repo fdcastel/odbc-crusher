@@ -1,4 +1,5 @@
 #include "mock_catalog.hpp"
+#include "mock_txn.hpp"   // I6: WriteOp
 #include "behaviors.hpp"
 #include <algorithm>
 #include <cctype>
@@ -430,6 +431,22 @@ void MockCatalog::remove_table(const std::string& name) {
 void MockCatalog::insert_row(const std::string& table_name, MockRow row) {
     std::lock_guard<std::mutex> g(mu_);
     inserted_data_[to_upper(table_name)].push_back(std::move(row));
+}
+
+// I6: the COMMIT path. See the header for why this locks once and inlines the
+// work rather than calling the row helpers.
+void MockCatalog::apply_write_ops(const std::vector<WriteOp>& ops) {
+    if (ops.empty()) return;
+    std::lock_guard<std::mutex> g(mu_);
+    for (const auto& op : ops) {
+        auto& rows = inserted_data_[op.table];   // already upper-cased
+        if (op.kind == WriteOp::Kind::Insert) {
+            rows.push_back(op.row);
+        } else if (op.match) {
+            rows.erase(std::remove_if(rows.begin(), rows.end(), op.match),
+                       rows.end());
+        }
+    }
 }
 
 void MockCatalog::clear_inserted_data() {

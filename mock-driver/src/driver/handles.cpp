@@ -1,4 +1,5 @@
 #include "handles.hpp"
+#include "../mock/mock_txn.hpp"   // I6
 #include <atomic>
 #include <algorithm>
 
@@ -57,14 +58,42 @@ EnvironmentHandle::~EnvironmentHandle() {
 }
 
 // ConnectionHandle
-ConnectionHandle::ConnectionHandle(EnvironmentHandle* env) 
-    : OdbcHandle(HandleType::DBC), env_(env) {
+namespace {
+// I6: identifies a connection to the registry that serves READ UNCOMMITTED
+// peer reads. Same shape as the cursor ordinal below.
+std::atomic<uint64_t> g_next_connection_id{1};
+}  // namespace
+
+ConnectionHandle::ConnectionHandle(EnvironmentHandle* env)
+    : OdbcHandle(HandleType::DBC), env_(env),
+      id_(g_next_connection_id.fetch_add(1)) {
     if (env_) {
         env_->connections_.push_back(this);
     }
 }
 
+// I6: connect and disconnect, not construct and destruct.
+//
+// A reconnected handle must start with an empty buffer - that is what
+// test_reused_connection_starts_clean asks about - and the registry must not
+// hold an entry for a connection that is closed.
+void ConnectionHandle::open_write_buffer() {
+    writes_ = TxnRegistry::instance().open(id_);
+}
+
+void ConnectionHandle::close_write_buffer() {
+    TxnRegistry::instance().close(id_);
+    writes_.reset();
+}
+
 ConnectionHandle::~ConnectionHandle() {
+    // I6: whatever this connection had not committed is discarded, which is
+    // the right answer - a connection that goes away without committing has
+    // rolled back. SQLFreeHandle refuses while still connected, so the only
+    // way here with a live buffer is ~EnvironmentHandle tearing everything
+    // down.
+    close_write_buffer();
+
     // D8(a) - see ~EnvironmentHandle. ~StatementHandle erases itself from
     // `statements_`, so iterating it while deleting was undefined.
     std::vector<StatementHandle*> doomed;
