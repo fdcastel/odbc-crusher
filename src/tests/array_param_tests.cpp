@@ -1164,13 +1164,18 @@ TestResult ArrayParamTests::test_paramset_size_unsupported_returns_error() {
                                              reinterpret_cast<SQLCHAR*>(state),
                                              &native, msg, sizeof(msg), &msg_len);
                 if (dr == SQL_NO_DATA || !SQL_SUCCEEDED(dr)) break;
+                // D68: the message to `msg_len`. The SQLSTATE beside it has
+                // no length parameter at all in SQLGetDiagRec's signature, so
+                // it is a different problem - D69.
                 if (sqlstate.empty()) {
-                    sqlstate = state;
-                    msg_text = reinterpret_cast<char*>(msg);
+                    sqlstate = core::sqlstate_string(state);
+                    msg_text = core::bounded_string(
+                        reinterpret_cast<char*>(msg), sizeof(msg), msg_len).value;
                 }
-                if (std::string(state) == "HYC00") {
+                if (core::sqlstate_string(state) == "HYC00") {
                     sqlstate = "HYC00";
-                    msg_text = reinterpret_cast<char*>(msg);
+                    msg_text = core::bounded_string(
+                        reinterpret_cast<char*>(msg), sizeof(msg), msg_len).value;
                     break;
                 }
             }

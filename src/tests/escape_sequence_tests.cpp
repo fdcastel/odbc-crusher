@@ -1118,7 +1118,9 @@ std::string find_named_procedure(core::OdbcConnection& conn,
         if (SQL_SUCCEEDED(SQLGetData(stmt.get_handle(), 3, SQL_C_CHAR,
                                       buf, sizeof(buf), &ind)) &&
             ind != SQL_NULL_DATA) {
-            return std::string(buf);
+            // D68: `ind`, not a terminator. This name is reported back to the
+            // user as the procedure that was found.
+            return core::bounded_string(buf, sizeof(buf), ind).value;
         }
     }
     return {};
@@ -1214,7 +1216,13 @@ CallProbeOutcome run_mock_inout_call(core::OdbcConnection& conn,
         if (++guard > 100) break;   // a driver stuck on the same result set
     }
 
-    out.inout_text = std::string(inout_buf);
+    // D68: the INOUT buffer to the length the driver reported in
+    // `inout_ind`. Read to a terminator, a driver that writes back "HELLO"
+    // correctly and omits the NUL was reported as returning 'HELLOX' and
+    // FAILed for not matching the procedure's UPPER contract - with
+    // `indicator=5` printed in the same sentence.
+    out.inout_text =
+        core::bounded_string(inout_buf, sizeof(inout_buf), out.inout_ind).value;
     return out;
 }
 

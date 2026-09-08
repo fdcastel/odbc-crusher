@@ -28,7 +28,7 @@ std::string SqlstateTests::get_stmt_sqlstate(SQLHSTMT hstmt) {
     SQLRETURN rc = SQLGetDiagRec(SQL_HANDLE_STMT, hstmt, 1,
                                  sqlstate, &native, msg, sizeof(msg), &msg_len);
     if (SQL_SUCCEEDED(rc)) {
-        return std::string(reinterpret_cast<char*>(sqlstate));
+        return core::sqlstate_string(sqlstate);
     }
     return "";
 }
@@ -41,7 +41,7 @@ std::string SqlstateTests::get_conn_sqlstate(SQLHDBC hdbc) {
     SQLRETURN rc = SQLGetDiagRec(SQL_HANDLE_DBC, hdbc, 1,
                                  sqlstate, &native, msg, sizeof(msg), &msg_len);
     if (SQL_SUCCEEDED(rc)) {
-        return std::string(reinterpret_cast<char*>(sqlstate));
+        return core::sqlstate_string(sqlstate);
     }
     return "";
 }

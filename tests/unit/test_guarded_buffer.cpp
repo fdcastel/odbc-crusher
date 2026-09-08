@@ -110,3 +110,113 @@ TEST(GuardedBufferTest, AGuardedBufferStopsARunawayScanInsideItsOwnMemory) {
     EXPECT_FALSE(buf.guard_breach().has_value())
         << "and reading must not look like a write";
 }
+
+
+// ── D68: bounded_wchar_units ──────────────────────────────────────────────
+//
+// The wide half of A3's bounded_string. Two probes had written this by hand as
+// `while (n < capacity - 1 && buf[n] != 0) ++n;` - a scan to a terminator in a
+// function whose caller was holding StrLen_or_IndPtr - and under
+// BufferValidation=Lenient both reported one extra U+0058 and FAILed a driver
+// whose value was correct.
+
+TEST(BoundedWcharTest, UsesTheReportedLengthNotTheTerminator) {
+    SQLWCHAR buf[8];
+    for (auto& u : buf) u = static_cast<SQLWCHAR>('X');   // no terminator
+    buf[0] = 'a'; buf[1] = 'b'; buf[2] = 'c';
+
+    // ODBC reports StrLen_or_IndPtr in BYTES even for SQL_C_WCHAR. Getting
+    // that conversion wrong is the reason this is one function and not five.
+    const SQLLEN reported = static_cast<SQLLEN>(3 * sizeof(SQLWCHAR));
+    EXPECT_EQ(core::bounded_wchar_units(buf, 8, reported), 3u);
+}
+
+TEST(BoundedWcharTest, StopsAtATerminatorTheDriverDidWrite) {
+    SQLWCHAR buf[8] = {'a', 'b', 0, 'x', 'y', 'z', 'w', 'v'};
+    // The driver claims more than it terminated. Take the shorter - a value
+    // past its own NUL is not a value.
+    EXPECT_EQ(core::bounded_wchar_units(
+                  buf, 8, static_cast<SQLLEN>(6 * sizeof(SQLWCHAR))),
+              2u);
+}
+
+TEST(BoundedWcharTest, NeverRunsPastTheDeclaredBuffer) {
+    SQLWCHAR buf[4];
+    for (auto& u : buf) u = static_cast<SQLWCHAR>('X');
+    // A driver reporting far more than the buffer holds is the truncation
+    // case: SQL_SUCCESS_WITH_INFO plus a length that is *available*, not
+    // *written*. One unit belongs to the terminator, so three is the most
+    // that can have been delivered.
+    EXPECT_EQ(core::bounded_wchar_units(
+                  buf, 4, static_cast<SQLLEN>(4000 * sizeof(SQLWCHAR))),
+              3u);
+}
+
+TEST(BoundedWcharTest, NullDataIsNoUnitsRatherThanAHugeCount) {
+    SQLWCHAR buf[8];
+    for (auto& u : buf) u = static_cast<SQLWCHAR>('X');
+    EXPECT_EQ(core::bounded_wchar_units(buf, 8, SQL_NULL_DATA), 0u);
+}
+
+TEST(BoundedWcharTest, NoTotalFallsBackToWhatIsInTheBuffer) {
+    SQLWCHAR buf[8] = {'a', 'b', 'c', 0, 0, 0, 0, 0};
+    // The driver cannot say how much there is. Take what was written, which
+    // is the only thing left to go on.
+    EXPECT_EQ(core::bounded_wchar_units(buf, 8, SQL_NO_TOTAL), 3u);
+
+    for (auto& u : buf) u = static_cast<SQLWCHAR>('X');
+    EXPECT_EQ(core::bounded_wchar_units(buf, 8, SQL_NO_TOTAL), 7u)
+        << "with no terminator either, the declared region bounds the answer";
+}
+
+TEST(BoundedWcharTest, NullBufferAndZeroCapacityAreNotACrash) {
+    EXPECT_EQ(core::bounded_wchar_units(nullptr, 8, 4), 0u);
+    SQLWCHAR buf[1] = {0};
+    EXPECT_EQ(core::bounded_wchar_units(buf, 0, 4), 0u);
+}
+
+// ── D69: sqlstate_string ──────────────────────────────────────────────────
+//
+// SQLGetDiagRec returns the one string in ODBC with no length beside it, and
+// twelve reads took it as a C string out of a six-byte array. Against a driver
+// that omits the terminator there is then no NUL in the array at all: on
+// Windows the report carried `42000X` plus uninitialised stack, and on macOS
+// crusher was killed - `Abort trap: 6`, twice in one CI run, from the
+// platform's fortified strlen catching a scan past a compile-time-known
+// six-byte object.
+
+TEST(SqlstateStringTest, ReadsTheFiveCharactersTheSpecDefines) {
+    const SQLCHAR state[6] = {'4', '2', '0', '0', '0', 0};
+    EXPECT_EQ(core::sqlstate_string(state), "42000");
+}
+
+TEST(SqlstateStringTest, StopsAtFiveWhenTheDriverWroteNoTerminator) {
+    // The Lenient shape: five characters and a filler where the NUL belongs,
+    // so there is no zero in the array. This is the case that aborted.
+    const char state[6] = {'4', '2', '0', '0', '0', 'X'};
+    EXPECT_EQ(core::sqlstate_string(state), "42000");
+}
+
+TEST(SqlstateStringTest, StopsEarlyWhenTheDriverTerminatedEarly) {
+    // A driver may write a short state, or none at all. Both are its answer,
+    // and neither should read into the bytes after it.
+    const char short_state[6] = {'0', '1', 0, 'j', 'u', 'n'};
+    EXPECT_EQ(core::sqlstate_string(short_state), "01");
+
+    const char empty_state[6] = {0, 'j', 'u', 'n', 'k', '!'};
+    EXPECT_EQ(core::sqlstate_string(empty_state), "");
+}
+
+TEST(SqlstateStringTest, NullPointerIsEmptyRatherThanACrash) {
+    EXPECT_EQ(core::sqlstate_string(static_cast<const char*>(nullptr)), "");
+}
+
+// The property that made this worth a helper rather than a `substr` at each
+// site: whatever the six bytes contain, exactly five of them are read.
+TEST(SqlstateStringTest, NeverReadsTheSixthByte) {
+    char state[6];
+    std::memset(state, 'A', sizeof(state));
+    const std::string s = core::sqlstate_string(state);
+    EXPECT_EQ(s.size(), 5u);
+    EXPECT_EQ(s, "AAAAA");
+}

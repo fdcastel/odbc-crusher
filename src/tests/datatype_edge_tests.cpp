@@ -244,13 +244,23 @@ TestResult DataTypeEdgeCaseTests::test_varchar_empty() {
                                 "The empty string and NULL are distinct values. "
                                 "A driver conflating them corrupts every "
                                 "nullable character column.";
-                        } else if (indicator == 0 && buffer[0] == '\0') {
+                        } else if (indicator == 0) {
+                            // D68: this used to require `buffer[0] == '\0'`
+                            // as well, and read the buffer as a C string when
+                            // it did not. The driver has said the value is
+                            // zero bytes long; whether it also wrote a
+                            // terminator is test_null_termination's question,
+                            // and answering it here made this probe report
+                            // `got 'X'` about a value that was correctly
+                            // empty.
                             r.status = TestStatus::PASS;
                             r.actual = "Empty string retrieved correctly (length=0)";
                         } else {
                             r.status = TestStatus::FAIL;
                             r.actual = "Expected empty string, got '" +
-                                       std::string(buffer) + "' (indicator=" +
+                                       bounded_string(buffer, sizeof(buffer),
+                                                      indicator).value +
+                                       "' (indicator=" +
                                        std::to_string(indicator) + ")";
                             r.severity = Severity::ERR;
                         }
@@ -369,7 +379,10 @@ TestResult DataTypeEdgeCaseTests::test_integer_as_string() {
                                              buffer, sizeof(buffer), &indicator);
 
                     if (SQL_SUCCEEDED(rc)) {
-                        std::string val(buffer);
+                        // D68: to the reported length, not to a terminator.
+                        std::string val =
+                            bounded_string(buffer, sizeof(buffer),
+                                           indicator).value;
                         // The string should contain "42" (possibly with whitespace)
                         if (val.find("42") != std::string::npos) {
                             r.status = TestStatus::PASS;

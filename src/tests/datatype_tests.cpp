@@ -228,7 +228,12 @@ TestResult DataTypeTests::test_string_types() {
                                        buffer, sizeof(buffer), &indicator);
 
             if (SQL_SUCCEEDED(ret)) {
-                std::string value(reinterpret_cast<char*>(buffer));
+                // D68: to `indicator`, not to a terminator. Under
+                // BufferValidation=Lenient this reported the value with the
+                // mock's filler byte glued on - `Hello, ODBC!X`.
+                std::string value =
+                    bounded_string(reinterpret_cast<char*>(buffer),
+                                   sizeof(buffer), indicator).value;
                 // Trim trailing spaces
                 size_t end = value.find_last_not_of(" \t\n\r");
                 if (end != std::string::npos) {
@@ -443,7 +448,9 @@ TestResult DataTypeTests::test_unicode_types() {
                 // and SQL_NO_TOTAL (-4), so explicit comparisons are redundant.
                 if (SQL_SUCCEEDED(ret) && indicator > 0) {
                     r.actual = std::string("SQL_C_WCHAR unavailable (") + wchar_state +
-                               "); retrieved as SQL_C_CHAR: '" + str_buffer + "'";
+                               "); retrieved as SQL_C_CHAR: '" +
+                               bounded_string(str_buffer, sizeof(str_buffer),
+                                              indicator).value + "'";
                     r.status = TestStatus::SKIP_UNSUPPORTED;
                     r.suggestion = "Driver does not support SQL_C_WCHAR retrieval; "
                                    "consider implementing wide character conversion "

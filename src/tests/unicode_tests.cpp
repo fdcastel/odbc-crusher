@@ -303,15 +303,30 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
 
                     // Skip information_schema tables/views — many drivers cannot
                     // expose their columns via SQLColumns (they are synthetic views).
-                    std::string candidate_schema = (sch_ind > 0) ? std::string(sch_buf) : "";
-                    std::string candidate_catalog = (cat_ind > 0) ? std::string(cat_buf) : "";
+                    // D68: to the reported lengths. These three feed
+                    // straight into SQLColumnsW; read to a terminator, a
+                    // driver that omits the NUL made this ask for columns of
+                    // `CUSTOMERSX` and report "no columns" for a table that
+                    // was there.
+                    std::string candidate_schema =
+                        (sch_ind > 0)
+                            ? core::bounded_string(sch_buf, sizeof(sch_buf),
+                                                   sch_ind).value
+                            : "";
+                    std::string candidate_catalog =
+                        (cat_ind > 0)
+                            ? core::bounded_string(cat_buf, sizeof(cat_buf),
+                                                   cat_ind).value
+                            : "";
                     if (candidate_schema == "information_schema" || candidate_catalog == "information_schema") {
                         continue;
                     }
 
                     table_catalog = candidate_catalog;
                     table_schema = candidate_schema;
-                    table_name = std::string(name_buf);
+                    table_name = core::bounded_string(name_buf,
+                                                      sizeof(name_buf),
+                                                      name_ind).value;
                     return true;
                 }
                 return false;
@@ -645,8 +660,12 @@ TestResult UnicodeTests::test_wchar_roundtrip_non_ascii() {
                 return;
             }
             const size_t expected_chars = input.size() - 1;
-            size_t out_chars = 0;
-            while (out_chars < 127 && out[out_chars] != 0) ++out_chars;
+            // D68: `ind` is the byte count SQLGetData reported. This walked
+            // to a terminator instead and, against a driver that omits it,
+            // reported one extra U+0058 and FAILed a correct round-trip with
+            // "driver appears to re-encode through a narrow codepage".
+            const size_t out_chars = core::bounded_wchar_units(
+                out, sizeof(out) / sizeof(out[0]), ind);
             if (out_chars != expected_chars ||
                 std::memcmp(out, input.data(),
                             expected_chars * sizeof(SQLWCHAR)) != 0) {
@@ -709,8 +728,9 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
                                "SQLGetData(SQL_C_WCHAR)");
                 return;
             }
-            size_t out_chars = 0;
-            while (out_chars < 7 && out[out_chars] != 0) ++out_chars;
+            // D68: see test_wchar_roundtrip_non_ascii.
+            const size_t out_chars = core::bounded_wchar_units(
+                out, sizeof(out) / sizeof(out[0]), ind);
             const auto want = expected_emoji_units();
             if (out_chars != want.size() ||
                 !std::equal(want.begin(), want.end(), out)) {

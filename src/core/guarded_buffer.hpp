@@ -194,4 +194,68 @@ inline BoundedString bounded_string(const char* buf, size_t capacity,
     return out;
 }
 
+// The same question for a SQL_C_WCHAR buffer - D68.
+//
+// `bounded_string` covers the ANSI half. The wide half was being answered by
+// hand, twice, as `while (n < capacity - 1 && buf[n] != 0) ++n;` - a scan to a
+// terminator, in probes that had `StrLen_or_IndPtr` sitting next to them.
+// Under `BufferValidation=Lenient` both then reported one extra `U+0058` and
+// FAILed a driver whose value was correct.
+//
+// `reported_bytes` is `StrLen_or_IndPtr`, which ODBC counts in **bytes** even
+// for SQL_C_WCHAR. That conversion is the part that is easy to get wrong by
+// hand, and is why this belongs in one place. Returns units, never past
+// `capacity_units - 1`, and never past a terminator the driver did write.
+inline size_t bounded_wchar_units(const SQLWCHAR* buf, size_t capacity_units,
+                                  SQLLEN reported_bytes) {
+    if (!buf || capacity_units == 0) return 0;
+
+    // One unit belongs to the terminator, as in the narrow case.
+    const size_t max_units = capacity_units - 1;
+
+    size_t written = max_units;
+    for (size_t i = 0; i < max_units; ++i) {
+        if (buf[i] == 0) { written = i; break; }
+    }
+
+    if (reported_bytes == SQL_NO_TOTAL) return written;
+    if (reported_bytes < 0) return 0;   // SQL_NULL_DATA, or nonsense
+
+    const size_t reported_units =
+        static_cast<size_t>(reported_bytes) / sizeof(SQLWCHAR);
+    return std::min(reported_units, written);
+}
+
+// The SQLSTATE a diagnostic call filled in, read safely - D69.
+//
+// This is the one string ODBC returns with no length beside it. SQLGetDiagRec
+// takes a `SQLCHAR*` documented as "at least six characters" and no
+// `StringLength` output for it, so `bounded_string` has nothing to be given:
+// the only length the spec defines is five, and it defines it for every
+// driver.
+//
+// Reading it as a C string is therefore not a case of ignoring a length - it
+// is the absence of one. That did not make it safe. A driver that writes
+// "42000" and no terminator leaves a six-byte array with no NUL in it and the
+// scan runs into whatever is next on the stack: on Windows the report carried
+// `42000X` followed by uninitialised bytes, and on macOS crusher **aborted**,
+// because the platform's fortified strlen catches exactly this. A tool whose
+// stated philosophy is "never crash - handle all ODBC errors gracefully" was
+// being killed by the driver it was inspecting.
+//
+// Five characters, bounded, stopping at a terminator if the driver wrote one.
+inline std::string sqlstate_string(const char* state) {
+    if (!state) return {};
+    constexpr size_t kSqlstateChars = 5;
+    const void* nul = std::memchr(state, '\0', kSqlstateChars);
+    const size_t len = nul
+        ? static_cast<size_t>(static_cast<const char*>(nul) - state)
+        : kSqlstateChars;
+    return std::string(state, len);
+}
+
+inline std::string sqlstate_string(const SQLCHAR* state) {
+    return sqlstate_string(reinterpret_cast<const char*>(state));
+}
+
 } // namespace odbc_crusher::core

@@ -472,7 +472,7 @@ TestResult AdvancedTests::test_fetch_scroll_first_last() {
                     SQLSMALLINT msg_len = 0;
                     SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
                                  sqlstate, &native, msg, sizeof(msg), &msg_len);
-                    std::string state(reinterpret_cast<char*>(sqlstate));
+                    std::string state = core::sqlstate_string(sqlstate);;
 
                     // B1: any SQL_ERROR was reported as "not supported",
                     // whatever the state said - the probe read the SQLSTATE

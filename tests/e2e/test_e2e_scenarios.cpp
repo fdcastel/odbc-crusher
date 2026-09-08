@@ -1628,3 +1628,82 @@ TEST_F(CrusherE2EFixture, ReconnectProbeGradesUsabilityAndReportsAutocommit) {
               std::string::npos)
         << "actual was: " << actual;
 }
+
+
+// ── D68: a driver that omits its terminators has exactly one defect ───────
+//
+// BufferValidation=Lenient makes the mock return every value correctly, with
+// a correct StrLen_or_IndPtr, and overwrite the NUL. There is one probe whose
+// job is to grade that - test_null_termination - and D62 broadened the lever
+// far enough to prove that twelve *other* probes were also reading the fault,
+// because they walked to a terminator while holding the length beside them.
+//
+// Five reported a failure that was not the driver's; two built SQL out of the
+// mangled string and executed `SELECT COUNT(*) FROM CUSTOMERSX`; one printed
+// `indicator=5` and the six-character value it had read in the same sentence.
+//
+// The claim asserted here is per-probe rather than a total, because the
+// totals are platform properties: on POSIX the driver managers add failures
+// of their own under this configuration (D1, D59, and the note in
+// FailOnSeverityDecidesTheExitCode), and asserting "exactly one failure"
+// would be the D53 mistake again. None of these probes uses a buffer small
+// enough to meet the managers' own overrun, so their statuses are the
+// driver's answer on every platform.
+TEST_F(CrusherE2EFixture, OmittedTerminatorsAreGradedByOneProbeNotTwelve) {
+    const std::string base =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;";
+
+    auto clean = run_crusher(base);
+    ASSERT_TRUE(clean.report.contains("summary")) << clean.raw_stderr;
+    auto bad = run_crusher(base + "BufferValidation=Lenient;");
+    ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
+
+    // The probes D68 fixed, by the category they live in.
+    const std::vector<std::pair<std::string, std::string>> graded = {
+        {"Data Type Edge Cases",   "test_varchar_empty"},
+        {"Data Type Edge Cases",   "test_integer_as_string"},
+        {"Data Type Tests",        "test_string_types"},
+        {"Error Queue Management", "test_field_extraction"},
+        {"Escape Sequence Tests",  "test_call_escape_in_parameter"},
+        {"Escape Sequence Tests",  "test_call_escape_inout_parameter"},
+        {"Metadata/Catalog Tests", "test_count_star_result_metadata"},
+        {"Metadata/Catalog Tests", "test_sqlprocedures_smoke"},
+        {"Metadata/Catalog Tests", "test_sqlprocedurecolumns_smoke"},
+        {"Statement Tests",        "test_native_sql"},
+        {"Statement Tests",        "test_bind_col_string"},
+        {"Unicode Tests",          "test_columns_unicode_patterns"},
+        {"Unicode Tests",          "test_wchar_roundtrip_non_ascii"},
+        {"Unicode Tests",          "test_wchar_surrogate_pair_preserved"},
+    };
+
+    size_t compared = 0;
+    for (const auto& [category, name] : graded) {
+        auto a = find_test(clean.report, category, name);
+        auto b = find_test(bad.report, category, name);
+        if (!a.has_value() || !b.has_value()) continue;   // named below
+        ++compared;
+        EXPECT_EQ(a->value("status", std::string{}),
+                  b->value("status", std::string{}))
+            << category << " / " << name
+            << " changed verdict when the driver stopped terminating its "
+               "strings, and the value it returned did not change. Read the "
+               "length the driver reported (D68).\n  terminating: "
+            << a->value("actual", std::string{})
+            << "\n  not terminating: " << b->value("actual", std::string{});
+    }
+
+    EXPECT_GE(compared, graded.size() - 2)
+        << "most of the probes this asserts about were not in the report; the "
+           "names have drifted\n"
+        << report_outline(bad);
+
+    // And the one probe that *must* notice, or the lever is doing nothing.
+    auto nul = find_test(bad.report, "Buffer Validation", "test_null_termination");
+    ASSERT_TRUE(nul.has_value()) << report_outline(bad);
+    auto nul_clean = find_test(clean.report, "Buffer Validation",
+                               "test_null_termination");
+    ASSERT_TRUE(nul_clean.has_value()) << report_outline(clean);
+    EXPECT_NE(nul->value("actual", std::string{}),
+              nul_clean->value("actual", std::string{}))
+        << "BufferValidation=Lenient reached no probe at all";
+}

@@ -741,10 +741,25 @@ TestResult MetadataTests::test_count_star_result_metadata() {
                     char buf[256] = {0};
                     SQLLEN ind = 0;
                     // Column 3 is TABLE_NAME per ODBC spec.
-                    SQLGetData(enum_stmt.get_handle(), 3, SQL_C_CHAR, buf,
-                               sizeof(buf), &ind);
-                    if (ind != SQL_NULL_DATA && buf[0] != '\0') {
-                        target_table = buf;
+                    //
+                    // D68: this used to take the name by walking to a
+                    // terminator, and then builds `SELECT COUNT(*) FROM
+                    // <name>` out of it - so a driver that omits the NUL did
+                    // not make the probe report something odd, it made the
+                    // probe execute different SQL. Under
+                    // BufferValidation=Lenient the query became
+                    // `SELECT COUNT(*) FROM CUSTOMERSX` and the probe skipped
+                    // itself for a table that does not exist.
+                    //
+                    // D66's family too: the return code was discarded, so a
+                    // refused SQLGetData left `buf` zeroed and the probe read
+                    // its own initialisation.
+                    const SQLRETURN got = SQLGetData(enum_stmt.get_handle(), 3,
+                                                     SQL_C_CHAR, buf,
+                                                     sizeof(buf), &ind);
+                    if (SQL_SUCCEEDED(got) && ind != SQL_NULL_DATA) {
+                        target_table = bounded_string(buf, sizeof(buf),
+                                                      ind).value;
                     }
                 }
             } catch (const core::OdbcError&) {
@@ -817,7 +832,9 @@ std::string fetch_string_col(SQLHSTMT h, SQLUSMALLINT col) {
     SQLLEN ind = 0;
     SQLRETURN rc = SQLGetData(h, col, SQL_C_CHAR, buf, sizeof(buf), &ind);
     if (!SQL_SUCCEEDED(rc) || ind == SQL_NULL_DATA) return {};
-    return std::string(buf);
+    // D68: to `ind`. These strings go into the report as the procedure and
+    // column names the driver returned.
+    return core::bounded_string(buf, sizeof(buf), ind).value;
 }
 
 // A18: this returned 0 for a NULL value *and* for a failed SQLGetData, and
@@ -853,14 +870,14 @@ TestResult MetadataTests::test_sqlprocedures_smoke() {
                 SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
                               reinterpret_cast<SQLCHAR*>(state),
                               nullptr, nullptr, 0, nullptr);
-                if (std::string(state) == "IM001") {
+                if (core::sqlstate_string(state) == "IM001") {
                     r.status = TestStatus::SKIP_UNSUPPORTED;
                     r.actual = "Driver returned IM001 — SQLProcedures not supported";
                     return;
                 }
                 r.status = TestStatus::FAIL;
                 r.actual = "SQLProcedures returned SQL_ERROR (state="
-                         + std::string(state) + ")";
+                         + core::sqlstate_string(state) + ")";
                 return;
             }
 
@@ -924,14 +941,14 @@ TestResult MetadataTests::test_sqlprocedurecolumns_smoke() {
                 SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
                               reinterpret_cast<SQLCHAR*>(state),
                               nullptr, nullptr, 0, nullptr);
-                if (std::string(state) == "IM001") {
+                if (core::sqlstate_string(state) == "IM001") {
                     r.status = TestStatus::SKIP_UNSUPPORTED;
                     r.actual = "Driver returned IM001 — SQLProcedureColumns not supported";
                     return;
                 }
                 r.status = TestStatus::FAIL;
                 r.actual = "SQLProcedureColumns returned SQL_ERROR (state="
-                         + std::string(state) + ")";
+                         + core::sqlstate_string(state) + ")";
                 return;
             }
 

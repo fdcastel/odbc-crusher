@@ -562,7 +562,10 @@ TestResult StatementTests::test_bind_col_string() {
                                          value, sizeof(value), &indicator);
 
                 if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
-                    std::string fetched(reinterpret_cast<char*>(value));
+                    // D68: `indicator` is what SQLBindCol was given; use it.
+                    std::string fetched =
+                        bounded_string(reinterpret_cast<char*>(value),
+                                       sizeof(value), indicator).value;
                     r.status = TestStatus::PASS;
                     r.actual = "Bound string column, fetched '" + fetched + "'";
                     success = true;
@@ -912,7 +915,13 @@ TestResult StatementTests::test_native_sql() {
             );
 
             if (SQL_SUCCEEDED(rc)) {
-                std::string native_sql(reinterpret_cast<char*>(output));
+                // D68: SQLNativeSql reports its length in `output_len`.
+                // Reading to a terminator, the probe reported
+                // `'SELECT 1' -> 'SELECT 1X'` against a driver whose
+                // translation was correct.
+                std::string native_sql =
+                    bounded_string(reinterpret_cast<char*>(output),
+                                   sizeof(output), output_len).value;
                 r.status = TestStatus::PASS;
                 r.actual = "SQLNativeSql: '" + std::string(reinterpret_cast<char*>(input)) +
                                "' -> '" + native_sql + "'";

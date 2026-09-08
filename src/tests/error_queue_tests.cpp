@@ -115,7 +115,7 @@ TestResult ErrorQueueTests::test_multiple_errors() {
                     if (diag_rc == SQL_NO_DATA) break;
 
                     if (SQL_SUCCEEDED(diag_rc)) {
-                        sqlstates.push_back(std::string(reinterpret_cast<char*>(sqlstate)));
+                        sqlstates.push_back(core::sqlstate_string(sqlstate));
                     }
                 }
 
@@ -220,7 +220,7 @@ TestResult ErrorQueueTests::test_error_clearing() {
                     r.actual = "Error diagnostics cleared after successful operation";
                 } else if (SQL_SUCCEEDED(diag_rc)) {
                     // There might be info/warning from the successful op, check if it's the OLD error
-                    std::string state(reinterpret_cast<char*>(sqlstate));
+                    std::string state = core::sqlstate_string(sqlstate);;
                     if (state == initial_state) {
                         // B10: the same state the forced error produced is
                         // still there, whatever that state was.
@@ -334,7 +334,15 @@ TestResult ErrorQueueTests::test_field_extraction() {
                                    (got_native ? 1 : 0) + (got_message ? 1 : 0);
 
                 if (fields_ok >= 3) {
-                    std::string state_str(reinterpret_cast<char*>(sqlstate));
+                    // D68: SQLGetDiagField reports its length in
+                    // `sqlstate_len` and this walked to a terminator. There
+                    // are six bytes; "42000" plus a driver that does not
+                    // terminate leaves no NUL in the array, and the read went
+                    // into the next thing on the stack - the report carried
+                    // `42000X` followed by uninitialised bytes.
+                    std::string state_str =
+                        bounded_string(reinterpret_cast<char*>(sqlstate),
+                                       sizeof(sqlstate), sqlstate_len).value;
                     r.status = TestStatus::PASS;
                     r.actual = std::to_string(fields_ok) + "/4 diagnostic fields extracted: " +
                                    "records=" + std::to_string(num_records) +

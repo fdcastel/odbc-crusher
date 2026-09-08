@@ -1,3 +1,4 @@
+#include "guarded_buffer.hpp"
 #include "odbc_error.hpp"
 #include <sstream>
 #include <cstring>
@@ -17,9 +18,21 @@ OdbcError OdbcError::from_handle(SQLSMALLINT handle_type, SQLHANDLE handle, cons
                                        sqlstate, &native_error,
                                        message, SQL_MAX_MESSAGE_LENGTH, &text_length))) {
         OdbcDiagnostic diag;
-        diag.sqlstate = reinterpret_cast<char*>(sqlstate);
+        // D69: SQLGetDiagRec gives no length for its SQLSTATE, so this is
+        // bounded to the five characters the spec defines rather than to a
+        // terminator the driver may not have written.
+        diag.sqlstate = sqlstate_string(sqlstate);
         diag.native_error = native_error;
-        diag.message = reinterpret_cast<char*>(message);
+        // D68: `text_length` is right there and this used to walk to a
+        // terminator instead. Two consequences, and the second is the one
+        // that makes this the most important site in the row: `message` is
+        // declared once and reused for every record, so a driver that
+        // returns a short unterminated message on record 2 hands the report
+        // record 1's tail glued to it. And a driver that terminates nothing
+        // at all runs the read off a 512-byte stack array - in the function
+        // every failure path in the tool calls to find out what went wrong.
+        diag.message = bounded_string(reinterpret_cast<char*>(message),
+                                      sizeof(message), text_length).value;
         diag.record_number = rec;
         
         diagnostics.push_back(std::move(diag));
