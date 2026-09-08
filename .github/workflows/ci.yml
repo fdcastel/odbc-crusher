@@ -13,6 +13,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# F6: least privilege. codeql.yml and release.yml declare their scopes;
+# these two inherited the repository default, which is whatever the org
+# setting happens to be. Read-only is all any job here needs — nothing
+# writes to the repository, and the artifacts are handled by
+# actions/upload-artifact, which does not use this token.
+permissions:
+  contents: read
+
 jobs:
   # Pre-flight: lint every workflow YAML before burning a full matrix
   # of CI minutes on a typo. Catches the kinds of mistakes the §6 cycle
@@ -26,7 +34,22 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install actionlint
-      run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      # F7: this used to be `bash <(curl .../main/scripts/download-actionlint.bash)`,
+      # which executes whatever is on that branch today, on every push, before
+      # any other job - and it is the first thing that runs, so a compromised
+      # script would see the whole workflow. Pinned to a release tag and
+      # verified by checksum: a moved tag or a swapped asset fails the job
+      # rather than running.
+      env:
+        ACTIONLINT_VERSION: 1.7.12
+        ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      run: |
+        set -euo pipefail
+        TARBALL="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        URL="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${TARBALL}"
+        curl -sSfL -o "$TARBALL" "$URL"
+        echo "${ACTIONLINT_SHA256}  ${TARBALL}" | sha256sum -c -
+        tar -xzf "$TARBALL" actionlint
     - name: Run actionlint
       run: ./actionlint -color
 

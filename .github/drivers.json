@@ -109,9 +109,12 @@
       "display_name": "Mock ODBC Driver",
       "version": "workspace",
       "install": {
-        "method": "release_asset",
-        "url": "https://github.com/fdcastel/odbc-crusher/releases/latest/download/mock-odbc-driver-windows-x64.zip",
-        "_note": "Mock driver is built from this repo; for triage the 'source' is the workspace itself, not a remote clone."
+        "method": "ci_artifact",
+        "workflow": "ci.yml",
+        "artifact": "mock-odbc-driver-Windows-Release",
+        "_note": "F8: this said method 'release_asset' with a releases/latest URL, while stress-test.yml has always downloaded the artifact from the most recent successful master ci.yml run - so the manifest sent readers to a route nothing takes, which matters because this file is the source of truth the /triage-driver skill reads. Using CI is deliberate: it closes the release-cadence gap, so a stress-test run exercises the driver as it is now rather than as it was at the last tag. Mock driver is built from this repo; for triage the 'source' is the workspace itself, not a remote clone.",
+        "release_asset_url": "https://github.com/fdcastel/odbc-crusher/releases/latest/download/mock-odbc-driver-windows-x64.zip",
+        "_release_asset_note": "What a *user* installs, and it does exist - kept for that reason, not used by CI. release.yml publishes this for Windows only, though ci.yml now builds the mock on all three platforms."
       },
       "source": {
         "repo": "self",

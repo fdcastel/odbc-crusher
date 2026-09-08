@@ -45,13 +45,11 @@ runs:
         # (filters on `status`, not `conclusion`, returning []). Pull the
         # last 10 master runs and pick the most recent success via jq —
         # robust across gh versions.
-        # Diagnostic: log the raw run list so we can see what the runner
-        # gets when this resolution fails.
-        echo "--- gh run list raw output: ---"
-        gh run list --workflow ci.yml --branch master --limit 10 \
-          --json databaseId,conclusion,status,headSha
-        echo "--- end raw output ---"
-
+        # F4: the raw run list was printed here on every job, from the
+        # diagnostic commit ddcf3cd. The parsing bug it was investigating was
+        # fixed in e35a8a7; the noise stayed. The error branch below still
+        # says what to do when resolution fails, which is the part that was
+        # ever useful.
         RUN_ID=$(gh run list --workflow ci.yml --branch master --limit 10 \
           --json databaseId,conclusion \
           -q '[.[] | select(.conclusion == "success")] | .[0].databaseId')
@@ -106,7 +104,24 @@ runs:
         if [[ -n "${{ inputs.ld-library-path }}" ]]; then
           export LD_LIBRARY_PATH="${{ inputs.ld-library-path }}:${LD_LIBRARY_PATH:-}"
         fi
-        timeout --kill-after=30 570 "$CRUSHER_BIN" "${{ inputs.conn-string }}" -v 2>&1 | tee crusher-report.txt
+        # F10: this action has a macOS branch for artifact selection and
+        # then called GNU `timeout` unconditionally, which a macOS runner
+        # does not have — so it advertised support it did not have. Latent
+        # today (there is no macOS stress-test job) and cheaper to fix than
+        # to rediscover when someone adds one. `gtimeout` is coreutils via
+        # Homebrew; falling through to no timeout at all is wrong, because
+        # the 570s bound is what stops a wedged driver holding the runner.
+        run_with_timeout() {
+          if command -v timeout >/dev/null 2>&1; then
+            timeout --kill-after=30 570 "$@"
+          elif command -v gtimeout >/dev/null 2>&1; then
+            gtimeout --kill-after=30 570 "$@"
+          else
+            echo "::error::Neither timeout nor gtimeout is available; refusing to run a driver unbounded"
+            return 1
+          fi
+        }
+        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" -v 2>&1 | tee crusher-report.txt
 
     - name: Run odbc-crusher (JSON)
       shell: bash
@@ -115,7 +130,24 @@ runs:
         if [[ -n "${{ inputs.ld-library-path }}" ]]; then
           export LD_LIBRARY_PATH="${{ inputs.ld-library-path }}:${LD_LIBRARY_PATH:-}"
         fi
-        timeout --kill-after=30 570 "$CRUSHER_BIN" "${{ inputs.conn-string }}" -o json -f crusher-report.json
+        # F10: this action has a macOS branch for artifact selection and
+        # then called GNU `timeout` unconditionally, which a macOS runner
+        # does not have — so it advertised support it did not have. Latent
+        # today (there is no macOS stress-test job) and cheaper to fix than
+        # to rediscover when someone adds one. `gtimeout` is coreutils via
+        # Homebrew; falling through to no timeout at all is wrong, because
+        # the 570s bound is what stops a wedged driver holding the runner.
+        run_with_timeout() {
+          if command -v timeout >/dev/null 2>&1; then
+            timeout --kill-after=30 570 "$@"
+          elif command -v gtimeout >/dev/null 2>&1; then
+            gtimeout --kill-after=30 570 "$@"
+          else
+            echo "::error::Neither timeout nor gtimeout is available; refusing to run a driver unbounded"
+            return 1
+          fi
+        }
+        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" -o json -f crusher-report.json
 
     - name: Upload report
       uses: actions/upload-artifact@v4

@@ -34,6 +34,13 @@ on:
           - firebird
           - mock-driver
 
+# F6: least privilege. This workflow hands github.token to
+# `gh run download`, which needs actions:read to resolve the CI run and
+# fetch its artifact — and nothing more.
+permissions:
+  contents: read
+  actions: read
+
 jobs:
 
   # ── PostgreSQL on Linux ─────────────────────────────────────

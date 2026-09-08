@@ -23,42 +23,46 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Configuration ──────────────────────────────────────────────
-# Each entry maps a workflow job / artifact name to its official GitHub repo
-# and the exact tag matching the binary version tested in CI.
-$Drivers = [ordered]@{
-    postgresql = @{
-        RepoUrl  = 'https://github.com/postgresql-interfaces/psqlodbc.git'
-        RepoName = 'psqlodbc'
-        Tag      = 'REL-16_00_0000'       # Ubuntu 24.04 apt: odbc-postgresql 16.00.0000
-        Artifact = 'report-postgresql'
-    }
-    mariadb = @{
-        RepoUrl  = 'https://github.com/mariadb-corporation/mariadb-connector-odbc.git'
-        RepoName = 'mariadb-connector-odbc'
-        Tag      = '3.1.15'               # Ubuntu 24.04 apt: odbc-mariadb 3.1.15
-        Artifact = 'report-mariadb'
-    }
-    mysql = @{
-        RepoUrl  = 'https://github.com/mysql/mysql-connector-odbc.git'
-        RepoName = 'mysql-connector-odbc'
-        Tag      = '9.7.0'                # Binary download: 9.7.0
-        Artifact = 'report-mysql'
-    }
-    duckdb = @{
-        RepoUrl  = 'https://github.com/duckdb/duckdb-odbc.git'
-        RepoName = 'duckdb-odbc'
-        Tag      = 'v1.5.2.0'             # Binary download: 1.5.2.0
-        Artifact = 'report-duckdb'
-    }
-    clickhouse = @{
-        RepoUrl  = 'https://github.com/ClickHouse/clickhouse-odbc.git'
-        RepoName = 'clickhouse-odbc'
-        Tag      = 'v1.5.3.20260311'      # Binary download: 1.5.3.20260311
-        Artifact = 'report-clickhouse'
+# F5: this used to be a hand-maintained $Drivers hashtable carrying each
+# driver's repo and tag - the same data as `.github/drivers.json`, which is
+# the declared single source of truth and which stress-test.yml reads at
+# runtime. The two had already drifted: the manifest has seven drivers, the
+# hashtable had five, and firebird was missing entirely, so this script would
+# silently skip the driver the project cares most about.
+#
+# It reads the manifest now. A driver added there appears here with no edit.
+$ProjectRoot   = $PSScriptRoot
+$ManifestPath  = Join-Path $ProjectRoot '.github' 'drivers.json'
+
+if (-not (Test-Path $ManifestPath)) {
+    throw "Driver manifest not found at $ManifestPath - run this from the project root."
+}
+
+$Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+
+$Drivers = [ordered]@{}
+foreach ($entry in $Manifest.drivers.PSObject.Properties) {
+    $name   = $entry.Name
+    $source = $entry.Value.source
+
+    # mock-driver's "repo" is this repository; there is nothing to clone, and
+    # the triage skill special-cases it for the same reason.
+    if (-not $source -or $source.repo -eq 'self') { continue }
+
+    $Drivers[$name] = @{
+        RepoUrl  = "$($source.repo).git"
+        RepoName = ($source.repo -split '/')[-1]
+        Tag      = $source.tag
+        Artifact = "report-$name"
     }
 }
 
-$ProjectRoot   = $PSScriptRoot
+if ($Drivers.Count -eq 0) {
+    throw "No clonable drivers in $ManifestPath - the manifest format may have changed."
+}
+
+Write-Host "Drivers from manifest: $($Drivers.Keys -join ', ')"
+
 $ExternalDir   = Join-Path $ProjectRoot 'tmp' 'external'
 $RecommDir     = Join-Path $ProjectRoot 'recommendations'
 $PromptsDir    = Join-Path $RecommDir   'prompts'
