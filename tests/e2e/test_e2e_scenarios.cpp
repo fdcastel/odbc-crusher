@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <sstream>
+#include <set>
 #include <string>
 #include <vector>
 #include "e2e_harness.hpp"
@@ -1400,19 +1401,29 @@ TEST_F(CrusherE2EFixture, DiscardedGetDataRcDoesNotBecomeARollbackPass) {
         }
     }
 }
-// Count the harness's own temp files still sitting in the temp directory.
-// run_crusher() removes both of its files before returning, so anything left
-// is a handle someone else is holding - see D55 below.
-size_t leftover_harness_temp_files() {
-    size_t count = 0;
+// The harness's temp files currently in the temp directory.
+//
+// run_crusher() removes both of its files before returning, so one still here
+// afterwards is a handle someone is holding - see D55 below.
+//
+// D80: this used to return a *count*, and the assertion compared it to zero.
+// The temp directory is shared: a file left by another scenario, by an earlier
+// ctest run, or by a crusher still exiting elsewhere all counted against it.
+// That made the check fail intermittently on macOS across unrelated commits,
+// and locally whenever the test ran twice inside thirty seconds - its own
+// wedged child sleeps for thirty, so the previous run's orphan was still
+// holding its file. The set lets the caller compare before against after and
+// count only what its own run left.
+std::set<std::string> harness_temp_files() {
+    std::set<std::string> names;
     std::error_code ec;
     for (const auto& entry :
          std::filesystem::directory_iterator(
              std::filesystem::temp_directory_path(), ec)) {
         const auto name = entry.path().filename().string();
-        if (name.rfind("crusher_e2e_", 0) == 0) ++count;
+        if (name.rfind("crusher_e2e_", 0) == 0) names.insert(name);
     }
-    return count;
+    return names;
 }
 
 // D55 - the harness could wait on a hung child forever. The sanitizer job
@@ -1442,6 +1453,11 @@ TEST_F(CrusherE2EFixture, AWedgedCrusherIsKilledRatherThanWaitedOn) {
         }
     } guard("2");
 
+    // D80: what was already lying about before this run starts. Anything in
+    // this set at the end is somebody else's and is not what this test asks
+    // about.
+    const auto before = harness_temp_files();
+
     const auto started = std::chrono::steady_clock::now();
     auto run = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;Latency=30s;");
@@ -1464,9 +1480,18 @@ TEST_F(CrusherE2EFixture, AWedgedCrusherIsKilledRatherThanWaitedOn) {
     // could not delete it, and the leftover is the orphan's signature. On
     // POSIX the group kill makes this structurally true rather than
     // observable; the assertion is the same either way.
-    EXPECT_EQ(leftover_harness_temp_files(), 0)
-        << "the harness left temp files behind, which on Windows means a "
-           "child of the killed shell is still holding them open";
+    std::vector<std::string> orphaned;
+    for (const auto& name : harness_temp_files()) {
+        if (before.count(name) == 0) orphaned.push_back(name);
+    }
+    EXPECT_TRUE(orphaned.empty())
+        << "this run left " << orphaned.size() << " temp file(s) behind, "
+           "which means a child of the killed shell is still holding them "
+           "open: " << [&] {
+               std::string s;
+               for (const auto& n : orphaned) { s += n; s += ' '; }
+               return s;
+           }();
 }
 // ── G2: running a subset ───────────────────────────────────────────────────
 //
