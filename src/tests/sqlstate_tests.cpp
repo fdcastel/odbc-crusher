@@ -21,27 +21,29 @@ std::vector<TestResult> SqlstateTests::run() {
 }
 
 std::string SqlstateTests::get_stmt_sqlstate(SQLHSTMT hstmt) {
-    SQLCHAR sqlstate[6] = {0};
+    core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
     SQLINTEGER native = 0;
-    SQLCHAR msg[256] = {0};
+    core::GuardedBuffer<SQLCHAR> msg(256, 0);  // D62
     SQLSMALLINT msg_len = 0;
     SQLRETURN rc = SQLGetDiagRec(SQL_HANDLE_STMT, hstmt, 1,
-                                 sqlstate, &native, msg, sizeof(msg), &msg_len);
+                                 sqlstate.data(), &native, msg.data(),
+                                 msg.declared_bytes(), &msg_len);
     if (SQL_SUCCEEDED(rc)) {
-        return core::sqlstate_string(sqlstate);
+        return core::sqlstate_string(sqlstate.data());
     }
     return "";
 }
 
 std::string SqlstateTests::get_conn_sqlstate(SQLHDBC hdbc) {
-    SQLCHAR sqlstate[6] = {0};
+    core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
     SQLINTEGER native = 0;
-    SQLCHAR msg[256] = {0};
+    core::GuardedBuffer<SQLCHAR> msg(256, 0);  // D62
     SQLSMALLINT msg_len = 0;
     SQLRETURN rc = SQLGetDiagRec(SQL_HANDLE_DBC, hdbc, 1,
-                                 sqlstate, &native, msg, sizeof(msg), &msg_len);
+                                 sqlstate.data(), &native, msg.data(),
+                                 msg.declared_bytes(), &msg_len);
     if (SQL_SUCCEEDED(rc)) {
-        return core::sqlstate_string(sqlstate);
+        return core::sqlstate_string(sqlstate.data());
     }
     return "";
 }

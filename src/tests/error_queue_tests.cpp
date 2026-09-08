@@ -29,19 +29,19 @@ TestResult ErrorQueueTests::test_single_error() {
             // overwritten on every path below - dead code that made the probe
             // look like it could skip.
             // Ask a freshly connected handle for its first diagnostic record.
-            SQLCHAR sqlstate[6] = {0};
+            core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
             SQLINTEGER native_error = 0;
-            SQLCHAR message[512] = {0};
+            core::GuardedBuffer<SQLCHAR> message(512, 0);  // D62
             SQLSMALLINT message_len = 0;
 
             SQLRETURN diag_rc = SQLGetDiagRec(
                 SQL_HANDLE_DBC,
                 conn_.get_handle(),
                 1,
-                sqlstate,
+                sqlstate.data(),
                 &native_error,
-                message,
-                sizeof(message),
+                message.data(),
+                message.declared_bytes(),
                 &message_len
             );
 
@@ -50,7 +50,8 @@ TestResult ErrorQueueTests::test_single_error() {
                 r.status = TestStatus::PASS;
                 r.actual = "SQLGetDiagRec returned SQL_NO_DATA (no errors present)";
             } else if (SQL_SUCCEEDED(diag_rc)) {
-                std::string state((char*)sqlstate);
+                // D69: bounded to the five characters the spec defines.
+                std::string state = core::sqlstate_string(sqlstate.data());
                 r.status = TestStatus::PASS;
                 r.actual = "SQLGetDiagRec succeeded, SQLSTATE=" + state;
             } else {
@@ -96,26 +97,26 @@ TestResult ErrorQueueTests::test_multiple_errors() {
                 std::vector<std::string> sqlstates;
 
                 for (SQLSMALLINT i = 1; i <= 10; ++i) {
-                    SQLCHAR sqlstate[6] = {0};
+                    core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
                     SQLINTEGER native_error = 0;
-                    SQLCHAR message[512] = {0};
+                    core::GuardedBuffer<SQLCHAR> message(512, 0);  // D62
                     SQLSMALLINT message_len = 0;
 
                     SQLRETURN diag_rc = SQLGetDiagRec(
                         SQL_HANDLE_STMT,
                         stmt.get_handle(),
                         i,
-                        sqlstate,
+                        sqlstate.data(),
                         &native_error,
-                        message,
-                        sizeof(message),
+                        message.data(),
+                        message.declared_bytes(),
                         &message_len
                     );
 
                     if (diag_rc == SQL_NO_DATA) break;
 
                     if (SQL_SUCCEEDED(diag_rc)) {
-                        sqlstates.push_back(core::sqlstate_string(sqlstate));
+                        sqlstates.push_back(core::sqlstate_string(sqlstate.data()));
                     }
                 }
 
@@ -155,14 +156,15 @@ TestResult ErrorQueueTests::test_error_clearing() {
 
             if (!SQL_SUCCEEDED(exec_rc)) {
                 // Verify there's at least one diagnostic
-                SQLCHAR sqlstate[6] = {0};
+                core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
                 SQLINTEGER native_error = 0;
-                SQLCHAR message[512] = {0};
+                core::GuardedBuffer<SQLCHAR> message(512, 0);  // D62
                 SQLSMALLINT message_len = 0;
 
                 SQLRETURN diag_rc = SQLGetDiagRec(
                     SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                    sqlstate, &native_error, message, sizeof(message), &message_len
+                    sqlstate.data(), &native_error, message.data(),
+                    message.declared_bytes(), &message_len
                 );
 
                 bool had_error = SQL_SUCCEEDED(diag_rc);
@@ -179,8 +181,9 @@ TestResult ErrorQueueTests::test_error_clearing() {
                 // something else for a bad statement (37000, 42601, HY090 ...)
                 // had its leftover diagnostic waved through as "info from the
                 // new operation".
-                const std::string initial_state(
-                    reinterpret_cast<char*>(sqlstate));
+                // D69
+                const std::string initial_state =
+                    core::sqlstate_string(sqlstate.data());
 
                 // Step 2: Execute a successful operation (try patterns)
                 bool success = false;
@@ -206,7 +209,8 @@ TestResult ErrorQueueTests::test_error_clearing() {
                 // Step 3: Check that old error diagnostics are cleared
                 diag_rc = SQLGetDiagRec(
                     SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                    sqlstate, &native_error, message, sizeof(message), &message_len
+                    sqlstate.data(), &native_error, message.data(),
+                    message.declared_bytes(), &message_len
                 );
 
                 if (diag_rc == SQL_NO_DATA) {
@@ -220,7 +224,7 @@ TestResult ErrorQueueTests::test_error_clearing() {
                     r.actual = "Error diagnostics cleared after successful operation";
                 } else if (SQL_SUCCEEDED(diag_rc)) {
                     // There might be info/warning from the successful op, check if it's the OLD error
-                    std::string state = core::sqlstate_string(sqlstate);;
+                    std::string state = core::sqlstate_string(sqlstate.data());;
                     if (state == initial_state) {
                         // B10: the same state the forced error produced is
                         // still there, whatever that state was.
@@ -252,19 +256,19 @@ TestResult ErrorQueueTests::test_hierarchy() {
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLGetDiagRec",
         [&](TestResult& r) {
             // Check that we can call SQLGetDiagRec on connection handle
-            SQLCHAR sqlstate[6] = {0};
+            core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
             SQLINTEGER native_error = 0;
-            SQLCHAR message[512] = {0};
+            core::GuardedBuffer<SQLCHAR> message(512, 0);  // D62
             SQLSMALLINT message_len = 0;
 
             SQLRETURN diag_rc = SQLGetDiagRec(
                 SQL_HANDLE_DBC,
                 conn_.get_handle(),
                 1,
-                sqlstate,
+                sqlstate.data(),
                 &native_error,
-                message,
-                sizeof(message),
+                message.data(),
+                message.declared_bytes(),
                 &message_len
             );
 
@@ -305,11 +309,12 @@ TestResult ErrorQueueTests::test_field_extraction() {
                 bool got_number = SQL_SUCCEEDED(diag_rc) && num_records > 0;
 
                 // Extract record fields: SQLSTATE
-                SQLCHAR sqlstate[6] = {0};
+                core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
                 SQLSMALLINT sqlstate_len = 0;
                 diag_rc = SQLGetDiagField(
                     SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                    SQL_DIAG_SQLSTATE, sqlstate, sizeof(sqlstate), &sqlstate_len
+                    SQL_DIAG_SQLSTATE, sqlstate.data(), sqlstate.declared_bytes(),
+                    &sqlstate_len
                 );
                 bool got_sqlstate = SQL_SUCCEEDED(diag_rc);
 
@@ -322,11 +327,12 @@ TestResult ErrorQueueTests::test_field_extraction() {
                 bool got_native = SQL_SUCCEEDED(diag_rc);
 
                 // Extract record fields: MESSAGE_TEXT
-                SQLCHAR msg_text[256] = {0};
+                core::GuardedBuffer<SQLCHAR> msg_text(256, 0);  // D62
                 SQLSMALLINT msg_len = 0;
                 diag_rc = SQLGetDiagField(
                     SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                    SQL_DIAG_MESSAGE_TEXT, msg_text, sizeof(msg_text), &msg_len
+                    SQL_DIAG_MESSAGE_TEXT, msg_text.data(), msg_text.declared_bytes(),
+                    &msg_len
                 );
                 bool got_message = SQL_SUCCEEDED(diag_rc);
 
@@ -341,8 +347,9 @@ TestResult ErrorQueueTests::test_field_extraction() {
                     // into the next thing on the stack - the report carried
                     // `42000X` followed by uninitialised bytes.
                     std::string state_str =
-                        bounded_string(reinterpret_cast<char*>(sqlstate),
-                                       sizeof(sqlstate), sqlstate_len).value;
+                        bounded_string(reinterpret_cast<char*>(sqlstate.data()),
+                                       sqlstate.declared_elements(),
+                                       sqlstate_len).value;
                     r.status = TestStatus::PASS;
                     r.actual = std::to_string(fields_ok) + "/4 diagnostic fields extracted: " +
                                    "records=" + std::to_string(num_records) +
@@ -371,19 +378,19 @@ TestResult ErrorQueueTests::test_iteration() {
             std::vector<std::string> sqlstates;
 
             for (SQLSMALLINT i = 1; i <= 5; ++i) {
-                SQLCHAR sqlstate[6] = {0};
+                core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
                 SQLINTEGER native_error = 0;
-                SQLCHAR message[512] = {0};
+                core::GuardedBuffer<SQLCHAR> message(512, 0);  // D62
                 SQLSMALLINT message_len = 0;
 
                 SQLRETURN diag_rc = SQLGetDiagRec(
                     SQL_HANDLE_DBC,
                     conn_.get_handle(),
                     i,
-                    sqlstate,
+                    sqlstate.data(),
                     &native_error,
-                    message,
-                    sizeof(message),
+                    message.data(),
+                    message.declared_bytes(),
                     &message_len
                 );
 
@@ -391,7 +398,8 @@ TestResult ErrorQueueTests::test_iteration() {
                     // Expected - no more records
                     break;
                 } else if (SQL_SUCCEEDED(diag_rc)) {
-                    std::string state((char*)sqlstate);
+                    // D69
+                    std::string state = core::sqlstate_string(sqlstate.data());
                     sqlstates.push_back(state);
                 } else {
                     // B1: this broke out of the loop and fell into an

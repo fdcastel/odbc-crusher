@@ -201,7 +201,14 @@ bool TestBase::get_data_full(SQLHSTMT hstmt, SQLUSMALLINT col,
     // Deliberately small: a driver that gets the continuation protocol wrong
     // is far more likely to be caught with a buffer that forces several
     // round trips than with one that swallows every realistic value whole.
-    char buf[256];
+    //
+    // D62: guarded, and this is the read every round-trip probe in the tool
+    // makes - verify_rows_persisted comes through here for every value. It was
+    // not even zero-initialised, so a driver manager scanning past the
+    // declared length walked into whatever the stack happened to hold. The
+    // length declared to SQLGetData is unchanged at 256.
+    constexpr size_t kBufCapacity = 256;
+    core::GuardedBuffer<char> buf(kBufCapacity, 0);
 
     // A19: a driver that returns 01004 but restarts the value from byte 0 on
     // every call would keep this loop running forever. That is not
@@ -216,9 +223,12 @@ bool TestBase::get_data_full(SQLHSTMT hstmt, SQLUSMALLINT col,
 
     for (;;) {
         SQLLEN ind = 0;
-        buf[0] = 0;
-        SQLRETURN rc = SQLGetData(hstmt, col, SQL_C_CHAR, buf, sizeof(buf),
-                                  &ind);
+        // D60: clear_declared, not a memset over the whole object - the guard
+        // and its stopper sit past the declared region and a plain clear would
+        // erase them.
+        buf.clear_declared(0);
+        SQLRETURN rc = SQLGetData(hstmt, col, SQL_C_CHAR, buf.data(),
+                                  static_cast<SQLLEN>(kBufCapacity), &ind);
         if (rc == SQL_NO_DATA) {
             // No more data for this column — everything is already in `out`.
             return true;
@@ -236,7 +246,7 @@ bool TestBase::get_data_full(SQLHSTMT hstmt, SQLUSMALLINT col,
         // `ind` is the bytes *still available*, not the bytes written, so it
         // overshoots on truncation and can be SQL_NO_TOTAL. bounded_string
         // already knows how to turn that pair into a safe length — A3.
-        BoundedString piece = bounded_string(buf, sizeof(buf), ind);
+        BoundedString piece = bounded_string(buf.data(), kBufCapacity, ind);
         out += piece.value;
 
         // Continue only on the truncation shape: SQL_SUCCESS_WITH_INFO with

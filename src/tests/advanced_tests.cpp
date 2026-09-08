@@ -466,13 +466,14 @@ TestResult AdvancedTests::test_fetch_scroll_first_last() {
                     success = true;
                     break;
                 } else if (rc == SQL_ERROR) {
-                    SQLCHAR sqlstate[6] = {0};
+                    core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
                     SQLINTEGER native = 0;
-                    SQLCHAR msg[256] = {0};
+                    core::GuardedBuffer<SQLCHAR> msg(256, 0);  // D62
                     SQLSMALLINT msg_len = 0;
                     SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                                 sqlstate, &native, msg, sizeof(msg), &msg_len);
-                    std::string state = core::sqlstate_string(sqlstate);;
+                                 sqlstate.data(), &native, msg.data(),
+                                 msg.declared_bytes(), &msg_len);
+                    std::string state = core::sqlstate_string(sqlstate.data());
 
                     // B1: any SQL_ERROR was reported as "not supported",
                     // whatever the state said - the probe read the SQLSTATE

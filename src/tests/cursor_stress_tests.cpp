@@ -397,14 +397,18 @@ TestResult CursorStressTests::test_handle_reuse_no_leak() {
             const auto count_diag_records = [&]() {
                 int rec = 0;
                 for (SQLSMALLINT j = 1; j <= 32; ++j) {
-                    char state[6] = {0};
+                    // D62: guarded; the declared lengths are unchanged.
+                    constexpr size_t kStateCapacity = 6;
+                    constexpr size_t kMsgCapacity = 128;
+                    core::GuardedBuffer<SQLCHAR> state(kStateCapacity, 0);
                     SQLINTEGER native = 0;
-                    SQLCHAR msg[128] = {0};
+                    core::GuardedBuffer<SQLCHAR> msg(kMsgCapacity, 0);
                     SQLSMALLINT msg_len = 0;
                     SQLRETURN dr = SQLGetDiagRec(SQL_HANDLE_STMT,
                         stmt.get_handle(), j,
-                        reinterpret_cast<SQLCHAR*>(state),
-                        &native, msg, sizeof(msg), &msg_len);
+                        state.data(),
+                        &native, msg.data(),
+                        static_cast<SQLSMALLINT>(kMsgCapacity), &msg_len);
                     if (dr == SQL_NO_DATA || !SQL_SUCCEEDED(dr)) break;
                     ++rec;
                 }

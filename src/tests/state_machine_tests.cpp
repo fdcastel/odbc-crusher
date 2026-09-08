@@ -84,15 +84,16 @@ TestResult StateMachineTests::test_invalid_operation() {
 
             if (rc == SQL_ERROR) {
                 // Check SQLSTATE
-                SQLCHAR sqlstate[6] = {0};
+                core::GuardedBuffer<SQLCHAR> sqlstate(6, 0);  // D62
                 SQLINTEGER native_error = 0;
-                SQLCHAR message[512] = {0};
+                core::GuardedBuffer<SQLCHAR> message(512, 0);  // D62
                 SQLSMALLINT msg_len = 0;
 
                 SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                             sqlstate, &native_error, message, sizeof(message), &msg_len);
+                             sqlstate.data(), &native_error, message.data(),
+                             message.declared_bytes(), &msg_len);
 
-                std::string state = core::sqlstate_string(sqlstate);;
+                std::string state = core::sqlstate_string(sqlstate.data());
 
                 if (state == "HY010") {
                     // A23: driver-manager enforced. Both the Windows DM and unixODBC

@@ -59,20 +59,20 @@ std::optional<SQLUINTEGER> EscapeSequenceTests::get_info_uint(SQLUSMALLINT info_
 }
 
 std::optional<std::string> EscapeSequenceTests::call_native_sql(const std::string& sql) {
-    SQLCHAR out[4096] = {0};
+    core::GuardedBuffer<SQLCHAR> out(4096, 0);  // D62
     SQLINTEGER out_len = 0;
     SQLRETURN ret = SQLNativeSql(
         conn_.get_handle(),
         const_cast<SQLCHAR*>(reinterpret_cast<const SQLCHAR*>(sql.c_str())),
         static_cast<SQLINTEGER>(sql.length()),
-        out, sizeof(out), &out_len);
+        out.data(), out.declared_bytes(), &out_len);
     if (SQL_SUCCEEDED(ret)) {
         // A3: out_len is the *total available* length, not the amount written,
         // and SQL_SUCCEEDED accepts the 01004 that accompanies truncation — so
         // std::string(out, out_len) read past the end of this stack buffer.
         // SQL_NO_TOTAL (-4) was worse: as a size_t it is SIZE_MAX - 3.
-        return bounded_string(reinterpret_cast<const char*>(out), sizeof(out),
-                              out_len).value;
+        return bounded_string(reinterpret_cast<const char*>(out.data()),
+                              out.declared_elements(), out_len).value;
     }
     return std::nullopt;
 }
@@ -105,9 +105,9 @@ EscapeSequenceTests::ScalarResult EscapeSequenceTests::exec_scalar_ex(
             return out;
         }
 
-        SQLCHAR buf[1024] = {0};
+        core::GuardedBuffer<SQLCHAR> buf(1024, 0);  // D62
         SQLLEN ind = 0;
-        ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR, buf, sizeof(buf), &ind);
+        ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR, buf.data(), buf.declared_bytes(), &ind);
         if (!SQL_SUCCEEDED(ret)) {
             out.sqlstate = first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle());
             out.message = "SQLGetData returned " + std::to_string(ret);
@@ -121,11 +121,12 @@ EscapeSequenceTests::ScalarResult EscapeSequenceTests::exec_scalar_ex(
         // A3: `ind` is the total available length, not the amount written, so
         // an over-long value would index off the end of this buffer.
         const auto bounded =
-            bounded_string(reinterpret_cast<const char*>(buf), sizeof(buf), ind);
+            bounded_string(reinterpret_cast<const char*>(buf.data()),
+                           buf.declared_elements(), ind);
         out.truncated = bounded.truncated;
         if (bounded.truncated) {
             // A4: truncation is now a reportable outcome rather than silence.
-            out.message = "value truncated at " + std::to_string(sizeof(buf) - 1) +
+            out.message = "value truncated at " + std::to_string(buf.declared_elements() - 1) +
                           " bytes; driver reported " + std::to_string(ind);
             return out;
         }
@@ -1113,14 +1114,14 @@ std::string find_named_procedure(core::OdbcConnection& conn,
                                  SQL_NTS);
     if (!SQL_SUCCEEDED(rc)) return {};
     while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
-        char buf[128] = {0};
+        core::GuardedBuffer<char> buf(128, 0);  // D62
         SQLLEN ind = 0;
         if (SQL_SUCCEEDED(SQLGetData(stmt.get_handle(), 3, SQL_C_CHAR,
-                                      buf, sizeof(buf), &ind)) &&
+                                      buf.data(), buf.declared_bytes(), &ind)) &&
             ind != SQL_NULL_DATA) {
             // D68: `ind`, not a terminator. This name is reported back to the
             // user as the procedure that was found.
-            return core::bounded_string(buf, sizeof(buf), ind).value;
+            return core::bounded_string(buf.data(), buf.declared_elements(), ind).value;
         }
     }
     return {};
@@ -1166,11 +1167,11 @@ CallProbeOutcome run_mock_inout_call(core::OdbcConnection& conn,
     SQLLEN     in_n_ind  = 0;
     out.out_int     = static_cast<SQLINTEGER>(0xDEADBEEFu);  // sentinel
     out.out_int_ind = sizeof(SQLINTEGER);
-    char inout_buf[64] = {0};
+    core::GuardedBuffer<char> inout_buf(64, 0);  // D62
     const std::string initial(inout_initial);
-    const size_t copy_len = std::min<size_t>(sizeof(inout_buf) - 1, initial.size());
-    std::memcpy(inout_buf, initial.data(), copy_len);
-    inout_buf[copy_len] = '\0';
+    const size_t copy_len = std::min<size_t>(inout_buf.declared_elements() - 1, initial.size());
+    std::memcpy(inout_buf.data(), initial.data(), copy_len);
+    inout_buf.data()[copy_len] = '\0';
     out.inout_ind = static_cast<SQLLEN>(copy_len);
 
     rc = SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
@@ -1188,8 +1189,8 @@ CallProbeOutcome run_mock_inout_call(core::OdbcConnection& conn,
         return out;
     }
     rc = SQLBindParameter(stmt.get_handle(), 3, SQL_PARAM_INPUT_OUTPUT,
-                          SQL_C_CHAR, SQL_VARCHAR, sizeof(inout_buf) - 1, 0,
-                          inout_buf, sizeof(inout_buf), &out.inout_ind);
+                          SQL_C_CHAR, SQL_VARCHAR, inout_buf.declared_elements() - 1, 0,
+                          inout_buf.data(), inout_buf.declared_bytes(), &out.inout_ind);
     if (!SQL_SUCCEEDED(rc)) {
         out.error = "SQLBindParameter(3, INOUT) returned " + std::to_string(rc);
         return out;
@@ -1222,7 +1223,7 @@ CallProbeOutcome run_mock_inout_call(core::OdbcConnection& conn,
     // FAILed for not matching the procedure's UPPER contract - with
     // `indicator=5` printed in the same sentence.
     out.inout_text =
-        core::bounded_string(inout_buf, sizeof(inout_buf), out.inout_ind).value;
+        core::bounded_string(inout_buf.data(), inout_buf.declared_elements(), out.inout_ind).value;
     return out;
 }
 

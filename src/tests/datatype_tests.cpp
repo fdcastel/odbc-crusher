@@ -221,19 +221,19 @@ TestResult DataTypeTests::test_string_types() {
                 return;
             }
 
-            SQLCHAR buffer[256] = {0};
+            core::GuardedBuffer<SQLCHAR> buffer(256, 0);  // D62
             SQLLEN indicator = 0;
 
             SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                       buffer, sizeof(buffer), &indicator);
+                                       buffer.data(), buffer.declared_bytes(), &indicator);
 
             if (SQL_SUCCEEDED(ret)) {
                 // D68: to `indicator`, not to a terminator. Under
                 // BufferValidation=Lenient this reported the value with the
                 // mock's filler byte glued on - `Hello, ODBC!X`.
                 std::string value =
-                    bounded_string(reinterpret_cast<char*>(buffer),
-                                   sizeof(buffer), indicator).value;
+                    bounded_string(reinterpret_cast<char*>(buffer.data()),
+                                   buffer.declared_elements(), indicator).value;
                 // Trim trailing spaces
                 size_t end = value.find_last_not_of(" \t\n\r");
                 if (end != std::string::npos) {
@@ -417,10 +417,10 @@ TestResult DataTypeTests::test_unicode_types() {
 
             // Pass 1: the wide path.
             {
-                SQLWCHAR wstr_buffer[256] = {0};
+                core::GuardedBuffer<SQLWCHAR> wstr_buffer(256, 0);  // D62
                 SQLLEN indicator = 0;
                 SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_WCHAR,
-                                           wstr_buffer, sizeof(wstr_buffer), &indicator);
+                                           wstr_buffer.data(), wstr_buffer.declared_bytes(), &indicator);
                 if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
                     r.actual = "Successfully retrieved wide character string (SQL_C_WCHAR)";
                     return;
@@ -440,16 +440,16 @@ TestResult DataTypeTests::test_unicode_types() {
                 first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "no SQLSTATE");
             stmt.execute(attempt.query);
             if (stmt.fetch()) {
-                char str_buffer[256] = {0};
+                core::GuardedBuffer<char> str_buffer(256, 0);  // D62
                 SQLLEN indicator = 0;
                 SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                           str_buffer, sizeof(str_buffer), &indicator);
+                                           str_buffer.data(), str_buffer.declared_bytes(), &indicator);
                 // `indicator > 0` already excludes both SQL_NULL_DATA (-1)
                 // and SQL_NO_TOTAL (-4), so explicit comparisons are redundant.
                 if (SQL_SUCCEEDED(ret) && indicator > 0) {
                     r.actual = std::string("SQL_C_WCHAR unavailable (") + wchar_state +
                                "); retrieved as SQL_C_CHAR: '" +
-                               bounded_string(str_buffer, sizeof(str_buffer),
+                               bounded_string(str_buffer.data(), str_buffer.declared_elements(),
                                               indicator).value + "'";
                     r.status = TestStatus::SKIP_UNSUPPORTED;
                     r.suggestion = "Driver does not support SQL_C_WCHAR retrieval; "
@@ -508,10 +508,10 @@ TestResult DataTypeTests::test_binary_types() {
                 return;
             }
 
-            unsigned char bin_buffer[256] = {0};
+            core::GuardedBuffer<unsigned char> bin_buffer(256, 0);  // D62
             SQLLEN indicator = 0;
             SQLRETURN ret = SQLGetData(stmt.get_handle(), 1, SQL_C_BINARY,
-                                       bin_buffer, sizeof(bin_buffer), &indicator);
+                                       bin_buffer.data(), bin_buffer.declared_bytes(), &indicator);
 
             if (SQL_SUCCEEDED(ret) && indicator != SQL_NULL_DATA) {
                 std::ostringstream oss;
@@ -585,10 +585,10 @@ TestResult DataTypeTests::test_guid_type() {
             // behaviour and would conflate two driver features.
             stmt.execute(attempt.query);
             if (stmt.fetch()) {
-                char str_buffer[64] = {0};
+                core::GuardedBuffer<char> str_buffer(64, 0);  // D62
                 SQLLEN str_ind = 0;
                 ret = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                 str_buffer, sizeof(str_buffer), &str_ind);
+                                 str_buffer.data(), str_buffer.declared_bytes(), &str_ind);
                 if (SQL_SUCCEEDED(ret) && str_ind > 30) {  // GUIDs are 36+ chars
                     r.actual = std::string("SQL_C_GUID unavailable (") + guid_state +
                                "); retrieved as string";

@@ -45,16 +45,20 @@ TestResult DiagnosticDepthTests::test_diagfield_sqlstate() {
             }
 
             // Now use SQLGetDiagField to get SQLSTATE
-            SQLWCHAR sqlstate[6] = {0};
+            // D62: guarded. The declared length stays sizeof(SQLWCHAR)*6,
+            // which is what SQLGetDiagFieldW takes - bytes, not units.
+            constexpr size_t kSqlstateUnits = 6;
+            core::GuardedBuffer<SQLWCHAR> sqlstate(kSqlstateUnits, 0);
             SQLSMALLINT len = 0;
             SQLRETURN diag_ret = SQLGetDiagFieldW(SQL_HANDLE_STMT, stmt.get_handle(),
-                1, SQL_DIAG_SQLSTATE, sqlstate, sizeof(sqlstate), &len);
+                1, SQL_DIAG_SQLSTATE, sqlstate.data(),
+                sqlstate.declared_bytes(), &len);
 
             if (SQL_SUCCEEDED(diag_ret)) {
                 // Verify it's a 5-char SQLSTATE
                 // Count SQLWCHAR chars
                 int char_count = 0;
-                for (int i = 0; i < 5 && sqlstate[i] != 0; i++) char_count++;
+                for (int i = 0; i < 5 && sqlstate.data()[i] != 0; i++) char_count++;
 
                 std::ostringstream actual;
                 actual << "SQLSTATE has " << char_count << " chars";
@@ -437,14 +441,21 @@ TestResult DiagnosticDepthTests::test_multiple_diagnostic_records() {
             // Iterate all diagnostic records
             int rec_count = 0;
             for (SQLSMALLINT i = 1; i <= 10; i++) {
-                SQLWCHAR sqlstate[6] = {0};
+                // D62: guarded. SQLGetDiagRecW counts its BufferLength in
+                // characters, not bytes, so the declared length here stays the
+                // unit count - unlike SQLGetDiagFieldW above, which takes
+                // bytes. The two conventions sitting four lines apart is why
+                // this is worth stating rather than reading off a sizeof.
+                constexpr size_t kSqlstateUnits = 6;
+                constexpr size_t kMessageUnits = 512;
+                core::GuardedBuffer<SQLWCHAR> sqlstate(kSqlstateUnits, 0);
                 SQLINTEGER native_error = 0;
-                SQLWCHAR message[512] = {0};
+                core::GuardedBuffer<SQLWCHAR> message(kMessageUnits, 0);
                 SQLSMALLINT msg_len = 0;
 
                 SQLRETURN diag_ret = SQLGetDiagRecW(SQL_HANDLE_STMT, stmt.get_handle(),
-                    i, sqlstate, &native_error, message,
-                    sizeof(message)/sizeof(SQLWCHAR), &msg_len);
+                    i, sqlstate.data(), &native_error, message.data(),
+                    static_cast<SQLSMALLINT>(kMessageUnits), &msg_len);
 
                 if (diag_ret == SQL_NO_DATA) break;
                 if (SQL_SUCCEEDED(diag_ret)) rec_count++;

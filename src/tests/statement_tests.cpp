@@ -304,14 +304,14 @@ TestResult StatementTests::test_column_metadata() {
 
                 if (SQL_SUCCEEDED(ret) && num_cols > 0) {
                     // Get column info
-                    SQLCHAR col_name[256];
+                    core::GuardedBuffer<SQLCHAR> col_name(256, 0);  // D62
                     SQLSMALLINT name_len = 0;
                     SQLSMALLINT data_type = 0;
                     SQLULEN column_size = 0;
                     SQLSMALLINT decimal_digits = 0;
                     SQLSMALLINT nullable = 0;
 
-                    ret = SQLDescribeCol(stmt.get_handle(), 1, col_name, sizeof(col_name),
+                    ret = SQLDescribeCol(stmt.get_handle(), 1, col_name.data(), col_name.declared_bytes(),
                                         &name_len, &data_type, &column_size, &decimal_digits, &nullable);
 
                     if (SQL_SUCCEEDED(ret)) {
@@ -541,7 +541,7 @@ TestResult StatementTests::test_bind_col_string() {
             // so a `break` left the statement handle holding a binding to a
             // dead stack slot until the OdbcStatement destructor ran — and
             // destruction order made hoisting them below `stmt` no better.
-            SQLCHAR value[256] = {0};
+            core::GuardedBuffer<SQLCHAR> value(256, 0);  // D62
             SQLLEN indicator = 0;
             core::OdbcStatement stmt(conn_);
 
@@ -559,13 +559,13 @@ TestResult StatementTests::test_bind_col_string() {
                 // loop over dialect variants.
 
                 SQLRETURN rc = SQLBindCol(stmt.get_handle(), 1, SQL_C_CHAR,
-                                         value, sizeof(value), &indicator);
+                                         value.data(), value.declared_bytes(), &indicator);
 
                 if (SQL_SUCCEEDED(rc) && stmt.fetch()) {
                     // D68: `indicator` is what SQLBindCol was given; use it.
                     std::string fetched =
-                        bounded_string(reinterpret_cast<char*>(value),
-                                       sizeof(value), indicator).value;
+                        bounded_string(reinterpret_cast<char*>(value.data()),
+                                       value.declared_elements(), indicator).value;
                     r.status = TestStatus::PASS;
                     r.actual = "Bound string column, fetched '" + fetched + "'";
                     success = true;
@@ -905,13 +905,13 @@ TestResult StatementTests::test_native_sql() {
         Severity::INFO, ConformanceLevel::CORE, "ODBC 3.8 SQLNativeSql",
         [&](TestResult& r) {
             SQLCHAR input[] = "SELECT 1";
-            SQLCHAR output[512] = {0};
+            core::GuardedBuffer<SQLCHAR> output(512, 0);  // D62
             SQLINTEGER output_len = 0;
 
             SQLRETURN rc = SQLNativeSql(
                 conn_.get_handle(),
                 input, SQL_NTS,
-                output, sizeof(output), &output_len
+                output.data(), output.declared_bytes(), &output_len
             );
 
             if (SQL_SUCCEEDED(rc)) {
@@ -920,8 +920,8 @@ TestResult StatementTests::test_native_sql() {
                 // `'SELECT 1' -> 'SELECT 1X'` against a driver whose
                 // translation was correct.
                 std::string native_sql =
-                    bounded_string(reinterpret_cast<char*>(output),
-                                   sizeof(output), output_len).value;
+                    bounded_string(reinterpret_cast<char*>(output.data()),
+                                   output.declared_elements(), output_len).value;
                 r.status = TestStatus::PASS;
                 r.actual = "SQLNativeSql: '" + std::string(reinterpret_cast<char*>(input)) +
                                "' -> '" + native_sql + "'";

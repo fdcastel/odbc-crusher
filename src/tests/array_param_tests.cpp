@@ -1155,27 +1155,27 @@ TestResult ArrayParamTests::test_paramset_size_unsupported_returns_error() {
             std::string sqlstate;
             std::string msg_text;
             for (SQLSMALLINT i = 1; i <= 16; ++i) {
-                char state[6] = {0};
+                core::GuardedBuffer<char> state(6, 0);  // D62
                 SQLINTEGER native = 0;
-                SQLCHAR msg[256] = {0};
+                core::GuardedBuffer<SQLCHAR> msg(256, 0);  // D62
                 SQLSMALLINT msg_len = 0;
                 SQLRETURN dr = SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(),
                                              i,
-                                             reinterpret_cast<SQLCHAR*>(state),
-                                             &native, msg, sizeof(msg), &msg_len);
+                                             reinterpret_cast<SQLCHAR*>(state.data()),
+                                             &native, msg.data(), msg.declared_bytes(), &msg_len);
                 if (dr == SQL_NO_DATA || !SQL_SUCCEEDED(dr)) break;
                 // D68: the message to `msg_len`. The SQLSTATE beside it has
                 // no length parameter at all in SQLGetDiagRec's signature, so
                 // it is a different problem - D69.
                 if (sqlstate.empty()) {
-                    sqlstate = core::sqlstate_string(state);
+                    sqlstate = core::sqlstate_string(state.data());
                     msg_text = core::bounded_string(
-                        reinterpret_cast<char*>(msg), sizeof(msg), msg_len).value;
+                        reinterpret_cast<char*>(msg.data()), msg.declared_elements(), msg_len).value;
                 }
-                if (core::sqlstate_string(state) == "HYC00") {
+                if (core::sqlstate_string(state.data()) == "HYC00") {
                     sqlstate = "HYC00";
                     msg_text = core::bounded_string(
-                        reinterpret_cast<char*>(msg), sizeof(msg), msg_len).value;
+                        reinterpret_cast<char*>(msg.data()), msg.declared_elements(), msg_len).value;
                     break;
                 }
             }

@@ -115,14 +115,14 @@ TestResult DataTypeEdgeCaseTests::run_null_edge_case(const void* row) {
                 // buffer is left uninitialised exactly as test_null_varchar
                 // had it - nothing reads it unless SQLGetData succeeded.
                 SQLINTEGER ivalue = 42;
-                char buffer[256];
+                core::GuardedBuffer<char> buffer(256, 0);  // D62
                 SQLLEN indicator = 0;
                 SQLRETURN rc =
                     (tc.c_type == SQL_C_SLONG)
                         ? SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
                                      &ivalue, sizeof(ivalue), &indicator)
                         : SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                     buffer, sizeof(buffer), &indicator);
+                                     buffer.data(), buffer.declared_bytes(), &indicator);
                 if (SQL_SUCCEEDED(rc)) {
                     if (indicator == SQL_NULL_DATA) {
                         r.status = TestStatus::PASS;
@@ -223,10 +223,10 @@ TestResult DataTypeEdgeCaseTests::test_varchar_empty() {
                 // "stop here", which is what it meant when this was a
                 // loop over dialect variants.
                 if (stmt.fetch()) {
-                    char buffer[256] = {0};
+                    core::GuardedBuffer<char> buffer(256, 0);  // D62
                     SQLLEN indicator = 0;
                     SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                             buffer, sizeof(buffer), &indicator);
+                                             buffer.data(), buffer.declared_bytes(), &indicator);
 
                     if (SQL_SUCCEEDED(rc)) {
                         // A21: this used to accept SQL_NULL_DATA as an
@@ -245,7 +245,7 @@ TestResult DataTypeEdgeCaseTests::test_varchar_empty() {
                                 "A driver conflating them corrupts every "
                                 "nullable character column.";
                         } else if (indicator == 0) {
-                            // D68: this used to require `buffer[0] == '\0'`
+                            // D68: this used to require `buffer.data()[0] == '\0'`
                             // as well, and read the buffer as a C string when
                             // it did not. The driver has said the value is
                             // zero bytes long; whether it also wrote a
@@ -258,7 +258,7 @@ TestResult DataTypeEdgeCaseTests::test_varchar_empty() {
                         } else {
                             r.status = TestStatus::FAIL;
                             r.actual = "Expected empty string, got '" +
-                                       bounded_string(buffer, sizeof(buffer),
+                                       bounded_string(buffer.data(), buffer.declared_elements(),
                                                       indicator).value +
                                        "' (indicator=" +
                                        std::to_string(indicator) + ")";
@@ -310,16 +310,16 @@ TestResult DataTypeEdgeCaseTests::test_varchar_special_chars() {
                 // "stop here", which is what it meant when this was a
                 // loop over dialect variants.
                 if (stmt.fetch()) {
-                    char buffer[256] = {0};
+                    core::GuardedBuffer<char> buffer(256, 0);  // D62
                     SQLLEN indicator = 0;
                     SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                             buffer, sizeof(buffer), &indicator);
+                                             buffer.data(), buffer.declared_bytes(), &indicator);
 
                     if (SQL_SUCCEEDED(rc)) {
                         // A21: the value was retrieved and never
                         // compared, so the probe passed whatever came
                         // back — including nothing at all.
-                        const auto got = bounded_string(buffer, sizeof(buffer),
+                        const auto got = bounded_string(buffer.data(), buffer.declared_elements(),
                                                         indicator);
                         if (got.value == expected) {
                             r.status = TestStatus::PASS;
@@ -371,17 +371,17 @@ TestResult DataTypeEdgeCaseTests::test_integer_as_string() {
                 // "stop here", which is what it meant when this was a
                 // loop over dialect variants.
                 if (stmt.fetch()) {
-                    char buffer[256] = {0};
+                    core::GuardedBuffer<char> buffer(256, 0);  // D62
                     SQLLEN indicator = 0;
 
                     // Retrieve integer as SQL_C_CHAR
                     SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                             buffer, sizeof(buffer), &indicator);
+                                             buffer.data(), buffer.declared_bytes(), &indicator);
 
                     if (SQL_SUCCEEDED(rc)) {
                         // D68: to the reported length, not to a terminator.
                         std::string val =
-                            bounded_string(buffer, sizeof(buffer),
+                            bounded_string(buffer.data(), buffer.declared_elements(),
                                            indicator).value;
                         // The string should contain "42" (possibly with whitespace)
                         if (val.find("42") != std::string::npos) {
@@ -576,10 +576,10 @@ TestResult DataTypeEdgeCaseTests::test_varchar_raw_byte_integrity() {
                 return;
             }
 
-            unsigned char raw[64] = {0};
+            core::GuardedBuffer<unsigned char> raw(64, 0);  // D62
             SQLLEN ind = 0;
             SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_BINARY,
-                                      raw, sizeof(raw), &ind);
+                                      raw.data(), raw.declared_bytes(), &ind);
             if (!SQL_SUCCEEDED(rc)) {
                 // B3
                 report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
@@ -593,7 +593,7 @@ TestResult DataTypeEdgeCaseTests::test_varchar_raw_byte_integrity() {
             for (size_t i = 0; i < to_dump; ++i) {
                 if (i > 0) actual << ' ';
                 actual << std::setfill('0') << std::setw(2) << std::hex
-                       << static_cast<int>(raw[i]);
+                       << static_cast<int>(raw.data()[i]);
             }
             actual << std::dec << std::setfill(' ');
             actual << " (informational; engines with inline length prefixes "

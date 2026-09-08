@@ -270,19 +270,33 @@ TestResult CursorBehaviorTests::test_getdata_same_column_twice() {
 
             // Get column 1 (typically an integer) twice
             SQLLEN cb_val1 = 0, cb_val2 = 0;
-            char buf1[64] = {0}, buf2[64] = {0};
+            // D62: two buffers in one declaration - the enumeration
+            // reported this line as a single buffer, so it is worth
+            // saying that both are guarded.
+            core::GuardedBuffer<char> buf1(64, 0);
+            core::GuardedBuffer<char> buf2(64, 0);
 
             SQLRETURN ret1 = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                         buf1, sizeof(buf1), &cb_val1);
+                                         buf1.data(), buf1.declared_bytes(), &cb_val1);
             SQLRETURN ret2 = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                         buf2, sizeof(buf2), &cb_val2);
+                                         buf2.data(), buf2.declared_bytes(), &cb_val2);
 
             std::ostringstream actual;
             actual << "First read: ret=" << ret1 << ", Second read: ret=" << ret2;
             if (SQL_SUCCEEDED(ret1)) {
-                actual << " (val1='" << buf1 << "'";
+                // D68: streaming the buffer read to its terminator; the
+                // indicators say where each value ends. Found by D62 guarding
+                // the buffers - `<< buf1` on a GuardedBuffer does not compile,
+                // and on a bare array it silently read to the first zero.
+                actual << " (val1='"
+                       << core::bounded_string(buf1.data(),
+                                               buf1.declared_elements(),
+                                               cb_val1).value << "'";
                 if (SQL_SUCCEEDED(ret2)) {
-                    actual << ", val2='" << buf2 << "'";
+                    actual << ", val2='"
+                           << core::bounded_string(buf2.data(),
+                                                   buf2.declared_elements(),
+                                                   cb_val2).value << "'";
                 }
                 actual << ")";
             }

@@ -157,15 +157,19 @@ TestResult UnicodeTests::test_describecol_wchar_names() {
             std::ostringstream details;
 
             for (SQLUSMALLINT i = 1; i <= static_cast<SQLUSMALLINT>(num_cols) && i <= 5; i++) {
-                SQLWCHAR col_name[128] = {0};
+                core::GuardedBuffer<SQLWCHAR> col_name(128, 0);  // D62
                 SQLSMALLINT name_len = 0;
                 SQLSMALLINT data_type = 0;
                 SQLULEN col_size = 0;
                 SQLSMALLINT decimal_digits = 0;
                 SQLSMALLINT nullable = 0;
 
+                // D62: SQLDescribeColW's BufferLength is in CHARACTERS,
+                // not bytes - declared_elements(), not declared_bytes().
                 ret = SQLDescribeColW(stmt.get_handle(), i,
-                    col_name, sizeof(col_name)/sizeof(SQLWCHAR), &name_len,
+                    col_name.data(),
+                    static_cast<SQLSMALLINT>(col_name.declared_elements()),
+                    &name_len,
                     &data_type, &col_size, &decimal_digits, &nullable);
 
                 if (SQL_SUCCEEDED(ret) && name_len > 0) {
@@ -234,10 +238,10 @@ TestResult UnicodeTests::test_getdata_sql_c_wchar() {
 
             // Try to get a string column as SQL_C_WCHAR
             // Column 1 — first column of the result set
-            SQLWCHAR wbuf[256] = {0};
+            core::GuardedBuffer<SQLWCHAR> wbuf(256, 0);  // D62
             SQLLEN cb_value = 0;
             ret = SQLGetData(stmt.get_handle(), 1, SQL_C_WCHAR,
-                             wbuf, sizeof(wbuf), &cb_value);
+                             wbuf.data(), wbuf.declared_bytes(), &cb_value);
 
             if (SQL_SUCCEEDED(ret)) {
                 // cb_value should be in bytes for SQL_C_WCHAR
@@ -290,14 +294,14 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
                 // information_schema views are dynamically-defined in many databases
                 // (e.g. PostgreSQL) and SQLColumns cannot enumerate their columns.
                 while (SQL_SUCCEEDED(SQLFetch(tbl_stmt.get_handle()))) {
-                    char cat_buf[128] = {0};
-                    char sch_buf[128] = {0};
-                    char name_buf[128] = {0};
+                    core::GuardedBuffer<char> cat_buf(128, 0);  // D62
+                    core::GuardedBuffer<char> sch_buf(128, 0);  // D62
+                    core::GuardedBuffer<char> name_buf(128, 0);  // D62
                     SQLLEN cat_ind = 0, sch_ind = 0, name_ind = 0;
 
-                    SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf, sizeof(cat_buf), &cat_ind);
-                    SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf, sizeof(sch_buf), &sch_ind);
-                    SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf, sizeof(name_buf), &name_ind);
+                    SQLGetData(tbl_stmt.get_handle(), 1, SQL_C_CHAR, cat_buf.data(), cat_buf.declared_bytes(), &cat_ind);
+                    SQLGetData(tbl_stmt.get_handle(), 2, SQL_C_CHAR, sch_buf.data(), sch_buf.declared_bytes(), &sch_ind);
+                    SQLGetData(tbl_stmt.get_handle(), 3, SQL_C_CHAR, name_buf.data(), name_buf.declared_bytes(), &name_ind);
 
                     if (name_ind <= 0) continue;
 
@@ -310,12 +314,12 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
                     // was there.
                     std::string candidate_schema =
                         (sch_ind > 0)
-                            ? core::bounded_string(sch_buf, sizeof(sch_buf),
+                            ? core::bounded_string(sch_buf.data(), sch_buf.declared_elements(),
                                                    sch_ind).value
                             : "";
                     std::string candidate_catalog =
                         (cat_ind > 0)
-                            ? core::bounded_string(cat_buf, sizeof(cat_buf),
+                            ? core::bounded_string(cat_buf.data(), cat_buf.declared_elements(),
                                                    cat_ind).value
                             : "";
                     if (candidate_schema == "information_schema" || candidate_catalog == "information_schema") {
@@ -324,8 +328,8 @@ TestResult UnicodeTests::test_columns_unicode_patterns() {
 
                     table_catalog = candidate_catalog;
                     table_schema = candidate_schema;
-                    table_name = core::bounded_string(name_buf,
-                                                      sizeof(name_buf),
+                    table_name = core::bounded_string(name_buf.data(),
+                                                      name_buf.declared_elements(),
                                                       name_ind).value;
                     return true;
                 }
@@ -649,10 +653,10 @@ TestResult UnicodeTests::test_wchar_roundtrip_non_ascii() {
                 r.actual = "SQLFetch failed";
                 return;
             }
-            SQLWCHAR out[128] = {0};
+            core::GuardedBuffer<SQLWCHAR> out(128, 0);  // D62
             SQLLEN ind = 0;
             rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
-                            out, sizeof(out), &ind);
+                            out.data(), out.declared_bytes(), &ind);
             if (!SQL_SUCCEEDED(rc)) {
                 // B3
                 report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
@@ -665,13 +669,13 @@ TestResult UnicodeTests::test_wchar_roundtrip_non_ascii() {
             // reported one extra U+0058 and FAILed a correct round-trip with
             // "driver appears to re-encode through a narrow codepage".
             const size_t out_chars = core::bounded_wchar_units(
-                out, sizeof(out) / sizeof(out[0]), ind);
+                out.data(), out.declared_bytes() / sizeof(out.data()[0]), ind);
             if (out_chars != expected_chars ||
-                std::memcmp(out, input.data(),
+                std::memcmp(out.data(), input.data(),
                             expected_chars * sizeof(SQLWCHAR)) != 0) {
                 r.status = TestStatus::FAIL;
                 r.actual = "expected [" + wchars_to_hex(input.data(), expected_chars)
-                         + "] got [" + wchars_to_hex(out, out_chars) + "]";
+                         + "] got [" + wchars_to_hex(out.data(), out_chars) + "]";
                 r.suggestion = "Driver appears to re-encode through a narrow "
                                "codepage. SQL_C_WCHAR data must preserve every "
                                "codepoint regardless of system locale.";
@@ -718,10 +722,10 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
                 r.actual = "SQLFetch failed";
                 return;
             }
-            SQLWCHAR out[8] = {0};
+            core::GuardedBuffer<SQLWCHAR> out(8, 0);  // D62
             SQLLEN ind = 0;
             rc = SQLGetData(sel.get_handle(), 1, SQL_C_WCHAR,
-                            out, sizeof(out), &ind);
+                            out.data(), out.declared_bytes(), &ind);
             if (!SQL_SUCCEEDED(rc)) {
                 // B3
                 report_failure(r, SQL_HANDLE_STMT, sel.get_handle(),
@@ -730,13 +734,13 @@ TestResult UnicodeTests::test_wchar_surrogate_pair_preserved() {
             }
             // D68: see test_wchar_roundtrip_non_ascii.
             const size_t out_chars = core::bounded_wchar_units(
-                out, sizeof(out) / sizeof(out[0]), ind);
+                out.data(), out.declared_bytes() / sizeof(out.data()[0]), ind);
             const auto want = expected_emoji_units();
             if (out_chars != want.size() ||
-                !std::equal(want.begin(), want.end(), out)) {
+                !std::equal(want.begin(), want.end(), out.data())) {
                 r.status = TestStatus::FAIL;
                 r.actual = "expected " + expected_emoji_description() + " got ["
-                         + wchars_to_hex(out, out_chars) + "]";
+                         + wchars_to_hex(out.data(), out_chars) + "]";
                 r.suggestion = "Driver dropped or normalized the supplementary "
                                "codepoint. SQL_C_WCHAR must preserve every "
                                "codepoint in the platform's UTF-16 or UTF-32 "

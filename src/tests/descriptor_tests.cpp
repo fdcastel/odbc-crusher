@@ -269,13 +269,13 @@ TestResult DescriptorTests::test_auto_populate_after_exec() {
 
                 if (SQL_SUCCEEDED(rc) && num_cols > 0) {
                     // Also verify column description works (reads from IRD)
-                    SQLCHAR col_name[128];
+                    core::GuardedBuffer<SQLCHAR> col_name(128, 0);  // D62
                     SQLSMALLINT name_len = 0, data_type = 0, nullable = 0;
                     SQLULEN col_size = 0;
                     SQLSMALLINT dec_digits = 0;
 
                     rc = SQLDescribeCol(stmt.get_handle(), 1,
-                        col_name, sizeof(col_name), &name_len,
+                        col_name.data(), col_name.declared_bytes(), &name_len,
                         &data_type, &col_size, &dec_digits, &nullable);
 
                     if (SQL_SUCCEEDED(rc)) {

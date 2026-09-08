@@ -440,14 +440,18 @@ TestResult MetadataTests::test_foreign_keys() {
                         nullptr, 0, nullptr, 0, nullptr, 0,
                         (SQLCHAR*)"TABLE", SQL_NTS);
                     if (SQL_SUCCEEDED(tbl_ret)) {
-                        char name_buf[128] = {0};
+                        core::GuardedBuffer<char> name_buf(128, 0);  // D62
                         SQLLEN ind = 0;
                         while (SQL_SUCCEEDED(SQLFetch(tbl_stmt.get_handle()))
                                && user_tables.size() < 20) {
                             if (SQL_SUCCEEDED(SQLGetData(tbl_stmt.get_handle(), 3,
-                                    SQL_C_CHAR, name_buf, sizeof(name_buf), &ind))
+                                    SQL_C_CHAR, name_buf.data(), name_buf.declared_bytes(), &ind))
                                 && ind > 0) {
-                                user_tables.emplace_back(name_buf);
+                                // D68: to `ind`. These names are handed
+                                // straight to SQLColumns below.
+                                user_tables.emplace_back(core::bounded_string(
+                                    name_buf.data(), name_buf.declared_elements(),
+                                    ind).value);
                             }
                         }
                     }
@@ -738,7 +742,7 @@ TestResult MetadataTests::test_count_star_result_metadata() {
                                          nullptr, 0,
                                          (SQLCHAR*)"TABLE", SQL_NTS);
                 if (SQL_SUCCEEDED(rc) && enum_stmt.fetch()) {
-                    char buf[256] = {0};
+                    core::GuardedBuffer<char> buf(256, 0);  // D62
                     SQLLEN ind = 0;
                     // Column 3 is TABLE_NAME per ODBC spec.
                     //
@@ -755,10 +759,10 @@ TestResult MetadataTests::test_count_star_result_metadata() {
                     // refused SQLGetData left `buf` zeroed and the probe read
                     // its own initialisation.
                     const SQLRETURN got = SQLGetData(enum_stmt.get_handle(), 3,
-                                                     SQL_C_CHAR, buf,
-                                                     sizeof(buf), &ind);
+                                                     SQL_C_CHAR, buf.data(),
+                                                     buf.declared_bytes(), &ind);
                     if (SQL_SUCCEEDED(got) && ind != SQL_NULL_DATA) {
-                        target_table = bounded_string(buf, sizeof(buf),
+                        target_table = bounded_string(buf.data(), buf.declared_elements(),
                                                       ind).value;
                     }
                 }
@@ -786,11 +790,11 @@ TestResult MetadataTests::test_count_star_result_metadata() {
             SQLULEN col_size = 0;
             SQLSMALLINT scale = 0;
             SQLSMALLINT nullable = 0;
-            SQLCHAR col_name[256] = {0};
+            core::GuardedBuffer<SQLCHAR> col_name(256, 0);  // D62
             SQLSMALLINT col_name_len = 0;
 
             SQLRETURN rc = SQLDescribeCol(stmt.get_handle(), 1,
-                                          col_name, sizeof(col_name), &col_name_len,
+                                          col_name.data(), col_name.declared_bytes(), &col_name_len,
                                           &sql_type, &col_size, &scale, &nullable);
 
             SQLLEN unsigned_attr = -1;
@@ -828,13 +832,13 @@ namespace {
 // fetch error. Used to dump the SQLProcedures / SQLProcedureColumns rows
 // into the result's `actual` field for diagnostics.
 std::string fetch_string_col(SQLHSTMT h, SQLUSMALLINT col) {
-    char buf[256] = {0};
+    core::GuardedBuffer<char> buf(256, 0);  // D62
     SQLLEN ind = 0;
-    SQLRETURN rc = SQLGetData(h, col, SQL_C_CHAR, buf, sizeof(buf), &ind);
+    SQLRETURN rc = SQLGetData(h, col, SQL_C_CHAR, buf.data(), buf.declared_bytes(), &ind);
     if (!SQL_SUCCEEDED(rc) || ind == SQL_NULL_DATA) return {};
     // D68: to `ind`. These strings go into the report as the procedure and
     // column names the driver returned.
-    return core::bounded_string(buf, sizeof(buf), ind).value;
+    return core::bounded_string(buf.data(), buf.declared_elements(), ind).value;
 }
 
 // A18: this returned 0 for a NULL value *and* for a failed SQLGetData, and
@@ -866,18 +870,18 @@ TestResult MetadataTests::test_sqlprocedures_smoke() {
                 nullptr, 0);  // ProcName
             if (ret == SQL_ERROR) {
                 // SQLSTATE IM001 — Driver doesn't support SQLProcedures.
-                char state[6] = {0};
+                core::GuardedBuffer<char> state(6, 0);  // D62
                 SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                              reinterpret_cast<SQLCHAR*>(state),
+                              reinterpret_cast<SQLCHAR*>(state.data()),
                               nullptr, nullptr, 0, nullptr);
-                if (core::sqlstate_string(state) == "IM001") {
+                if (core::sqlstate_string(state.data()) == "IM001") {
                     r.status = TestStatus::SKIP_UNSUPPORTED;
                     r.actual = "Driver returned IM001 — SQLProcedures not supported";
                     return;
                 }
                 r.status = TestStatus::FAIL;
                 r.actual = "SQLProcedures returned SQL_ERROR (state="
-                         + core::sqlstate_string(state) + ")";
+                         + core::sqlstate_string(state.data()) + ")";
                 return;
             }
 
@@ -937,18 +941,18 @@ TestResult MetadataTests::test_sqlprocedurecolumns_smoke() {
                 nullptr, 0,   // ProcName  — match all
                 nullptr, 0);  // ColumnName
             if (ret == SQL_ERROR) {
-                char state[6] = {0};
+                core::GuardedBuffer<char> state(6, 0);  // D62
                 SQLGetDiagRec(SQL_HANDLE_STMT, stmt.get_handle(), 1,
-                              reinterpret_cast<SQLCHAR*>(state),
+                              reinterpret_cast<SQLCHAR*>(state.data()),
                               nullptr, nullptr, 0, nullptr);
-                if (core::sqlstate_string(state) == "IM001") {
+                if (core::sqlstate_string(state.data()) == "IM001") {
                     r.status = TestStatus::SKIP_UNSUPPORTED;
                     r.actual = "Driver returned IM001 — SQLProcedureColumns not supported";
                     return;
                 }
                 r.status = TestStatus::FAIL;
                 r.actual = "SQLProcedureColumns returned SQL_ERROR (state="
-                         + core::sqlstate_string(state) + ")";
+                         + core::sqlstate_string(state.data()) + ")";
                 return;
             }
 

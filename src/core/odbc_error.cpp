@@ -9,19 +9,31 @@ OdbcError OdbcError::from_handle(SQLSMALLINT handle_type, SQLHANDLE handle, cons
     std::vector<OdbcDiagnostic> diagnostics;
     
     SQLSMALLINT rec = 1;
-    SQLCHAR sqlstate[6] = {0};
-    SQLCHAR message[SQL_MAX_MESSAGE_LENGTH] = {0};
+
+    // D62: guarded. This is the diagnostic path every failure in the tool runs
+    // through, and both buffers are handed to the driver manager, which scans
+    // what it is given - a driver that omits its terminator leaves the
+    // six-byte SQLSTATE array with no zero in it at all. The guard ends in a
+    // stopper, so even a bare strlen stops inside memory this object owns.
+    //
+    // The lengths declared to SQLGetDiagRec are unchanged.
+    constexpr size_t kSqlstateCapacity = 6;
+    constexpr size_t kMessageCapacity = SQL_MAX_MESSAGE_LENGTH;
+    GuardedBuffer<SQLCHAR> sqlstate(kSqlstateCapacity, 0);
+    GuardedBuffer<SQLCHAR> message(kMessageCapacity, 0);
     SQLINTEGER native_error = 0;
     SQLSMALLINT text_length = 0;
-    
+
     while (SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec,
-                                       sqlstate, &native_error,
-                                       message, SQL_MAX_MESSAGE_LENGTH, &text_length))) {
+                                       sqlstate.data(), &native_error,
+                                       message.data(),
+                                       static_cast<SQLSMALLINT>(kMessageCapacity),
+                                       &text_length))) {
         OdbcDiagnostic diag;
         // D69: SQLGetDiagRec gives no length for its SQLSTATE, so this is
         // bounded to the five characters the spec defines rather than to a
         // terminator the driver may not have written.
-        diag.sqlstate = sqlstate_string(sqlstate);
+        diag.sqlstate = sqlstate_string(sqlstate.data());
         diag.native_error = native_error;
         // D68: `text_length` is right there and this used to walk to a
         // terminator instead. Two consequences, and the second is the one
@@ -31,8 +43,8 @@ OdbcError OdbcError::from_handle(SQLSMALLINT handle_type, SQLHANDLE handle, cons
         // record 1's tail glued to it. And a driver that terminates nothing
         // at all runs the read off a 512-byte stack array - in the function
         // every failure path in the tool calls to find out what went wrong.
-        diag.message = bounded_string(reinterpret_cast<char*>(message),
-                                      sizeof(message), text_length).value;
+        diag.message = bounded_string(reinterpret_cast<char*>(message.data()),
+                                      kMessageCapacity, text_length).value;
         diag.record_number = rec;
         
         diagnostics.push_back(std::move(diag));

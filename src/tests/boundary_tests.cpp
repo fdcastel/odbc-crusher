@@ -140,10 +140,10 @@ TestResult BoundaryTests::test_getdata_zero_buffer() {
                     core::OdbcStatement stmt2(conn_);
                     stmt2.execute(working_query);
                     if (stmt2.fetch()) {
-                        char tiny[1] = {0};
+                        core::GuardedBuffer<char> tiny(1, 0);  // D62
                         SQLLEN indicator = 0;
                         SQLRETURN rc = SQLGetData(stmt2.get_handle(), 1, SQL_C_CHAR,
-                                                  tiny, sizeof(tiny), &indicator);
+                                                  tiny.data(), tiny.declared_bytes(), &indicator);
                         if ((SQL_SUCCEEDED(rc) || rc == SQL_SUCCESS_WITH_INFO) && indicator > 0) {
                             r.status = TestStatus::PASS;
                             r.actual = "Data length = " + std::to_string(indicator) +
@@ -299,7 +299,7 @@ TestResult BoundaryTests::test_describecol_col0() {
                     // "stop here", which is what it meant when this was a
                     // loop over dialect variants.
 
-                    SQLCHAR col_name[128] = {0};
+                    core::GuardedBuffer<SQLCHAR> col_name(128, 0);  // D62
                     SQLSMALLINT col_name_len = 0;
                     SQLSMALLINT data_type = 0;
                     SQLULEN col_size = 0;
@@ -308,7 +308,7 @@ TestResult BoundaryTests::test_describecol_col0() {
 
                     SQLRETURN rc = SQLDescribeCol(
                         stmt.get_handle(), 0,
-                        col_name, sizeof(col_name), &col_name_len,
+                        col_name.data(), col_name.declared_bytes(), &col_name_len,
                         &data_type, &col_size, &decimal_digits, &nullable
                     );
 
