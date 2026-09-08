@@ -191,58 +191,40 @@ TestResult EscapeSequenceTests::test_scalar_function_capabilities() {
             std::ostringstream oss;
             int categories_found = 0;
 
-            auto str_funcs = get_info_uint(SQL_STRING_FUNCTIONS);
-            if (str_funcs) {
-                ++categories_found;
-                int count = 0;
-                SQLUINTEGER v = *str_funcs;
-                if (v & SQL_FN_STR_CONCAT) ++count;
-                if (v & SQL_FN_STR_LENGTH) ++count;
-                if (v & SQL_FN_STR_LTRIM) ++count;
-                if (v & SQL_FN_STR_RTRIM) ++count;
-                if (v & SQL_FN_STR_SUBSTRING) ++count;
-                if (v & SQL_FN_STR_UCASE) ++count;
-                if (v & SQL_FN_STR_LCASE) ++count;
-                oss << "String: " << count << " funcs";
-            }
+            // C12: four copies of "read a bitmask, count the flags set in it,
+            // append '<Label>: <n> funcs'". The separator was hand-written
+            // into three of them as a leading ", ", which is why the order
+            // could not change without editing strings.
+            struct FunctionCategory {
+                SQLUSMALLINT info_type;
+                const char* label;
+                std::initializer_list<SQLUINTEGER> flags;
+            };
+            static const FunctionCategory kCategories[] = {
+                {SQL_STRING_FUNCTIONS, "String",
+                 {SQL_FN_STR_CONCAT, SQL_FN_STR_LENGTH, SQL_FN_STR_LTRIM,
+                  SQL_FN_STR_RTRIM, SQL_FN_STR_SUBSTRING, SQL_FN_STR_UCASE,
+                  SQL_FN_STR_LCASE}},
+                {SQL_NUMERIC_FUNCTIONS, "Numeric",
+                 {SQL_FN_NUM_ABS, SQL_FN_NUM_CEILING, SQL_FN_NUM_FLOOR,
+                  SQL_FN_NUM_ROUND, SQL_FN_NUM_SQRT, SQL_FN_NUM_MOD}},
+                {SQL_TIMEDATE_FUNCTIONS, "Timedate",
+                 {SQL_FN_TD_NOW, SQL_FN_TD_CURDATE, SQL_FN_TD_CURTIME,
+                  SQL_FN_TD_YEAR, SQL_FN_TD_MONTH, SQL_FN_TD_DAYOFWEEK}},
+                {SQL_SYSTEM_FUNCTIONS, "System",
+                 {SQL_FN_SYS_DBNAME, SQL_FN_SYS_USERNAME, SQL_FN_SYS_IFNULL}},
+            };
 
-            auto num_funcs = get_info_uint(SQL_NUMERIC_FUNCTIONS);
-            if (num_funcs) {
+            for (const auto& cat : kCategories) {
+                auto bits = get_info_uint(cat.info_type);
+                if (!bits) continue;
                 ++categories_found;
                 int count = 0;
-                SQLUINTEGER v = *num_funcs;
-                if (v & SQL_FN_NUM_ABS) ++count;
-                if (v & SQL_FN_NUM_CEILING) ++count;
-                if (v & SQL_FN_NUM_FLOOR) ++count;
-                if (v & SQL_FN_NUM_ROUND) ++count;
-                if (v & SQL_FN_NUM_SQRT) ++count;
-                if (v & SQL_FN_NUM_MOD) ++count;
-                oss << ", Numeric: " << count << " funcs";
-            }
-
-            auto td_funcs = get_info_uint(SQL_TIMEDATE_FUNCTIONS);
-            if (td_funcs) {
-                ++categories_found;
-                int count = 0;
-                SQLUINTEGER v = *td_funcs;
-                if (v & SQL_FN_TD_NOW) ++count;
-                if (v & SQL_FN_TD_CURDATE) ++count;
-                if (v & SQL_FN_TD_CURTIME) ++count;
-                if (v & SQL_FN_TD_YEAR) ++count;
-                if (v & SQL_FN_TD_MONTH) ++count;
-                if (v & SQL_FN_TD_DAYOFWEEK) ++count;
-                oss << ", Timedate: " << count << " funcs";
-            }
-
-            auto sys_funcs = get_info_uint(SQL_SYSTEM_FUNCTIONS);
-            if (sys_funcs) {
-                ++categories_found;
-                int count = 0;
-                SQLUINTEGER v = *sys_funcs;
-                if (v & SQL_FN_SYS_DBNAME) ++count;
-                if (v & SQL_FN_SYS_USERNAME) ++count;
-                if (v & SQL_FN_SYS_IFNULL) ++count;
-                oss << ", System: " << count << " funcs";
+                for (SQLUINTEGER flag : cat.flags) {
+                    if (*bits & flag) ++count;
+                }
+                if (categories_found > 1) oss << ", ";
+                oss << cat.label << ": " << count << " funcs";
             }
 
             if (categories_found == 0) {
@@ -443,6 +425,50 @@ TestResult EscapeSequenceTests::test_native_sql_outer_join_escape() {
 // Scalar Function Execution Tests
 // ---------------------------------------------------------------------------
 
+// C12: the epilogue three of the scalar-function probes share verbatim.
+//
+// test_{string,numeric,datetime}_scalar_functions ended with the same 22
+// lines differing in one noun. The row proposed folding all five probes into
+// one matrix; they use four different comparison semantics and one of them
+// is not table-driven at all, so a matrix would need a mode enum and
+// per-mode message handling - the same code with a dispatch in front. The
+// epilogue is what actually repeats, so the epilogue is what moves.
+//
+// `noun` is the word in "Driver claims no <noun> function support".
+// `count_noun` is the word in "<n>/<m> <count_noun> functions passed";
+// `claim_noun` the one in "Driver claims no <claim_noun> function support".
+// They differ in exactly one probe - datetime counts "datetime" and claims
+// "timedate" - and collapsing them to one parameter would have silently
+// rewritten that probe's output.
+void finish_scalar_suite(TestResult& r, const char* count_noun,
+                         const char* claim_noun, int tested,
+                         int passed_count, int unsupported,
+                         const std::string& failures) {
+    r.actual = std::to_string(passed_count) + "/" + std::to_string(tested) +
+               " " + count_noun + " functions passed";
+    if (unsupported) {
+        r.actual += " (" + std::to_string(unsupported) +
+                    " claimed but not implemented)";
+    }
+    if (tested == 0) {
+        // The bitmask claimed nothing, so there was nothing to run.
+        r.status = TestStatus::SKIP_UNSUPPORTED;
+        r.actual = std::string("Driver claims no ") + claim_noun +
+                   " function support";
+    } else if (unsupported == tested) {
+        // A4: it claimed them all and implemented none. A driver being honest
+        // about being incomplete is a skip, not a failure — but the report
+        // names the SQLSTATE it used to say so, instead of printing 'NULL'.
+        r.status = TestStatus::SKIP_UNSUPPORTED;
+        r.actual = std::string("Driver claims ") + claim_noun +
+                   " functions but implements none: " + failures;
+    } else if (passed_count < tested - unsupported) {
+        r.status = TestStatus::FAIL;
+        r.actual += ". Failures: " + failures;
+        r.severity = Severity::WARNING;
+    }
+}
+
 TestResult EscapeSequenceTests::test_string_scalar_functions() {
     return run_test(
         "test_string_scalar_functions", "SQLExecDirect + SQLGetData",
@@ -496,29 +522,8 @@ TestResult EscapeSequenceTests::test_string_scalar_functions() {
                 }
             }
 
-            r.actual = std::to_string(passed_count) + "/" +
-                       std::to_string(tested) + " string functions passed";
-            if (unsupported) {
-                r.actual += " (" + std::to_string(unsupported) +
-                            " claimed but not implemented)";
-            }
-            if (tested == 0) {
-                // The bitmask claimed nothing, so there was nothing to run.
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims no string function support";
-            } else if (unsupported == tested) {
-                // A4: it claimed them all and implemented none. A driver
-                // being honest about being incomplete is a skip, not a
-                // failure — but the report now names the SQLSTATE it used
-                // to say so, instead of printing 'NULL'.
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims string functions but implements none: " +
-                           oss.str();
-            } else if (passed_count < tested - unsupported) {
-                r.status = TestStatus::FAIL;
-                r.actual += ". Failures: " + oss.str();
-                r.severity = Severity::WARNING;
-            }
+            finish_scalar_suite(r, "string", "string", tested, passed_count,
+                                unsupported, oss.str());
         });
 }
 
@@ -597,29 +602,8 @@ TestResult EscapeSequenceTests::test_numeric_scalar_functions() {
                 }
             }
 
-            r.actual = std::to_string(passed_count) + "/" +
-                       std::to_string(tested) + " numeric functions passed";
-            if (unsupported) {
-                r.actual += " (" + std::to_string(unsupported) +
-                            " claimed but not implemented)";
-            }
-            if (tested == 0) {
-                // The bitmask claimed nothing, so there was nothing to run.
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims no numeric function support";
-            } else if (unsupported == tested) {
-                // A4: it claimed them all and implemented none. A driver
-                // being honest about being incomplete is a skip, not a
-                // failure — but the report now names the SQLSTATE it used
-                // to say so, instead of printing 'NULL'.
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims numeric functions but implements none: " +
-                           oss.str();
-            } else if (passed_count < tested - unsupported) {
-                r.status = TestStatus::FAIL;
-                r.actual += ". Failures: " + oss.str();
-                r.severity = Severity::WARNING;
-            }
+            finish_scalar_suite(r, "numeric", "numeric", tested, passed_count,
+                                unsupported, oss.str());
         });
 }
 
@@ -689,29 +673,8 @@ TestResult EscapeSequenceTests::test_datetime_scalar_functions() {
                 }
             }
 
-            r.actual = std::to_string(passed_count) + "/" +
-                       std::to_string(tested) + " datetime functions passed";
-            if (unsupported) {
-                r.actual += " (" + std::to_string(unsupported) +
-                            " claimed but not implemented)";
-            }
-            if (tested == 0) {
-                // The bitmask claimed nothing, so there was nothing to run.
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims no timedate function support";
-            } else if (unsupported == tested) {
-                // A4: it claimed them all and implemented none. A driver
-                // being honest about being incomplete is a skip, not a
-                // failure — but the report now names the SQLSTATE it used
-                // to say so, instead of printing 'NULL'.
-                r.status = TestStatus::SKIP_UNSUPPORTED;
-                r.actual = "Driver claims timedate functions but implements none: " +
-                           oss.str();
-            } else if (passed_count < tested - unsupported) {
-                r.status = TestStatus::FAIL;
-                r.actual += ". Failures: " + oss.str();
-                r.severity = Severity::WARNING;
-            }
+            finish_scalar_suite(r, "datetime", "timedate", tested,
+                                passed_count, unsupported, oss.str());
         });
 }
 
