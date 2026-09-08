@@ -4,6 +4,10 @@
 #include "core/odbc_connection.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
+#include <csignal>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 #include <cstdlib>
 
 using namespace odbc_crusher::core;
@@ -199,3 +203,65 @@ TEST_F(StatementRecycleTest, PrepareAfterFailedExecute) {
         }
     });
 }
+
+
+// ── D73: the signals a platform raises when it traps rather than aborts ───
+//
+// macOS killed crusher with `Trace/BPT trap: 5` - SIGTRAP - on a fault Linux
+// contained and reported, and three e2e scenarios failed with no report at
+// all because the process died before one was written. On arm64 a failed
+// bounds or fortify check is `brk`, which is SIGTRAP; the same check on
+// x86-64 glibc calls abort() and raises SIGABRT.
+//
+// The existing crash tests all fault by dereferencing null, which every
+// platform delivers as SIGSEGV - so none of them could have caught a missing
+// signal. These raise the signals directly.
+#ifndef _WIN32
+
+TEST(CrashGuardTest, CatchesSigtrap) {
+    auto result = execute_with_crash_guard([]() { std::raise(SIGTRAP); });
+
+    EXPECT_TRUE(result.crashed)
+        << "SIGTRAP escaped the guard, which is how macOS died before it "
+           "could write a report";
+    EXPECT_EQ(result.crash_code, static_cast<unsigned int>(SIGTRAP));
+    EXPECT_NE(result.description.find("SIGTRAP"), std::string::npos)
+        << "description was: " << result.description;
+}
+
+TEST(CrashGuardTest, CatchesSigill) {
+    auto result = execute_with_crash_guard([]() { std::raise(SIGILL); });
+
+    EXPECT_TRUE(result.crashed);
+    EXPECT_EQ(result.crash_code, static_cast<unsigned int>(SIGILL));
+}
+
+// The guard must leave the process as it found it, or a later crash outside a
+// guarded region would be swallowed by a handler nobody installed for it.
+TEST(CrashGuardTest, RestoresTheHandlersItInstalled) {
+    struct sigaction before {};
+    ASSERT_EQ(sigaction(SIGTRAP, nullptr, &before), 0);
+
+    auto result = execute_with_crash_guard([]() { std::raise(SIGTRAP); });
+    ASSERT_TRUE(result.crashed);
+
+    struct sigaction after {};
+    ASSERT_EQ(sigaction(SIGTRAP, nullptr, &after), 0);
+    EXPECT_EQ(before.sa_handler, after.sa_handler)
+        << "the guard kept its SIGTRAP handler after returning";
+}
+
+// D70: with the guard off the body runs bare, which is what lets ASan report
+// a fault instead of our handler swallowing it. Asserted on the no-crash path,
+// because the whole point of the switch is that a crash is *not* contained.
+TEST(CrashGuardTest, TheOptOutRunsTheBodyWithoutGuarding) {
+    setenv("ODBC_CRUSHER_NO_CRASH_GUARD", "1", 1);
+    int value = 0;
+    auto result = execute_with_crash_guard([&]() { value = 7; });
+    unsetenv("ODBC_CRUSHER_NO_CRASH_GUARD");
+
+    EXPECT_EQ(value, 7);
+    EXPECT_FALSE(result.crashed);
+}
+
+#endif  // !_WIN32

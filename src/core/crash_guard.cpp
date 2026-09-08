@@ -160,6 +160,15 @@ CrashGuardResult execute_with_crash_guard(const std::function<void()>& func) {
     
     struct sigaction sa = {};
     struct sigaction old_segv = {}, old_bus = {}, old_fpe = {}, old_abrt = {};
+    // D73: and the two signals a platform raises when it *traps* rather than
+    // aborts. On arm64 a failed bounds or fortify check is `brk`, which is
+    // SIGTRAP, where the same check on x86-64 glibc calls abort() and raises
+    // SIGABRT - so macOS killed crusher outright (`Trace/BPT trap: 5`, no
+    // report written) on a fault Linux contained and reported. SIGILL joins
+    // them because __builtin_trap lowers to an illegal instruction on several
+    // targets, and a guard that catches three of the four ways a platform says
+    // "trap" is a guard that fails on the fourth.
+    struct sigaction old_trap = {}, old_ill = {};
     sa.sa_handler = crash_signal_handler;
     sigemptyset(&sa.sa_mask);
     // SA_NODEFER: don't block the signal while the handler runs.
@@ -173,6 +182,8 @@ CrashGuardResult execute_with_crash_guard(const std::function<void()>& func) {
     sigaction(SIGBUS, &sa, &old_bus);
     sigaction(SIGFPE, &sa, &old_fpe);
     sigaction(SIGABRT, &sa, &old_abrt);
+    sigaction(SIGTRAP, &sa, &old_trap);   // D73
+    sigaction(SIGILL, &sa, &old_ill);     // D73
     
     s_in_guard = 1;
     int sig = sigsetjmp(s_jmp_env, 1);
@@ -199,6 +210,14 @@ CrashGuardResult execute_with_crash_guard(const std::function<void()>& func) {
             case SIGABRT:
                 oss << "Aborted (SIGABRT)";
                 break;
+            case SIGTRAP:
+                // D73: on arm64 this is a bounds or fortify check failing -
+                // the same condition x86-64 reports as SIGABRT.
+                oss << "Trap (SIGTRAP) - a bounds or fortify check failed";
+                break;
+            case SIGILL:
+                oss << "Illegal instruction (SIGILL)";
+                break;
             default:
                 oss << "Signal " << sig;
                 break;
@@ -219,6 +238,8 @@ CrashGuardResult execute_with_crash_guard(const std::function<void()>& func) {
     sigaction(SIGBUS, &old_bus, nullptr);
     sigaction(SIGFPE, &old_fpe, nullptr);
     sigaction(SIGABRT, &old_abrt, nullptr);
+    sigaction(SIGTRAP, &old_trap, nullptr);   // D73
+    sigaction(SIGILL, &old_ill, nullptr);     // D73
     
     return result;
 }
