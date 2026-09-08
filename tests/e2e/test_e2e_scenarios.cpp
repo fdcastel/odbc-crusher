@@ -68,6 +68,29 @@ std::optional<std::string> killed_before_finishing(const CrusherRun& run) {
         }                                                                     \
     } while (false)
 
+// D79: did this particular category fault?
+//
+// `crashed_category` answers "did anything fault", which is what D72 needed.
+// This answers it per category, because a probe missing from a category that
+// crashed is D63's vanishing probe, while a probe missing from one that did
+// not is a name that has drifted - and those want different verdicts.
+bool category_crashed(const CrusherRun& run, const std::string& category) {
+    if (!run.report.is_object() || !run.report.contains("categories")) {
+        return false;
+    }
+    for (const auto& cat : run.report["categories"]) {
+        if (cat.value("name", std::string{}) != category) continue;
+        if (!cat.contains("tests")) return false;
+        for (const auto& t : cat["tests"]) {
+            if (t.value("test_name", std::string{}).find("(DRIVER CRASH)")
+                != std::string::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // D71: did a category fault during this run?
 //
 // main.cpp replaces a faulting category with a single "<name> (DRIVER CRASH)"
@@ -1775,9 +1798,19 @@ TEST_F(CrusherE2EFixture, OmittedTerminatorsAreGradedByOneProbeNotTwelve) {
     };
 
     size_t compared = 0;
+    std::vector<std::string> vanished;
     for (const auto& [category, name] : graded) {
         auto a = find_test(clean.report, category, name);
         auto b = find_test(bad.report, category, name);
+
+        // D79: missing from a category that faulted is D63's vanishing probe,
+        // not a drifted name. Counted separately so the drift check below
+        // still means what it says.
+        if (a.has_value() && !b.has_value() &&
+            category_crashed(bad, category)) {
+            vanished.push_back(category + " / " + name);
+            continue;
+        }
         if (!a.has_value() || !b.has_value()) continue;   // named below
         ++compared;
         EXPECT_EQ(a->value("status", std::string{}),
@@ -1790,9 +1823,19 @@ TEST_F(CrusherE2EFixture, OmittedTerminatorsAreGradedByOneProbeNotTwelve) {
             << "\n  not terminating: " << b->value("actual", std::string{});
     }
 
-    EXPECT_GE(compared, graded.size() - 2)
-        << "most of the probes this asserts about were not in the report; the "
-           "names have drifted\n"
+    if (!vanished.empty()) {
+        // Loud, because a probe that disappears is the one failure mode this
+        // whole suite cannot see by looking at statuses (D63).
+        std::cout << "[ D79 ] " << vanished.size()
+                  << " probe(s) absent because their category faulted under "
+                     "BufferValidation=Lenient - D71's fault, not this "
+                     "scenario's:\n";
+        for (const auto& v : vanished) std::cout << "         " << v << "\n";
+    }
+
+    EXPECT_GE(compared + vanished.size(), graded.size() - 2)
+        << "most of the probes this asserts about were neither compared nor "
+           "accounted for by a crashed category, so the names have drifted\n"
         << report_outline(bad);
 
     // And the one probe that *must* notice, or the lever is doing nothing.
