@@ -438,14 +438,8 @@ protected:
         const std::string& spec_reference = ""
     );
 
-    // Helper to time a test
-    template<typename Func>
-    auto time_test(Func&& func) {
-        auto start = std::chrono::high_resolution_clock::now();
-        func();
-        auto end = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    }
+    // C6: `time_test` stood here with no callers. run_test() below times
+    // every probe already, which is why nothing ever needed it.
 
     // Run a single test method. Wraps the body in (a) timing,
     // (b) make_result for the metadata, and (c) a catch for OdbcError that
@@ -690,11 +684,10 @@ inline const char* status_to_string(TestStatus status) {
     }
 }
 
-// True for any SKIP_* variant.
-inline bool is_skipped(TestStatus status) {
-    return status == TestStatus::SKIP_UNSUPPORTED
-        || status == TestStatus::SKIP_INCONCLUSIVE;
-}
+// C6: `is_skipped()` stood here with no callers. The two places that ask
+// the question - main.cpp's tally and console_reporter's - are switches
+// over TestStatus with the two SKIP_ labels falling together, where a
+// predicate does not fit and -Wswitch is doing useful work.
 
 // Helper to convert severity to string
 inline const char* severity_to_string(Severity sev) {

@@ -4,7 +4,13 @@
 
 - **Naming**: `PascalCase` for classes, `snake_case` for functions/variables, trailing `_` for members, `kPascalCase` or `UPPER_CASE` for constants
 - **Headers**: `#pragma once`
-- **Include order**: corresponding header → C++ stdlib → third-party → project headers
+- **Include order**: corresponding header → project headers → third-party → C++ stdlib
+  (C14: the rule used to say the opposite, and **all 23** probe `.cpp` files
+  did it this way. A rule that no file in the tree follows is not a standard,
+  it is a note about someone's preferences — and here the code is right: on
+  Windows `<windows.h>` must precede `<sql.h>`, and the project headers that
+  wrap that ordering have to come first for it to hold. The rule now describes
+  the code rather than asking for 23 files of churn.)
 - **RAII**: Always use RAII wrappers for ODBC handles — never raw handles in test code
 - **Error handling**: Always extract full ODBC diagnostic records on failure via `SQLGetDiagRec`
 

@@ -24,6 +24,7 @@ add_executable(odbc_crusher_tests
     unit/test_json_reporter.cpp
     unit/test_utf8_sanitize.cpp
     unit/test_guarded_buffer.cpp
+    unit/test_sqlwchar_utils.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE

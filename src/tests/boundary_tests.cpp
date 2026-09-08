@@ -1,7 +1,6 @@
 #include "boundary_tests.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
-#include <cstring>
 
 namespace odbc_crusher::tests {
 

@@ -4,7 +4,6 @@
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
-#include <array>
 
 #ifdef _WIN32
 #include <windows.h>

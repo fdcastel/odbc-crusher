@@ -3,7 +3,6 @@
 #include "sqlwchar_utils.hpp"
 #include "core/odbc_error.hpp"
 #include <sstream>
-#include <cstring>
 
 #ifdef _WIN32
 #include <windows.h>

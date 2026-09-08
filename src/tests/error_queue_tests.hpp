@@ -1,11 +1,10 @@
 #pragma once
 
 #include "test_base.hpp"
-#include "../core/odbc_connection.hpp"
+#include "core/odbc_connection.hpp"
 #include <vector>
 
-namespace odbc_crusher {
-namespace tests {
+namespace odbc_crusher::tests {
 
 /**
  * @brief Error Queue Management Tests
@@ -44,5 +43,4 @@ private:
     TestResult test_iteration();
 };
 
-} // namespace tests
-} // namespace odbc_crusher
+} // namespace odbc_crusher::tests

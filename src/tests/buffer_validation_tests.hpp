@@ -1,11 +1,10 @@
 #pragma once
 
 #include "test_base.hpp"
-#include "../core/odbc_connection.hpp"
+#include "core/odbc_connection.hpp"
 #include <vector>
 
-namespace odbc_crusher {
-namespace tests {
+namespace odbc_crusher::tests {
 
 /**
  * @brief Buffer Validation Tests
@@ -41,5 +40,4 @@ private:
     TestResult test_sentinel_values();
 };
 
-} // namespace tests
-} // namespace odbc_crusher
+} // namespace odbc_crusher::tests
