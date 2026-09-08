@@ -37,6 +37,9 @@ public:
                         size_t informational,
                        std::chrono::microseconds total_duration) override;
     void report_end() override;
+    void report_selected_categories(
+        const std::vector<std::string>& available,
+        const std::vector<std::string>& selected) override;
     
 private:
     // F2: write the report as it stands to output_file_, atomically.

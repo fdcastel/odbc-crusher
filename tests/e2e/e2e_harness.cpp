@@ -91,11 +91,16 @@ int spawn(const std::string& connection_string,
           const fs::path& report_file,       // empty => report goes to stdout
           const fs::path& stdout_log,        // empty => stdout to null device
           const fs::path& stderr_log,
-          bool& timed_out) {
+          bool& timed_out,
+          const std::vector<std::string>& extra_args = {}) {
     std::string cmd = quote_arg(CRUSHER_BIN_PATH);
     cmd += ' ';
     cmd += quote_arg(connection_string);
     cmd += " -o json";
+    for (const auto& arg : extra_args) {      // G2/G3
+        cmd += ' ';
+        cmd += quote_arg(arg);
+    }
     if (!report_file.empty()) {
         cmd += " -f ";
         cmd += quote_arg(report_file.string());
@@ -270,7 +275,39 @@ CrusherRun run_crusher(const std::string& connection_string) {
     return out;
 }
 
-CrusherRun run_crusher_stdout(const std::string& connection_string) {
+CrusherRun run_crusher_with_args(const std::string& connection_string,
+                                 const std::vector<std::string>& extra_args) {
+    CrusherRun out;
+
+    auto tmp = unique_tmp_json();
+    auto stderr_log = tmp;
+    stderr_log.replace_extension(".stderr.log");
+
+    std::error_code ec;
+    fs::remove(tmp, ec);
+    fs::remove(stderr_log, ec);
+
+    out.exit_code = spawn(connection_string, tmp, fs::path{}, stderr_log,
+                          out.timed_out, extra_args);
+    out.launched = true;
+    out.raw_stderr = slurp_and_remove(stderr_log);
+
+    if (fs::exists(tmp, ec)) {
+        std::ifstream in(tmp);
+        try {
+            in >> out.report;
+        } catch (const std::exception& e) {
+            out.raw_stderr += "\n[harness] JSON parse error: ";
+            out.raw_stderr += e.what();
+        }
+        in.close();
+        fs::remove(tmp, ec);
+    }
+    return out;
+}
+
+CrusherRun run_crusher_stdout(const std::string& connection_string,
+                              const std::vector<std::string>& extra_args) {
     CrusherRun out;
 
     auto base = unique_tmp_json();
@@ -284,7 +321,7 @@ CrusherRun run_crusher_stdout(const std::string& connection_string) {
     fs::remove(stderr_log, ec);
 
     out.exit_code = spawn(connection_string, fs::path{}, stdout_log, stderr_log,
-                          out.timed_out);
+                          out.timed_out, extra_args);
     out.launched = true;
     out.raw_stderr = slurp_and_remove(stderr_log);
     out.raw_stdout = slurp_and_remove(stdout_log);

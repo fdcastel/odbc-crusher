@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace odbc_crusher::e2e {
 
@@ -34,12 +35,23 @@ struct CrusherRun {
 // Returns CrusherRun{launched=false} if the binary itself cannot run.
 CrusherRun run_crusher(const std::string& connection_string);
 
+// Run odbc-crusher with extra command-line arguments — G2/G3.
+//
+// The flags they add are the whole subject of those tests, so the harness has
+// to be able to pass them. `extra_args` is appended verbatim after the
+// connection string; each element is quoted as one argument.
+CrusherRun run_crusher_with_args(const std::string& connection_string,
+                                 const std::vector<std::string>& extra_args);
+
 // Same, but with `-o json` and NO `-f`: the report is captured from stdout.
 // This is the invocation the README documents for piping into jq, and the
 // only way to test G1 — that no progress chatter is written to stdout.
 // `raw_stdout` carries the bytes verbatim so a scenario can assert on what
 // preceded the JSON, not merely that a parse succeeded.
-CrusherRun run_crusher_stdout(const std::string& connection_string);
+// `extra_args` is how --list-categories is testable at all: it writes to
+// stdout and exits before any report exists. G2.
+CrusherRun run_crusher_stdout(const std::string& connection_string,
+                              const std::vector<std::string>& extra_args = {});
 
 // Probe whether the mock driver is loadable on this host. Skips
 // scenarios with GTEST_SKIP() when false. Caches the result.

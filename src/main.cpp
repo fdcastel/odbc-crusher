@@ -1,3 +1,8 @@
+#include <algorithm>
+#include <cctype>
+#include <functional>
+#include <utility>
+#include <vector>
 #include <iostream>
 #include <memory>
 #include <CLI/CLI.hpp>
@@ -39,12 +44,99 @@ using namespace odbc_crusher;
 
 namespace {
 
+// G2: one list, used by --list-categories, by --category and by the run.
+//
+// Factories only, deliberately. The first cut of this paired each factory
+// with a hand-written display name, and 16 of the 23 disagreed with what the
+// class actually reports - so --list-categories printed names that --category
+// would then refuse to match. `category_name()` is where a category's name is
+// defined; anything else is a copy waiting to drift.
+using CategoryFactory =
+    std::function<std::unique_ptr<tests::TestBase>(core::OdbcConnection&)>;
+
+template <typename T>
+CategoryFactory make_category() {
+    return [](core::OdbcConnection& c) { return std::make_unique<T>(c); };
+}
+
+// Order is preserved in the report. Adding a category = one line here plus
+// the usual hpp/cpp/cmake/gtest wiring.
+const std::vector<CategoryFactory>& category_registry() {
+    static const std::vector<CategoryFactory> kRegistry = {
+        make_category<tests::ConnectionTests>(),
+        make_category<tests::StatementTests>(),
+        make_category<tests::MetadataTests>(),
+        make_category<tests::DataTypeTests>(),
+        make_category<tests::TransactionTests>(),
+        make_category<tests::AdvancedTests>(),
+        make_category<tests::BufferValidationTests>(),
+        make_category<tests::ErrorQueueTests>(),
+        make_category<tests::StateMachineTests>(),
+        make_category<tests::DescriptorTests>(),
+        make_category<tests::CancellationTests>(),
+        make_category<tests::SqlstateTests>(),
+        make_category<tests::BoundaryTests>(),
+        make_category<tests::DataTypeEdgeCaseTests>(),
+        make_category<tests::UnicodeTests>(),
+        make_category<tests::CatalogDepthTests>(),
+        make_category<tests::DiagnosticDepthTests>(),
+        make_category<tests::CursorBehaviorTests>(),
+        make_category<tests::ParameterBindingTests>(),
+        make_category<tests::ArrayParamTests>(),
+        make_category<tests::EscapeSequenceTests>(),
+        make_category<tests::NumericStructTests>(),
+        make_category<tests::CursorStressTests>(),
+    };
+    return kRegistry;
+}
+
+// The names, straight from the classes. `conn` need not be connected: every
+// category's constructor only stores the reference, and category_name()
+// returns a literal.
+std::vector<std::string> category_names(core::OdbcConnection& conn) {
+    std::vector<std::string> names;
+    names.reserve(category_registry().size());
+    for (const auto& factory : category_registry()) {
+        names.push_back(factory(conn)->category_name());
+    }
+    return names;
+}
+
+std::string to_lower_copy(std::string v) {
+    std::transform(v.begin(), v.end(), v.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return v;
+}
+
+// G3: map the --fail-on word onto the enum. `none` never fails, so it is a
+// sentinel rather than a severity.
+bool severity_at_least(tests::Severity worst, const std::string& threshold) {
+    if (threshold == "none") return false;
+    tests::Severity limit = tests::Severity::INFO;
+    if (threshold == "critical") limit = tests::Severity::CRITICAL;
+    else if (threshold == "error") limit = tests::Severity::ERR;
+    else if (threshold == "warning") limit = tests::Severity::WARNING;
+    // Ordered CRITICAL < ERR < WARNING < INFO, so "at least as severe" is <=.
+    return worst <= limit;
+}
+
+// G3: the highest severity carried by any FAIL or ERR seen so far. Severity
+// is ordered CRITICAL < ERR < WARNING < INFO in the enum, so "at least as
+// severe as" is `<=` and the worst is the smallest.
+tests::Severity g_worst_failure_severity = tests::Severity::INFO;
+
 void tally_results(const std::vector<tests::TestResult>& results,
                    size_t& total_tests, size_t& total_passed,
                    size_t& total_failed, size_t& total_skipped,
                    size_t& total_errors, size_t& total_informational) {
     for (const auto& r : results) {
         total_tests++;
+        if (r.status == tests::TestStatus::FAIL ||
+            r.status == tests::TestStatus::ERR) {
+            if (r.severity < g_worst_failure_severity) {
+                g_worst_failure_severity = r.severity;
+            }
+        }
         switch (r.status) {
             case tests::TestStatus::PASS: total_passed++; break;
             case tests::TestStatus::FAIL: total_failed++; break;
@@ -109,10 +201,13 @@ int main(int argc, char** argv) {
     
     app.set_version_flag("--version,-V", ODBC_CRUSHER_VERSION);
     
+    // Not `->required()`: --list-categories has nothing to connect to, and
+    // making people pass a dummy connection string to read a list is the kind
+    // of small rudeness that makes a tool annoying to adopt. Checked by hand
+    // after parsing instead.
     std::string connection_string;
     app.add_option("connection", connection_string,
-                   "ODBC connection string (Driver={...};... or DSN=...)")
-        ->required();
+                   "ODBC connection string (Driver={...};... or DSN=...)");
     
     bool verbose = false;
     app.add_flag("-v,--verbose", verbose,
@@ -126,8 +221,54 @@ int main(int argc, char** argv) {
     std::string json_file;
     app.add_option("-f,--file", json_file,
                    "Write JSON output to FILE instead of stdout");
-    
+
+    // G2: run a subset. The e2e harness worked around the absence of this
+    // with a comment ("just ConnectionTests category isn't filterable from
+    // CLI, so we live with a full run"), and bisecting a driver that hangs
+    // meant bisecting the source.
+    //
+    // Categories only, and not individual probes: a probe's name is produced
+    // by running it, so there is nothing to list before a run and nothing to
+    // save by discarding results after one.
+    std::vector<std::string> only_categories;
+    app.add_option("-c,--category", only_categories,
+                   "Run only these categories (repeatable, "
+                   "case-insensitive; see --list-categories)");
+
+    bool list_categories = false;
+    app.add_flag("--list-categories", list_categories,
+                 "List the test categories and exit");
+
+    // G3: which severities make the exit code non-zero. main used to exit 1
+    // for any FAIL or ERR whatever its severity, so against a real driver it
+    // was always 1 - which is why the stress-test composite sets
+    // continue-on-error and nobody reads it.
+    std::string fail_on = "info";
+    app.add_option("--fail-on", fail_on,
+                   "Exit non-zero only for failures at least this severe: "
+                   "critical, error, warning, info (default), or none")
+        ->check(CLI::IsMember({"critical", "error", "warning", "info", "none"},
+                              CLI::ignore_case));
+
     CLI11_PARSE(app, argc, argv);
+
+    if (list_categories) {
+        // An environment and an unconnected handle are enough to ask each
+        // category its name, and neither touches a driver.
+        core::OdbcEnvironment list_env;
+        core::OdbcConnection list_conn(list_env);
+        for (const auto& name : category_names(list_conn)) {
+            std::cout << name << "\n";
+        }
+        return 0;
+    }
+
+    if (connection_string.empty()) {
+        std::cerr << "Error: a connection string is required.\n"
+                     "Run with --help for usage, or --list-categories to see "
+                     "what this build can run.\n";
+        return 3;
+    }
     
     try {
         // Create reporter
@@ -195,32 +336,40 @@ int main(int argc, char** argv) {
         size_t total_informational = 0;   // B2
         auto overall_start = std::chrono::high_resolution_clock::now();
         
-        // Registered test categories. Order is preserved in the report.
-        // Adding a new category = one line here + the usual hpp/cpp/cmake/gtest wiring.
+        // G2: the registry above is the one list; --list-categories and
+        // --category read the same names the run uses.
         std::vector<std::unique_ptr<tests::TestBase>> categories;
-        categories.emplace_back(std::make_unique<tests::ConnectionTests>(conn));
-        categories.emplace_back(std::make_unique<tests::StatementTests>(conn));
-        categories.emplace_back(std::make_unique<tests::MetadataTests>(conn));
-        categories.emplace_back(std::make_unique<tests::DataTypeTests>(conn));
-        categories.emplace_back(std::make_unique<tests::TransactionTests>(conn));
-        categories.emplace_back(std::make_unique<tests::AdvancedTests>(conn));
-        categories.emplace_back(std::make_unique<tests::BufferValidationTests>(conn));
-        categories.emplace_back(std::make_unique<tests::ErrorQueueTests>(conn));
-        categories.emplace_back(std::make_unique<tests::StateMachineTests>(conn));
-        categories.emplace_back(std::make_unique<tests::DescriptorTests>(conn));
-        categories.emplace_back(std::make_unique<tests::CancellationTests>(conn));
-        categories.emplace_back(std::make_unique<tests::SqlstateTests>(conn));
-        categories.emplace_back(std::make_unique<tests::BoundaryTests>(conn));
-        categories.emplace_back(std::make_unique<tests::DataTypeEdgeCaseTests>(conn));
-        categories.emplace_back(std::make_unique<tests::UnicodeTests>(conn));
-        categories.emplace_back(std::make_unique<tests::CatalogDepthTests>(conn));
-        categories.emplace_back(std::make_unique<tests::DiagnosticDepthTests>(conn));
-        categories.emplace_back(std::make_unique<tests::CursorBehaviorTests>(conn));
-        categories.emplace_back(std::make_unique<tests::ParameterBindingTests>(conn));
-        categories.emplace_back(std::make_unique<tests::ArrayParamTests>(conn));
-        categories.emplace_back(std::make_unique<tests::EscapeSequenceTests>(conn));
-        categories.emplace_back(std::make_unique<tests::NumericStructTests>(conn));
-        categories.emplace_back(std::make_unique<tests::CursorStressTests>(conn));
+        for (const auto& factory : category_registry()) {
+            auto category = factory(conn);
+            if (!only_categories.empty()) {
+                const std::string lowered = to_lower_copy(category->category_name());
+                bool wanted = false;
+                for (const auto& want : only_categories) {
+                    if (lowered == to_lower_copy(want)) { wanted = true; break; }
+                }
+                if (!wanted) continue;
+            }
+            categories.emplace_back(std::move(category));
+        }
+
+        // A --category that matches nothing is a mistake worth failing on: it
+        // otherwise produces a clean, empty, entirely meaningless report.
+        if (categories.empty()) {
+            std::cerr << "Error: no test category matched. Known categories:\n";
+            for (const auto& name : category_names(conn)) {
+                std::cerr << "  " << name << "\n";
+            }
+            return 3;
+        }
+
+        // The report has to say what was asked for, or a consumer comparing
+        // pass rates will compare two different subsets and see a regression
+        // that is really a filter.
+        reporter->report_selected_categories(category_names(conn), [&] {
+            std::vector<std::string> selected;
+            for (const auto& c : categories) selected.push_back(c->category_name());
+            return selected;
+        }());
 
         for (auto& category : categories) {
             run_test_category(*category, *reporter, total_tests, total_passed,
@@ -239,8 +388,12 @@ int main(int argc, char** argv) {
         
         reporter->report_end();
         
-        // Return non-zero if any tests failed
-        return (total_failed > 0 || total_errors > 0) ? 1 : 0;
+        // G3: non-zero only when something failed at or above the threshold.
+        // The default is `info`, the least severe level, so every FAIL and
+        // ERR still counts and the exit code is exactly what it always was.
+        if (total_failed == 0 && total_errors == 0) return 0;
+        return severity_at_least(g_worst_failure_severity, to_lower_copy(fail_on))
+                   ? 1 : 0;
         
     } catch (const core::OdbcError& e) {
         std::cerr << "\nODBC Error: " << e.what() << "\n";

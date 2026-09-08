@@ -1363,3 +1363,149 @@ TEST_F(CrusherE2EFixture, AWedgedCrusherIsKilledRatherThanWaitedOn) {
         << "the harness left temp files behind, which on Windows means a "
            "child of the killed shell is still holding them open";
 }
+// ── G2: running a subset ───────────────────────────────────────────────────
+//
+// There was no way to run fewer than all 206 probes. The harness said so in a
+// comment and lived with a full run every time; bisecting a driver that hangs
+// meant bisecting the source.
+
+// The test that matters most here, because it caught a real bug in the first
+// cut of G2: --list-categories advertised hand-written names, and 16 of the
+// 23 disagreed with what the classes report — so every one of those names was
+// a --category argument that would be refused. The two lists have to be the
+// same list.
+TEST_F(CrusherE2EFixture, ListedCategoriesAreExactlyTheOnesTheReportUses) {
+    auto listed = run_crusher_stdout("", {"--list-categories"});
+    ASSERT_TRUE(listed.launched);
+    ASSERT_EQ(listed.exit_code, 0) << listed.raw_stderr;
+
+    std::vector<std::string> names;
+    std::istringstream lines(listed.raw_stdout);
+    for (std::string line; std::getline(lines, line);) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+            line.pop_back();
+        }
+        if (!line.empty()) names.push_back(line);
+    }
+    ASSERT_FALSE(names.empty()) << "stdout was: " << listed.raw_stdout;
+
+    auto full = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;");
+    ASSERT_TRUE(full.report.contains("categories")) << full.raw_stderr;
+
+    std::vector<std::string> reported;
+    for (const auto& cat : full.report["categories"]) {
+        reported.push_back(cat.value("name", std::string{}));
+    }
+
+    EXPECT_EQ(names, reported)
+        << "--list-categories must print the names the report uses, in the "
+           "same order — anything else is a name --category will refuse";
+}
+
+TEST_F(CrusherE2EFixture, CategoryFilterRunsOnlyWhatWasAskedFor) {
+    auto run = run_crusher_with_args(
+        "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;",
+        {"--category", "Connection Tests"});
+    ASSERT_TRUE(run.report.contains("summary")) << run.raw_stderr;
+
+    ASSERT_TRUE(run.report.contains("categories"));
+    ASSERT_EQ(run.report["categories"].size(), 1u) << report_outline(run);
+    EXPECT_EQ(run.report["categories"][0].value("name", std::string{}),
+              "Connection Tests");
+
+    // Matching is case-insensitive, because nobody types "SQLSTATE Validation"
+    // with the capitalisation exactly right.
+    auto lowered = run_crusher_with_args(
+        "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;",
+        {"--category", "connection tests"});
+    ASSERT_TRUE(lowered.report.contains("categories")) << lowered.raw_stderr;
+    EXPECT_EQ(lowered.report["categories"].size(), 1u);
+}
+
+TEST_F(CrusherE2EFixture, AFilteredReportSaysThatItWasFiltered) {
+    // A filtered run is a smaller, entirely valid-looking report. Without
+    // this, a consumer comparing its pass rate against a full run reads the
+    // filter as a regression.
+    auto filtered = run_crusher_with_args(
+        "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;",
+        {"--category", "Connection Tests"});
+    ASSERT_TRUE(filtered.report.contains("summary")) << filtered.raw_stderr;
+
+    ASSERT_TRUE(filtered.report.contains("categories_selected"))
+        << "a filtered report must say so: " << report_outline(filtered);
+    EXPECT_EQ(filtered.report["categories_selected"].size(), 1u);
+    ASSERT_TRUE(filtered.report.contains("categories_available"));
+    EXPECT_GT(filtered.report["categories_available"].size(), 1u);
+
+    auto full = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;");
+    ASSERT_TRUE(full.report.contains("summary")) << full.raw_stderr;
+    EXPECT_FALSE(full.report.contains("categories_selected"))
+        << "an unfiltered run must not claim to be filtered";
+}
+
+TEST_F(CrusherE2EFixture, ACategoryThatMatchesNothingIsAnError) {
+    // The alternative is a clean, empty and entirely meaningless report,
+    // which in someone's CI reads as "everything passed".
+    auto run = run_crusher_with_args(
+        "Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;",
+        {"--category", "No Such Category"});
+    EXPECT_NE(run.exit_code, 0)
+        << "a typo'd category must fail, not run nothing and pass";
+    EXPECT_NE(run.raw_stderr.find("no test category matched"), std::string::npos)
+        << "stderr was: " << run.raw_stderr;
+    // And it must name what it does know, or the user is left guessing.
+    EXPECT_NE(run.raw_stderr.find("Connection Tests"), std::string::npos)
+        << "stderr was: " << run.raw_stderr;
+}
+
+// ── G3: severity threshold for the exit code ───────────────────────────────
+//
+// main exited 1 for any FAIL or ERR whatever its severity, so against a real
+// driver the exit code was always 1 — which is why the stress-test composite
+// sets continue-on-error and nobody reads it.
+
+TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
+    // BufferValidation=Lenient produces exactly one FAIL, at severity ERROR,
+    // which puts a threshold on either side of it.
+    const std::string conn =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;BufferValidation=Lenient;";
+
+    auto baseline = run_crusher(conn);
+    ASSERT_TRUE(baseline.report.contains("summary")) << baseline.raw_stderr;
+    ASSERT_EQ(baseline.report["summary"].value("failed", -1), 1)
+        << report_outline(baseline);
+    EXPECT_NE(baseline.exit_code, 0)
+        << "the default must keep failing on any FAIL — G3 is opt-in";
+
+    // Above the failure's severity: nothing to report, exit clean.
+    auto critical = run_crusher_with_args(conn, {"--fail-on", "critical"});
+    EXPECT_EQ(critical.exit_code, 0)
+        << "an ERROR-severity failure must not trip a CRITICAL threshold; "
+        << critical.raw_stderr;
+    // The probe still ran and still failed — the threshold changes the exit
+    // code, not the report. Reporting less would be a different tool.
+    ASSERT_TRUE(critical.report.contains("summary")) << critical.raw_stderr;
+    EXPECT_EQ(critical.report["summary"].value("failed", -1), 1);
+
+    // At the failure's severity, and below it.
+    EXPECT_NE(run_crusher_with_args(conn, {"--fail-on", "error"}).exit_code, 0);
+    EXPECT_NE(run_crusher_with_args(conn, {"--fail-on", "warning"}).exit_code, 0);
+    EXPECT_NE(run_crusher_with_args(conn, {"--fail-on", "info"}).exit_code, 0);
+
+    // And the escape hatch.
+    EXPECT_EQ(run_crusher_with_args(conn, {"--fail-on", "none"}).exit_code, 0);
+}
+
+TEST_F(CrusherE2EFixture, FailOnDoesNotMaskAConnectionFailure) {
+    // --fail-on grades probe results. A driver that will not connect produced
+    // no results to grade, and must not come back as success just because
+    // someone asked for a high threshold.
+    auto run = run_crusher_with_args(
+        "Driver={Mock ODBC Driver};Mode=Failure;", {"--fail-on", "none"});
+    EXPECT_NE(run.exit_code, 0)
+        << "a failed connection is not a passing run; stderr was: "
+        << run.raw_stderr;
+}

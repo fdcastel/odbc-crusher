@@ -210,6 +210,19 @@ void JsonReporter::report_end() {
     }
 }
 
+// G2: a filtered run is a valid report of a smaller thing, and nothing in it
+// used to say so. `categories_selected` is absent on a full run, so its mere
+// presence is the signal; `categories_available` gives a consumer the whole
+// list without having to know this build's registry.
+void JsonReporter::report_selected_categories(
+    const std::vector<std::string>& available,
+    const std::vector<std::string>& selected) {
+    root_["categories_available"] = available;
+    if (selected.size() != available.size()) {
+        root_["categories_selected"] = selected;
+    }
+}
+
 void JsonReporter::report_driver_info(const discovery::DriverInfo::Properties& props) {
     nlohmann::json driver_info;
     driver_info["driver_name"] = props.driver_name;

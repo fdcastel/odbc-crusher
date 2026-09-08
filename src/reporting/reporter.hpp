@@ -41,6 +41,15 @@ public:
 
     // Report the end of testing
     virtual void report_end() = 0;
+
+    // G2: which categories were asked for, and which exist. A filtered run
+    // produces a smaller, entirely valid-looking report, and a consumer
+    // comparing its pass rate against a full run would read the filter as a
+    // regression. Defaulted rather than pure so a reporter that has nothing
+    // to say about it need not.
+    virtual void report_selected_categories(
+        const std::vector<std::string>& /*available*/,
+        const std::vector<std::string>& /*selected*/) {}
 };
 
 } // namespace odbc_crusher::reporting

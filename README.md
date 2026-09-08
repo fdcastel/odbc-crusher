@@ -26,7 +26,32 @@ odbc-crusher "Driver={...}" -o json -f report.json
 
 # JSON output to stdout (pipe to jq, etc.)
 odbc-crusher "Driver={...}" -o json | jq '.summary'
+
+# Run one category instead of all 23 — useful when bisecting a hang
+odbc-crusher --list-categories
+odbc-crusher "Driver={...}" -c "Cursor Behavior Tests"
 ```
+
+### Exit codes
+
+`0` when nothing failed, `1` when a probe failed, `2` on an ODBC error
+(a driver that will not connect), `3` on a usage error.
+
+By default *any* FAIL or ERROR makes the exit code `1`, which against a
+real driver means it is almost always `1`. To gate your own CI on
+something narrower, give `--fail-on` the least severity you care about:
+
+```bash
+# Fail the build only on CRITICAL findings; report everything else.
+odbc-crusher "Driver={...}" --fail-on=critical
+
+# Never fail on probe results — for a scheduled run that only collects.
+odbc-crusher "Driver={...}" --fail-on=none -o json -f report.json
+```
+
+`--fail-on` changes the exit code and nothing else: every probe still
+runs and the report is unchanged. A connection that fails still exits
+non-zero whatever the threshold — there were no results to grade.
 
 ## What It Tests
 
