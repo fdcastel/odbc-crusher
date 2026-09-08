@@ -49,6 +49,25 @@ std::optional<std::string> killed_before_finishing(const CrusherRun& run) {
     return "killed by signal " + std::to_string(run.exit_code - 128);
 }
 
+// D75: a run this scenario can grade, or a skip that says why not.
+//
+// The macro is what makes the check unmissable: it expands to a GTEST_SKIP,
+// which must return from the calling function, so it cannot be written as a
+// helper that returns a bool and gets ignored. Every run_crusher call in a
+// BufferValidation=Lenient scenario goes through it.
+#define SKIP_IF_KILLED(run)                                                   \
+    do {                                                                      \
+        if (auto killed__ = killed_before_finishing(run)) {                   \
+            GTEST_SKIP() << "D75: crusher was " << *killed__                   \
+                         << " under BufferValidation=Lenient, so no probe "   \
+                            "reached a verdict to grade. D71's fault in the " \
+                            "form macOS gives it; these assertions still run "\
+                            "on every platform where the driver manager "     \
+                            "survives.\n"                                     \
+                         << report_outline(run);                              \
+        }                                                                     \
+    } while (false)
+
 // D71: did a category fault during this run?
 //
 // main.cpp replaces a faulting category with a single "<name> (DRIVER CRASH)"
@@ -839,16 +858,7 @@ TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
     auto bad = run_crusher(
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;ResultSetSize=10;"
         "BufferValidation=Lenient;");
-    if (auto killed = killed_before_finishing(bad)) {
-        // D75: the driver manager took the process down before any probe
-        // reached a verdict. Loud on purpose (D51).
-        GTEST_SKIP() << "D75: crusher was " << *killed
-                     << " under BufferValidation=Lenient, so no probe reached "
-                        "a verdict to grade. D71's fault, in the form macOS "
-                        "gives it; the same assertions still run on every "
-                        "platform where the driver manager survives.\n"
-                     << report_outline(bad);
-    }
+    SKIP_IF_KILLED(bad);
     ASSERT_TRUE(bad.report.contains("summary")) << report_outline(bad);
     auto t = find_test(bad.report, "Buffer Validation", "test_null_termination");
     ASSERT_TRUE(t.has_value()) << report_outline(bad);
@@ -1555,16 +1565,7 @@ TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
         "ResultSetSize=10;BufferValidation=Lenient;";
 
     auto baseline = run_crusher(conn);
-    if (auto killed = killed_before_finishing(baseline)) {
-        // D75: the driver manager took the process down before any probe
-        // reached a verdict. Loud on purpose (D51).
-        GTEST_SKIP() << "D75: crusher was " << *killed
-                     << " under BufferValidation=Lenient, so no probe reached "
-                        "a verdict to grade. D71's fault, in the form macOS "
-                        "gives it; the same assertions still run on every "
-                        "platform where the driver manager survives.\n"
-                     << report_outline(baseline);
-    }
+    SKIP_IF_KILLED(baseline);
     ASSERT_TRUE(baseline.report.contains("summary")) << report_outline(baseline);
     ASSERT_GT(baseline.report["summary"].value("failed", -1), 0)
         << "this configuration must produce something to grade\n"
@@ -1596,9 +1597,13 @@ TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
     // less severe one — those are the levels that include it.
     for (size_t i = worst; i < levels.size(); ++i) {
         auto run = run_crusher_with_args(conn, {"--fail-on", levels[i]});
+        // D75: 137 is not 0, so a killed run would have satisfied the
+        // assertion below for entirely the wrong reason. This one was never
+        // failing; it was quietly agreeing.
+        SKIP_IF_KILLED(run);
         EXPECT_NE(run.exit_code, 0)
             << "--fail-on=" << levels[i] << " must trip on a "
-            << levels[worst] << "-severity failure; " << run.raw_stderr;
+            << levels[worst] << "-severity failure; " << report_outline(run);
     }
 
     // A threshold stricter than anything present must not trip. There is no
@@ -1606,6 +1611,7 @@ TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
     // — which is the case on Linux and macOS.
     if (worst > 0) {
         auto stricter = run_crusher_with_args(conn, {"--fail-on", levels[worst - 1]});
+        SKIP_IF_KILLED(stricter);
         EXPECT_EQ(stricter.exit_code, 0)
             << "--fail-on=" << levels[worst - 1] << " must not trip on a "
             << levels[worst] << "-severity failure; " << stricter.raw_stderr;
@@ -1623,6 +1629,7 @@ TEST_F(CrusherE2EFixture, FailOnSeverityDecidesTheExitCode) {
     // And the escape hatch. The report half is unconditional; the exit-code
     // half is not, and D71 is why.
     auto none = run_crusher_with_args(conn, {"--fail-on", "none"});
+    SKIP_IF_KILLED(none);
     ASSERT_TRUE(none.report.contains("summary")) << report_outline(none);
     EXPECT_EQ(none.report["summary"].value("failed", -1),
               baseline.report["summary"].value("failed", -1))
@@ -1746,18 +1753,7 @@ TEST_F(CrusherE2EFixture, OmittedTerminatorsAreGradedByOneProbeNotTwelve) {
     auto clean = run_crusher(base);
     ASSERT_TRUE(clean.report.contains("summary")) << report_outline(clean);
     auto bad = run_crusher(base + "BufferValidation=Lenient;");
-    if (auto killed = killed_before_finishing(bad)) {
-        // D75: the driver manager took the process down before any probe
-        // reached a verdict, so there is nothing here to grade. Loud on
-        // purpose - a gate that goes quiet when it matters is D51.
-        GTEST_SKIP() << "D75: crusher was " << *killed
-                     << " under BufferValidation=Lenient, so no probe reached "
-                        "a verdict to compare. This is D71's fault in its "
-                        "macOS form and is not crusher's to fix; the same "
-                        "comparison still runs on every platform where the "
-                        "driver manager survives.\n"
-                     << report_outline(bad);
-    }
+    SKIP_IF_KILLED(bad);
     ASSERT_TRUE(bad.report.contains("summary")) << report_outline(bad);
 
     // The probes D68 fixed, by the category they live in.
