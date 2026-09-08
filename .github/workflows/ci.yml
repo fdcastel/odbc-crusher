@@ -53,6 +53,13 @@ jobs:
     - name: Run actionlint
       run: ./actionlint -color
 
+    # D62: `sizeof` on a GuardedBuffer is the size of the object, about forty
+    # bytes, and the compiler accepts it. Five survived D62's sweep as read
+    # lengths, and only the byte-identical report diff caught them. Nothing in
+    # the build can, so this is where it gets caught.
+    - name: No sizeof() on a guarded buffer (D62)
+      run: python3 tools/check_sizeof.py
+
   build-mock-driver:
     timeout-minutes: 30
     name: Build Mock ODBC Driver on ${{ matrix.os }}
@@ -526,6 +533,32 @@ jobs:
           rm -f /tmp/d57.json
         done
         done
+
+    # D71 is a known fault: under BufferValidation=Lenient the driver manager
+    # takes a wild write inside SQLExecDirect, and the crash guard replaces
+    # Parameter Binding Tests with one "(DRIVER CRASH)" entry. The diagnostic
+    # step above is continue-on-error, so a *second* category starting to crash
+    # would add one more line to a block nobody fails on and blend into the
+    # expected one.
+    #
+    # Its own step, and not continue-on-error, because that is the whole point.
+    - name: The set of crashing categories must not change (D71)
+      if: always()
+      shell: bash
+      run: |
+        set +e
+        CONN="Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;Catalog=Default;BufferValidation=Lenient;"
+        ASAN_OPTIONS="detect_leaks=0" timeout --kill-after=5 60 ./build-san/src/odbc-crusher "$CONN" -o json -f /tmp/d71.json >/dev/null 2>&1
+        ACTUAL=$(grep -o '"[A-Za-z/ ]* (DRIVER CRASH)"' /tmp/d71.json 2>/dev/null | sort -u | tr '\n' ' ')
+        rm -f /tmp/d71.json
+        EXPECTED='"Parameter Binding Tests (DRIVER CRASH)" '
+        echo "[D71] expected: $EXPECTED"
+        echo "[D71] actual:   $ACTUAL"
+        if [ "$ACTUAL" != "$EXPECTED" ]; then
+          echo "::error::[D71] the set of crashing categories changed. Expected only Parameter Binding Tests, the known unixODBC wild write. A category that has started - or stopped - crashing is a finding: see IMPROVEMENT_PLAN.md D71 and D76."
+          exit 1
+        fi
+        echo "[D71] unchanged"
 
     - name: Run tests under sanitizers
       # Run unit + e2e together — the sanitizer build catches application-
