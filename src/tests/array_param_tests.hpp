@@ -33,6 +33,12 @@ private:
                                SQLINTEGER attr, SQLPOINTER value,
                                const char* attr_name);
 
+    // C9: prepare the array INSERT, W with an ANSI fallback, or skip
+    // saying why. Ten sites had this; two of them discarded the return code
+    // and then blamed row-wise binding for a failed prepare.
+    bool prepare_array_insert(core::OdbcStatement& stmt, TestResult& r,
+                              const char* sql);
+
     bool configure_array_exec(core::OdbcStatement& stmt,
                               TestResult& r, SQLULEN paramset_size);
 

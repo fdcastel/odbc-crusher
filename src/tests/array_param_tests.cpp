@@ -117,6 +117,40 @@ std::vector<TestResult> ArrayParamTests::run() {
 }
 
 // ── Test 1: Column-Wise Array Binding ────────────────────────────────────────
+// C9: the prepare-INSERT prologue, which ten probes opened with.
+//
+// Eight were the same eight lines. The two in `test_row_wise_binding` were
+// not: they discarded the `SQLPrepareW` result entirely, so a driver that
+// could not prepare the INSERT was reported as failing *row-wise binding* -
+// `"Row-wise binding with PARAMSET_SIZE=1 failed (ret=-1)"` - which is a wrong
+// diagnosis, not a missing one. Same family as D68's twelve.
+//
+// The W-then-ANSI shape comes from the tenth site, which already had it. The
+// other nine gave up when `SQLPrepareW` failed, and for an ANSI-only driver
+// that is a skip which need not have happened. Consolidating on the better of
+// two shapes is the reason to consolidate at all; consolidating on the more
+// common one would have spread the weaker behaviour to all ten.
+bool ArrayParamTests::prepare_array_insert(core::OdbcStatement& stmt,
+                                           TestResult& r, const char* sql) {
+    SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
+                                SqlWcharBuf(sql).ptr(), SQL_NTS);
+    if (!SQL_SUCCEEDED(ret)) {
+        ret = SQLPrepare(stmt.get_handle(),
+                         reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql)),
+                         SQL_NTS);
+    }
+    if (SQL_SUCCEEDED(ret)) return true;
+
+    r.status = TestStatus::SKIP_INCONCLUSIVE;
+    r.actual = std::string("Could not prepare `") + sql +
+               "` (W and ANSI both failed; the DDL setup may not have run)";
+    r.suggestion = "This probe needs a prepared array INSERT before it can "
+                   "assert anything about array parameters. Check that "
+                   "ODBC_TEST_ARRAY exists and that the driver accepts "
+                   "parameter markers in an INSERT.";
+    return false;
+}
+
 // D66: set one statement attribute and report if the driver will not take it.
 //
 // The array probes set the attributes their assertions depend on and threw
@@ -189,14 +223,8 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
         constexpr SQLULEN ARRAY_SIZE = 3;
         
         // Prepare an INSERT statement
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Could not prepare parameterized INSERT";
-            return;
-        }
+        if (!prepare_array_insert(stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)")) return;   // C9
+        SQLRETURN ret = SQL_SUCCESS;
         
         // Set column-wise binding (default, but explicit)
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
@@ -351,14 +379,8 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
             SQLLEN name_ind;
         };
         
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Could not prepare parameterized INSERT";
-            return;
-        }
+        if (!prepare_array_insert(stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)")) return;   // C9
+        SQLRETURN ret = SQL_SUCCESS;
         
         // Set row-wise binding: structure size
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
@@ -389,8 +411,10 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
         // Probe step 1: Single-row execute with row-wise binding
         {
             core::OdbcStatement probe_stmt(conn_);
-            SQLPrepareW(probe_stmt.get_handle(),
-                SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
+            // C9: the result was discarded here, so a driver that could
+            // not prepare this INSERT was reported as failing row-wise
+            // binding - a wrong diagnosis rather than a missing one.
+            if (!prepare_array_insert(probe_stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)")) return;
             SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
                 reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(sizeof(ParamRow))), 0);
             SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
@@ -422,8 +446,10 @@ TestResult ArrayParamTests::test_row_wise_array_binding() {
         // to verify the driver correctly offsets by struct size.
         {
             core::OdbcStatement probe_stmt(conn_);
-            SQLPrepareW(probe_stmt.get_handle(),
-                SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
+            // C9: the result was discarded here, so a driver that could
+            // not prepare this INSERT was reported as failing row-wise
+            // binding - a wrong diagnosis rather than a missing one.
+            if (!prepare_array_insert(probe_stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)")) return;
             SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
                 reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(sizeof(ParamRow))), 0);
             SQLSetStmtAttr(probe_stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
@@ -557,14 +583,8 @@ TestResult ArrayParamTests::test_param_status_array() {
         core::OdbcStatement stmt(conn_);
         constexpr SQLULEN ARRAY_SIZE = 3;
         
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Could not prepare statement";
-            return;
-        }
+        if (!prepare_array_insert(stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)")) return;   // C9
+        SQLRETURN ret = SQL_SUCCESS;
         
         // Set up array parameters
         if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
@@ -649,14 +669,8 @@ TestResult ArrayParamTests::test_params_processed_count() {
         constexpr SQLULEN ARRAY_SIZE = 4;
         
         // Prepare
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Could not prepare statement";
-            return;
-        }
+        if (!prepare_array_insert(stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)")) return;   // C9
+        SQLRETURN ret = SQL_SUCCESS;
         
         // Configure array execution
         if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
@@ -720,14 +734,7 @@ TestResult ArrayParamTests::test_array_with_null_values() {
         constexpr SQLULEN ARRAY_SIZE = 3;
         
         // Prepare
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)").ptr(), SQL_NTS);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Could not prepare statement";
-            return;
-        }
+        if (!prepare_array_insert(stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)")) return;   // C9
         
         // Configure
         if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
@@ -802,14 +809,8 @@ TestResult ArrayParamTests::test_param_operation_array() {
         constexpr SQLULEN ARRAY_SIZE = 4;
         
         // Prepare
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Could not prepare statement";
-            return;
-        }
+        if (!prepare_array_insert(stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)")) return;   // C9
+        SQLRETURN ret = SQL_SUCCESS;
         
         // Configure array execution
         if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
@@ -905,14 +906,8 @@ TestResult ArrayParamTests::test_paramset_size_one() {
         core::OdbcStatement stmt(conn_);
         
         // Prepare
-        SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-            SqlWcharBuf("INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)").ptr(), SQL_NTS);
-        
-        if (!SQL_SUCCEEDED(ret)) {
-            r.status = TestStatus::SKIP_INCONCLUSIVE;
-            r.actual = "Could not prepare statement";
-            return;
-        }
+        if (!prepare_array_insert(stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID) VALUES (?)")) return;   // C9
+        SQLRETURN ret = SQL_SUCCESS;
         
         // Explicitly set PARAMSET_SIZE = 1
         ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
@@ -1002,20 +997,10 @@ TestResult ArrayParamTests::test_param_status_per_row_partial_failure() {
             core::OdbcStatement stmt(conn_);
             constexpr SQLULEN kSize = 5;
 
-            const char* sql_a = "INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)";
-            SQLRETURN ret = SQLPrepareW(stmt.get_handle(),
-                SqlWcharBuf(sql_a).ptr(), SQL_NTS);
-            if (!SQL_SUCCEEDED(ret)) {
-                ret = SQLPrepare(stmt.get_handle(),
-                    reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql_a)),
-                    SQL_NTS);
-            }
-            if (!SQL_SUCCEEDED(ret)) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not prepare INSERT (W and ANSI both failed; "
-                           "DDL setup may have failed)";
-                return;
-            }
+            // C9: this is where the W-then-ANSI fallback came
+            // from; the helper carries it to the other nine.
+            if (!prepare_array_insert(stmt, r, "INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)")) return;
+            SQLRETURN ret = SQL_SUCCESS;
 
             // D66: this was unchecked while the PARAMSET_SIZE call just
             // below it was checked — the probe already knew the question

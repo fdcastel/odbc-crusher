@@ -1836,3 +1836,56 @@ TEST(ReportOutlineTest, SurvivesAReportThatIsNotAnObject) {
     EXPECT_NE(out.find("no summary in the report"), std::string::npos) << out;
     EXPECT_NE(out.find("exit_code=134"), std::string::npos) << out;
 }
+
+
+// ── C9: a failed prepare says which statement failed ──────────────────────
+//
+// Ten probes opened with the same prepare-INSERT prologue and eight of them
+// reported "Could not prepare parameterized INSERT" or "Could not prepare
+// statement" on failure - which of the two INSERTs it was, and so whether the
+// DDL or the parameter markers were at fault, never reached the report.
+//
+// FailOn=SQLPrepare is the configuration that makes every one of them fail.
+TEST_F(CrusherE2EFixture, AFailedPrepareNamesTheStatementItCouldNotPrepare) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;FailOn=SQLPrepare;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+
+    const nlohmann::json* arrays = nullptr;
+    for (const auto& cat : run.report["categories"]) {
+        if (cat.value("name", std::string{}).find("Array") != std::string::npos) {
+            arrays = &cat;
+            break;
+        }
+    }
+    ASSERT_NE(arrays, nullptr) << report_outline(run);
+
+    size_t skipped = 0;
+    for (const auto& t : (*arrays)["tests"]) {
+        const auto status = t.value("status", std::string{});
+        const auto actual = t.value("actual", std::string{});
+        const auto name = t.value("test_name", std::string{});
+
+        // C9: a probe that blames array binding for a prepare it never checked
+        // is a wrong diagnosis, not a missing one - the shape D68 found twelve
+        // of. Nothing here may report one while the prepare is what failed.
+        EXPECT_EQ(actual.find("Row-wise binding with PARAMSET_SIZE"),
+                  std::string::npos)
+            << name << " blamed row-wise binding for a failed prepare: "
+            << actual;
+
+        if (status != "SKIP_INCONCLUSIVE") continue;
+        if (actual.find("Could not prepare") == std::string::npos) continue;
+        ++skipped;
+        EXPECT_NE(actual.find("INSERT INTO ODBC_TEST_ARRAY"), std::string::npos)
+            << name << " skipped without saying which statement it could not "
+               "prepare: " << actual;
+    }
+
+    EXPECT_GE(skipped, 6u)
+        << "FailOn=SQLPrepare should stop most of this category; if it stopped "
+           "almost none, the lever is not reaching the prepare and the rest of "
+           "this scenario proves nothing\n"
+        << report_outline(run);
+}
