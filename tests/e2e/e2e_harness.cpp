@@ -64,17 +64,23 @@ fs::path unique_tmp_json() {
 namespace {
 
 // D55: how long a single crusher invocation may take before the harness gives
-// up on it. The whole 29-scenario suite runs in about a second on a CI runner,
+// up on it. The whole 30-scenario suite runs in about a second on a CI runner,
 // so this is not a performance bound - it is the difference between a hung
 // child failing one test with its partial report attached and stalling the job
 // until GitHub's six-hour cap. Found the hard way: a sanitizer build wedged on
 // the first scenario and burned an hour before anyone looked.
+//
+// D57 lowered it from 180s. A scenario can run two children - one for
+// has_runnable_mock(), one of its own - and two 180s deadlines do not fit
+// inside ctest's 300s, so a wedge showed up as a ctest timeout with no output
+// rather than as the harness reporting what it killed. At 60s both fit, and
+// 60x the natural runtime is still generous for a sanitizer build.
 long long spawn_timeout_seconds() {
     if (const char* env = std::getenv("ODBC_CRUSHER_E2E_TIMEOUT_SECONDS")) {
         const long long parsed = std::atoll(env);
         if (parsed > 0) return parsed;
     }
-    return 180;
+    return 60;
 }
 
 // Shell out to the binary, capturing stderr to a file and stdout either to

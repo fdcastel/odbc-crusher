@@ -435,6 +435,38 @@ jobs:
         DRIVER_ABS=$(readlink -f "$DRIVER")
         sudo ./mock-driver-artifact/install/register.sh "$DRIVER_ABS"
 
+    - name: Where does crusher wedge at exit? (D57)
+      # D57: under ASan on Linux, crusher writes its complete report and then
+      # does not exit - proven by ModeFailureFailsAtConnect passing at exactly
+      # the harness deadline, which requires has_runnable_mock() to have seen
+      # a report carrying a `summary`. The two runs below separate
+      # LeakSanitizer's at-exit scan from everything else in teardown; `-f`
+      # keeps the report off stdout so the exit status is the whole signal.
+      if: always()
+      continue-on-error: true
+      shell: bash
+      run: |
+        set +e
+        CONN="Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;"
+        for opts in "detect_leaks=1" "detect_leaks=0"; do
+          echo "=== ASAN_OPTIONS=$opts ==="
+          ASAN_OPTIONS="$opts:abort_on_error=1" \
+            timeout --kill-after=5 45 \
+            ./build-san/src/odbc-crusher "$CONN" -o json -f /tmp/d57.json
+          rc=$?
+          if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then
+            echo "[D57] $opts -> WEDGED (killed at 45s)"
+          else
+            echo "[D57] $opts -> exited rc=$rc"
+          fi
+          if grep -q '"summary"' /tmp/d57.json 2>/dev/null; then
+            echo "[D57] the report was complete before the kill"
+          else
+            echo "[D57] no report, or no summary in it"
+          fi
+          rm -f /tmp/d57.json
+        done
+
     - name: Run tests under sanitizers
       # Run unit + e2e together — the sanitizer build catches application-
       # side leaks/UB in both the test plumbing and the §5.1 subprocess
@@ -447,6 +479,10 @@ jobs:
       # guard has no chance to run. Exclude that suite from the sanitizer
       # config — it stays covered by the non-sanitizer CI jobs.
       env:
+        # D57: crusher wedges at exit under ASan, so every run here hits the
+        # harness deadline. 20s keeps the job inside its timeout-minutes while
+        # the wedge itself is open.
+        ODBC_CRUSHER_E2E_TIMEOUT_SECONDS: "20"
         ASAN_OPTIONS: detect_leaks=1:symbolize=1:abort_on_error=1
         UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
       # D55: --timeout, because this is the job that wedged. Without it
