@@ -121,7 +121,26 @@ runs:
             return 1
           fi
         }
-        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" -v 2>&1 | tee crusher-report.txt
+        # F12: --fail-on=none, so probe results do not set the exit code and
+        # a non-zero one means the *tool* did not finish. G3 added this flag;
+        # before it, crusher exited 1 for any FAIL and the only way to keep
+        # the job green was continue-on-error, which also swallowed a killed
+        # run. `set +e` and PIPESTATUS because the pipe into tee would
+        # otherwise report tee's status, which is always 0.
+        set +e
+        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -v 2>&1 | tee crusher-report.txt
+        CRUSHER_RC=${PIPESTATUS[0]}
+        set -e
+        echo "crusher exit code: $CRUSHER_RC"
+        case "$CRUSHER_RC" in
+          0) ;;
+          124|137)
+            echo "::warning::crusher was KILLED at the 570s timeout (exit $CRUSHER_RC) — the driver wedged. The report below is partial." ;;
+          2)
+            echo "::warning::crusher could not connect (exit 2) — see the report for the ODBC diagnostics." ;;
+          *)
+            echo "::warning::crusher exited $CRUSHER_RC, which is not a probe result — the run did not complete normally." ;;
+        esac
 
     - name: Run odbc-crusher (JSON)
       shell: bash
@@ -147,7 +166,15 @@ runs:
             return 1
           fi
         }
-        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" -o json -f crusher-report.json
+        # F12: see the text run above. Same reasoning, no pipe to work around.
+        set +e
+        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -o json -f crusher-report.json
+        CRUSHER_RC=$?
+        set -e
+        echo "crusher exit code: $CRUSHER_RC"
+        if [ "$CRUSHER_RC" -ne 0 ]; then
+          echo "::warning::crusher exited $CRUSHER_RC on the JSON run; the report may be partial or missing."
+        fi
 
     - name: Upload report
       uses: actions/upload-artifact@v4
