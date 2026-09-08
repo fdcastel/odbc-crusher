@@ -23,6 +23,10 @@ struct CrusherRun {
     std::string raw_stderr;         // Captured for diagnostics
     std::string raw_stdout;         // Only populated by run_crusher_stdout()
     bool launched = false;          // false iff the binary couldn't be invoked
+    // D55: the child outlived its deadline and was killed. `report` then holds
+    // whatever F2's snapshotting had written, which names the category crusher
+    // was in when it wedged.
+    bool timed_out = false;
 };
 
 // Run odbc-crusher against the given connection string. Always uses

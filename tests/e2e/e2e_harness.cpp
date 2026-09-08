@@ -11,8 +11,13 @@
 
 #ifdef _WIN32
 #include <process.h>   // _getpid
+#include <windows.h>
 #else
+#include <csignal>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <unistd.h>    // getpid
+extern char** environ;
 #endif
 
 #ifndef CRUSHER_BIN_PATH
@@ -58,13 +63,29 @@ fs::path unique_tmp_json() {
 
 namespace {
 
+// D55: how long a single crusher invocation may take before the harness gives
+// up on it. The whole 29-scenario suite runs in about a second on a CI runner,
+// so this is not a performance bound - it is the difference between a hung
+// child failing one test with its partial report attached and stalling the job
+// until GitHub's six-hour cap. Found the hard way: a sanitizer build wedged on
+// the first scenario and burned an hour before anyone looked.
+long long spawn_timeout_seconds() {
+    if (const char* env = std::getenv("ODBC_CRUSHER_E2E_TIMEOUT_SECONDS")) {
+        const long long parsed = std::atoll(env);
+        if (parsed > 0) return parsed;
+    }
+    return 180;
+}
+
 // Shell out to the binary, capturing stderr to a file and stdout either to
 // the null device (when the report goes to `-f`) or to a file (when it goes
-// to stdout). Returns the exit code.
+// to stdout). Returns the exit code; sets `timed_out` and kills the child if
+// it outlives spawn_timeout_seconds().
 int spawn(const std::string& connection_string,
           const fs::path& report_file,       // empty => report goes to stdout
           const fs::path& stdout_log,        // empty => stdout to null device
-          const fs::path& stderr_log) {
+          const fs::path& stderr_log,
+          bool& timed_out) {
     std::string cmd = quote_arg(CRUSHER_BIN_PATH);
     cmd += ' ';
     cmd += quote_arg(connection_string);
@@ -89,11 +110,104 @@ int spawn(const std::string& connection_string,
     // Wrapping the whole command in quotes is required on Windows when
     // both the program and an argument are quoted — cmd.exe strips the
     // outermost pair before parsing.
+    // D55: std::system() waits forever, so this runs the shell itself and
+    // enforces a deadline. A shell is still in the middle rather than an exec
+    // of the binary directly because of the redirections built above.
+    timed_out = false;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(spawn_timeout_seconds());
+
 #ifdef _WIN32
-    std::string wrapped = "\"" + cmd + "\"";
-    return std::system(wrapped.c_str());
+    std::string command_line = "cmd.exe /c \"" + cmd + "\"";
+
+    // A job object, because the process this spawns is cmd.exe and the one
+    // that wedges is odbc-crusher underneath it: TerminateProcess on the
+    // shell leaves the grandchild running, still holding the inherited
+    // stderr handle. Observed exactly that on the first attempt. Everything
+    // in the job dies together, and KILL_ON_JOB_CLOSE covers the paths that
+    // return early as well.
+    HANDLE job = CreateJobObjectA(nullptr, nullptr);
+    if (job) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                &limits, sizeof(limits));
+    }
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    // Suspended, so the child is in the job before it can spawn anything of
+    // its own that would escape it.
+    if (!CreateProcessA(nullptr, command_line.data(), nullptr, nullptr, FALSE,
+                        CREATE_SUSPENDED, nullptr, nullptr, &si, &pi)) {
+        if (job) CloseHandle(job);
+        return -1;
+    }
+    if (job) AssignProcessToJobObject(job, pi.hProcess);
+    ResumeThread(pi.hThread);
+    CloseHandle(pi.hThread);
+
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    if (WaitForSingleObject(
+            pi.hProcess,
+            static_cast<DWORD>(remaining.count() > 0 ? remaining.count() : 0))
+        == WAIT_TIMEOUT) {
+        timed_out = true;
+        if (job) {
+            TerminateJobObject(job, 1);
+        } else {
+            TerminateProcess(pi.hProcess, 1);
+        }
+        WaitForSingleObject(pi.hProcess, 5000);
+    }
+    DWORD exit_code = 0;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hProcess);
+    if (job) CloseHandle(job);
+    return static_cast<int>(exit_code);
 #else
-    return std::system(cmd.c_str());
+    const char* argv[] = {"/bin/sh", "-c", cmd.c_str(), nullptr};
+
+    // Own process group, for the same reason as the job object above: the
+    // process spawned here is /bin/sh and the one that wedges is odbc-crusher
+    // underneath it, so the kill has to name the group rather than the shell.
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&attr, 0);
+
+    pid_t pid = 0;
+    const int spawn_rc = posix_spawn(&pid, "/bin/sh", nullptr, &attr,
+                                     const_cast<char* const*>(argv), environ);
+    posix_spawnattr_destroy(&attr);
+    if (spawn_rc != 0) {
+        return -1;
+    }
+
+    int status = 0;
+    for (;;) {
+        const pid_t done = waitpid(pid, &status, WNOHANG);
+        if (done == pid) break;
+        if (done < 0) return -1;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            timed_out = true;
+            // SIGKILL, not SIGTERM: the child being killed here is by
+            // definition one that stopped making progress, and a driver that
+            // wedged inside an ODBC call will not run a signal handler out
+            // of it either. Negative pid: the whole group, so odbc-crusher
+            // goes with the shell that launched it.
+            kill(-pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return -1;
 #endif
 }
 
@@ -121,9 +235,19 @@ CrusherRun run_crusher(const std::string& connection_string) {
     fs::remove(tmp, ec);
     fs::remove(stderr_log, ec);
 
-    out.exit_code = spawn(connection_string, tmp, fs::path{}, stderr_log);
+    out.exit_code = spawn(connection_string, tmp, fs::path{}, stderr_log,
+                          out.timed_out);
     out.launched = true;
     out.raw_stderr = slurp_and_remove(stderr_log);
+    if (out.timed_out) {
+        // D55: F2 makes crusher snapshot its report after every category, so
+        // what it left on disk names the last category it finished - which is
+        // the diagnosis, and the reason the report is still read below.
+        out.raw_stderr += "\n[harness] crusher did not exit within " +
+                          std::to_string(spawn_timeout_seconds()) +
+                          "s and was killed. The report below is what it had "
+                          "written when that happened.";
+    }
 
     if (fs::exists(tmp, ec)) {
         std::ifstream in(tmp);
@@ -153,7 +277,8 @@ CrusherRun run_crusher_stdout(const std::string& connection_string) {
     fs::remove(stdout_log, ec);
     fs::remove(stderr_log, ec);
 
-    out.exit_code = spawn(connection_string, fs::path{}, stdout_log, stderr_log);
+    out.exit_code = spawn(connection_string, fs::path{}, stdout_log, stderr_log,
+                          out.timed_out);
     out.launched = true;
     out.raw_stderr = slurp_and_remove(stderr_log);
     out.raw_stdout = slurp_and_remove(stdout_log);

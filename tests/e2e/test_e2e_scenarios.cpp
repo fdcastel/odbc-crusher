@@ -6,6 +6,8 @@
 // — an environment problem, not a regression to flag.
 #include <cstdlib>
 #include <gtest/gtest.h>
+#include <chrono>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -113,6 +115,15 @@ TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
                 bucket += cat_name + "/" + t.value("test_name", std::string{});
                 if (status != "FAIL" && status != "ERROR") {
                     bucket += " (" + status + ")";
+                }
+                // D56: the name alone has never been enough. This canary
+                // fires on a platform one cannot attach a debugger to, and
+                // reading the probe's own account of what it found is the
+                // whole difference between a diagnosis and another CI round
+                // trip - which is what D54 had just written into `actual`.
+                const auto actual = t.value("actual", std::string{});
+                if (!actual.empty()) {
+                    bucket += " [" + actual.substr(0, 200) + "]";
                 }
             }
         }
@@ -1229,4 +1240,72 @@ TEST_F(CrusherE2EFixture, DiscardedGetDataRcDoesNotBecomeARollbackPass) {
                       << actual << std::endl;
         }
     }
+}
+// Count the harness's own temp files still sitting in the temp directory.
+// run_crusher() removes both of its files before returning, so anything left
+// is a handle someone else is holding - see D55 below.
+size_t leftover_harness_temp_files() {
+    size_t count = 0;
+    std::error_code ec;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(
+             std::filesystem::temp_directory_path(), ec)) {
+        const auto name = entry.path().filename().string();
+        if (name.rfind("crusher_e2e_", 0) == 0) ++count;
+    }
+    return count;
+}
+
+// D55 - the harness could wait on a hung child forever. The sanitizer job
+// proved it: crusher wedged on the first scenario and the CI job sat on that
+// one test for over an hour, heading for GitHub's six-hour cap, while the
+// other thirteen jobs had long since finished.
+//
+// `Latency=` makes every ODBC call sleep, and a sleep long enough is
+// indistinguishable from a wedge - which is exactly the point. The driver
+// sleeps for thirty seconds on connect; the harness is told to give up after
+// two.
+TEST_F(CrusherE2EFixture, AWedgedCrusherIsKilledRatherThanWaitedOn) {
+    struct EnvGuard {
+        explicit EnvGuard(const char* value) {
+#ifdef _WIN32
+            _putenv_s("ODBC_CRUSHER_E2E_TIMEOUT_SECONDS", value);
+#else
+            setenv("ODBC_CRUSHER_E2E_TIMEOUT_SECONDS", value, 1);
+#endif
+        }
+        ~EnvGuard() {
+#ifdef _WIN32
+            _putenv_s("ODBC_CRUSHER_E2E_TIMEOUT_SECONDS", "");
+#else
+            unsetenv("ODBC_CRUSHER_E2E_TIMEOUT_SECONDS");
+#endif
+        }
+    } guard("2");
+
+    const auto started = std::chrono::steady_clock::now();
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;Latency=30s;");
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - started);
+
+    EXPECT_TRUE(run.timed_out)
+        << "the child slept for thirty seconds and the harness waited for it; "
+           "exit_code=" << run.exit_code << " stderr=" << run.raw_stderr;
+    EXPECT_LT(elapsed.count(), 25)
+        << "the harness took " << elapsed.count()
+        << "s to give up on a two-second deadline";
+    EXPECT_NE(run.raw_stderr.find("did not exit within"), std::string::npos)
+        << "a killed child must say so, or the failure it causes downstream "
+           "looks like a driver bug; stderr was: " << run.raw_stderr;
+
+    // Giving up on the child is not the same as killing it. The first cut of
+    // this fix terminated the shell and left odbc-crusher running, still
+    // holding the stderr file the redirection had opened - so the harness
+    // could not delete it, and the leftover is the orphan's signature. On
+    // POSIX the group kill makes this structurally true rather than
+    // observable; the assertion is the same either way.
+    EXPECT_EQ(leftover_harness_temp_files(), 0)
+        << "the harness left temp files behind, which on Windows means a "
+           "child of the killed shell is still holding them open";
 }
