@@ -512,9 +512,14 @@ jobs:
             # swallowing it. The guard installs its handlers after ASan's and
             # overrides them, which is why three rounds of buffer fixes
             # produced a "(DRIVER CRASH)" line and no sanitizer diagnostic.
-            CAT=$(grep -o '"[A-Za-z ]* (DRIVER CRASH)"' /tmp/d57.json | head -n1 | sed 's/^"//; s/ (DRIVER CRASH)"$//')
-            echo "[D70] re-running '$CAT' with the crash guard off"
-            ODBC_CRUSHER_NO_CRASH_GUARD=1 ASAN_OPTIONS="detect_leaks=0:abort_on_error=1" timeout --kill-after=5 60 ./build-san/src/odbc-crusher "$CONN" --category "$CAT" -o json -f /tmp/d70.json 2>&1 | tail -n 60
+            #
+            # The whole suite, not --category. Re-running the crashing
+            # category alone finished cleanly, which is its own finding: the
+            # fault needs state earlier categories build up - the mock's
+            # catalog is process-global (I6) and every category adds to it -
+            # so one category by itself is a different scenario.
+            echo "[D70] re-running the whole suite with the crash guard off"
+            ODBC_CRUSHER_NO_CRASH_GUARD=1 ASAN_OPTIONS="detect_leaks=0:abort_on_error=1" timeout --kill-after=5 120 ./build-san/src/odbc-crusher "$CONN" -o json -f /tmp/d70.json 2>&1 | tail -n 80
             echo "[D70] that run finished"
             rm -f /tmp/d70.json
           fi
