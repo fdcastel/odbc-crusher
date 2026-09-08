@@ -25,6 +25,11 @@ protected:
     void drop_test_table();
 
 private:
+    // C9: the two attributes that make an array execution an
+    // array execution, set together and - unlike before - checked.
+    bool configure_array_exec(core::OdbcStatement& stmt,
+                              TestResult& r, SQLULEN paramset_size);
+
     // Stores the last DDL error message for reporting in skip suggestions
     std::string last_ddl_error_;
 

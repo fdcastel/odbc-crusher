@@ -117,6 +117,42 @@ std::vector<TestResult> ArrayParamTests::run() {
 }
 
 // ── Test 1: Column-Wise Array Binding ────────────────────────────────────────
+// C9: the two attributes that make an array execution an array execution.
+//
+// These were set inline at a dozen sites and the return code discarded at
+// every one but the first. They are not decoration: if a driver refuses
+// SQL_ATTR_PARAMSET_SIZE and the probe carries on, it executes a single row
+// while asserting about many, and reports PASS for a driver that has no
+// array support at all. That is the D29 shape - a probe passing because
+// nothing checked whether the thing it depends on was accepted.
+//
+// Returns false with `r` already filled in, so a caller can `return`.
+bool ArrayParamTests::configure_array_exec(core::OdbcStatement& stmt,
+                                           TestResult& r,
+                                           SQLULEN paramset_size) {
+    SQLRETURN ret = SQLSetStmtAttr(
+        stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
+        reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
+    if (!SQL_SUCCEEDED(ret)) {
+        r.status = TestStatus::SKIP_INCONCLUSIVE;
+        r.actual = "SQLSetStmtAttr(SQL_ATTR_PARAM_BIND_TYPE) failed";
+        return false;
+    }
+
+    ret = SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                         reinterpret_cast<SQLPOINTER>(paramset_size), 0);
+    if (!SQL_SUCCEEDED(ret)) {
+        // B3: an optional attribute, so SKIP is usually right - but only
+        // when the driver actually says "not implemented".
+        report_failure(r, SQL_HANDLE_STMT, stmt.get_handle(),
+                       "SQLSetStmtAttr(SQL_ATTR_PARAMSET_SIZE > 1)");
+        r.suggestion = "Implement SQL_ATTR_PARAMSET_SIZE support per ODBC 3.x "
+                       "spec §Arrays of Parameters";
+        return false;
+    }
+    return true;
+}
+
 TestResult ArrayParamTests::test_column_wise_array_binding() {
     return run_test(
         "test_column_wise_array_binding", "SQLSetStmtAttr/SQLBindParameter/SQLExecute",
@@ -506,10 +542,7 @@ TestResult ArrayParamTests::test_param_status_array() {
         }
         
         // Set up array parameters
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
-            reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
-            reinterpret_cast<SQLPOINTER>(ARRAY_SIZE), 0);
+        if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
         
         // Set up status array
         SQLUSMALLINT status_array[ARRAY_SIZE];
@@ -601,10 +634,7 @@ TestResult ArrayParamTests::test_params_processed_count() {
         }
         
         // Configure array execution
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
-            reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
-            reinterpret_cast<SQLPOINTER>(ARRAY_SIZE), 0);
+        if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
         
         // Set params processed pointer
         SQLULEN params_processed = 0;
@@ -675,10 +705,7 @@ TestResult ArrayParamTests::test_array_with_null_values() {
         }
         
         // Configure
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
-            reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
-            reinterpret_cast<SQLPOINTER>(ARRAY_SIZE), 0);
+        if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
         
         SQLUSMALLINT status_array[ARRAY_SIZE] = {};
         SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, status_array, 0);
@@ -759,10 +786,7 @@ TestResult ArrayParamTests::test_param_operation_array() {
         }
         
         // Configure array execution
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_BIND_TYPE,
-            reinterpret_cast<SQLPOINTER>(SQL_PARAM_BIND_BY_COLUMN), 0);
-        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
-            reinterpret_cast<SQLPOINTER>(ARRAY_SIZE), 0);
+        if (!configure_array_exec(stmt, r, ARRAY_SIZE)) return;
         
         // Set up operation array: skip rows 1 and 3 (0-indexed)
         SQLUSMALLINT operation_array[ARRAY_SIZE] = {
