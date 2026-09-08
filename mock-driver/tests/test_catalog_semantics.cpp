@@ -136,7 +136,9 @@ TEST_F(CatalogSemanticsTest, EscapedWildcardMatchesTheLiteralCharacter) {
     const auto names = ColumnValues(3);
     EXPECT_EQ(names.size(), 1u)
         << "the escape was ignored, so `_` matched any character";
-    if (names.size() == 1) EXPECT_EQ(names[0], "P_B");
+    // E5: braces, because EXPECT_EQ expands to an if/else and a
+    // braceless if around it is the dangling-else GCC warns about.
+    if (names.size() == 1) { EXPECT_EQ(names[0], "P_B"); }
 }
 
 TEST_F(CatalogSemanticsTest, UnescapedUnderscoreStillMatchesAnyCharacter) {
@@ -176,7 +178,9 @@ TEST_F(CatalogSemanticsTest, MetadataIdTurnsOffPatternMatching) {
     const auto names = ColumnValues(3);
     EXPECT_EQ(names.size(), 1u)
         << "SQL_ATTR_METADATA_ID did not turn off pattern matching";
-    if (names.size() == 1) EXPECT_EQ(names[0], "M_B");
+    // E5: braces, because EXPECT_EQ expands to an if/else and a
+    // braceless if around it is the dangling-else GCC warns about.
+    if (names.size() == 1) { EXPECT_EQ(names[0], "M_B"); }
 }
 
 // Identifiers are case-insensitive unless quoted.
