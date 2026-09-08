@@ -447,9 +447,13 @@ jobs:
       shell: bash
       run: |
         set +e
-        CONN="Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;"
+        # D63: the Lenient configuration is the one still failing — the
+        # driver omits its terminator there, which is the whole point of
+        # the lever and the path every buffer fix has been about.
+        BASE="Driver={Mock ODBC Driver};Mode=Success;ResultSetSize=10;"
+        for CONN in "$BASE" "${BASE}Catalog=Default;BufferValidation=Lenient;"; do
         for opts in "detect_leaks=1" "detect_leaks=0"; do
-          echo "=== ASAN_OPTIONS=$opts ==="
+          echo "=== ASAN_OPTIONS=$opts CONN=$CONN ==="
           ASAN_OPTIONS="$opts:abort_on_error=1" \
             timeout --kill-after=5 45 \
             ./build-san/src/odbc-crusher "$CONN" -o json -f /tmp/d57.json
@@ -464,7 +468,15 @@ jobs:
           else
             echo "[D57] no report, or no summary in it"
           fi
+          # D63: a category that faults is replaced by a single
+          # "(DRIVER CRASH)" entry, so the probe simply vanishes from
+          # the report - which is how the last e2e failure presents.
+          if grep -q "DRIVER CRASH" /tmp/d57.json 2>/dev/null; then
+            echo "[D57] a category crashed:"
+            grep -o '"[A-Za-z ]* (DRIVER CRASH)"' /tmp/d57.json | sort -u
+          fi
           rm -f /tmp/d57.json
+        done
         done
 
     - name: Run tests under sanitizers

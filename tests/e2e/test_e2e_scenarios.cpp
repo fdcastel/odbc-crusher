@@ -12,11 +12,48 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 #include "e2e_harness.hpp"
 
 using namespace odbc_crusher::e2e;
+
+// D63: what a report actually held, for the message on a lookup that missed.
+//
+// `ASSERT_TRUE(t.has_value())` prints "Actual: false" and stops there, so a
+// probe absent from the report is indistinguishable from a probe present and
+// wrong - and from a run the harness killed. The categories, their sizes and
+// the run's own stderr are all to hand; this puts them in the failure.
+std::string report_outline(const CrusherRun& run) {
+    std::ostringstream out;
+    if (const auto& summary = run.report["summary"]; !summary.is_null()) {
+        out << "summary: total=" << summary.value("total_tests", -1)
+            << " passed=" << summary.value("passed", -1)
+            << " failed=" << summary.value("failed", -1)
+            << " skipped=" << summary.value("skipped", -1)
+            << " errors=" << summary.value("errors", -1) << "\n";
+    } else {
+        out << "no summary in the report\n";
+    }
+    out << "complete=" << (run.report.value("complete", false) ? "true" : "false")
+        << " timed_out=" << (run.timed_out ? "true" : "false")
+        << " exit_code=" << run.exit_code << "\n";
+    if (run.report.contains("categories")) {
+        out << "categories:";
+        for (const auto& cat : run.report["categories"]) {
+            out << " " << cat.value("name", std::string{"?"}) << "("
+                << (cat.contains("tests") ? cat["tests"].size() : 0) << ")";
+        }
+        out << "\n";
+    } else {
+        out << "no categories key at all\n";
+    }
+    if (!run.raw_stderr.empty()) {
+        out << "stderr: " << run.raw_stderr.substr(0, 2000) << "\n";
+    }
+    return out.str();
+}
 
 namespace {
 
@@ -403,7 +440,7 @@ TEST_F(CrusherE2EFixture, SilentCorruptionMangleVarcharTripsVarcharRoundTrip) {
 
     auto t = find_test(run.report, "Parameter Binding Tests",
                        "test_bindparam_int_to_varchar_roundtrip");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
     EXPECT_EQ(t->value("status", std::string{}), "FAIL")
         << "Under MangleVarchar, the int→varchar round-trip MUST fail "
            "(stored values come back with sentinel appended).";
@@ -472,7 +509,7 @@ TEST_F(CrusherE2EFixture, ArrayBindRowFailsAtProducesMixedStatus) {
 
     auto t = find_test(run.report, "Array Parameter Tests",
                        "test_param_status_per_row_partial_failure");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
     EXPECT_EQ(t->value("status", std::string{}), "PASS")
         << "Probe must PASS — succ=4 err=1 is the correct mixed outcome.";
     // The actual string must contain the ERR marker for row 3 specifically.
@@ -502,7 +539,7 @@ TEST_F(CrusherE2EFixture, SupportsArrayBindFalseDoesNotFailProbe) {
 
     auto t = find_test(run.report, "Array Parameter Tests",
                        "test_paramset_size_unsupported_returns_error");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
     const std::string status = t->value("status", std::string{});
     EXPECT_NE(status, "FAIL")
         << "Probe must not FAIL when driver claims unsupported and returns "
@@ -761,7 +798,7 @@ TEST_F(CrusherE2EFixture, NullTerminationProbeCatchesAnUnterminatedString) {
         "BufferValidation=Lenient;");
     ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
     auto t = find_test(bad.report, "Buffer Validation", "test_null_termination");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(bad);
     const auto status = t->value("status", std::string{});
     const auto actual = t->value("actual", std::string{});
 
@@ -816,7 +853,7 @@ TEST_F(CrusherE2EFixture, BindColIntegerProbeCatchesAWrongValue) {
         "SilentCorruption=SkewNumeric;");
     ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
     auto t = find_test(bad.report, "Statement Tests", "test_bind_col_integer");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(bad);
     EXPECT_EQ(t->value("status", std::string{}), "FAIL")
         << "SELECT 42 came back as 43 through the bound column; with the old "
            "`||` this still reported PASS.";
@@ -840,7 +877,7 @@ TEST_F(CrusherE2EFixture, FetchBoundVsGetDataProbeCatchesADisagreement) {
         "SilentCorruption=SkewNumericBound;");
     ASSERT_TRUE(bad.report.contains("summary")) << bad.raw_stderr;
     auto t = find_test(bad.report, "Statement Tests", "test_fetch_bound_vs_getdata");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(bad);
     EXPECT_EQ(t->value("status", std::string{}), "FAIL")
         << "bound and SQLGetData returned different values for one column";
     EXPECT_EQ(t->value("severity", std::string{}), "CRITICAL")
@@ -869,7 +906,7 @@ TEST_F(CrusherE2EFixture, ParamsetSizeOneSkipsRatherThanFailsWhenAttrsDeclined) 
     ASSERT_TRUE(declined.report.contains("summary")) << declined.raw_stderr;
     auto t = find_test(declined.report, "Array Parameter Tests",
                        "test_paramset_size_one");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(declined);
     EXPECT_EQ(t->value("status", std::string{}), "SKIP_UNSUPPORTED")
         << "declining an optional Level 1 attribute is not a Core failure";
 }
@@ -907,7 +944,7 @@ TEST_F(CrusherE2EFixture, PerRowWarningsDoNotTruncateFetchLoops) {
 
     // Name the probe the plan calls out, so a failure points somewhere useful.
     auto t = find_test(warning.report, "Cursor Behavior Tests", "test_forward_only_past_end");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(quiet);
     EXPECT_NE(t->value("status", std::string{}), "FAIL")
         << "actual: " << t->value("actual", std::string{});
 }
@@ -1075,7 +1112,7 @@ TEST_F(CrusherE2EFixture, DeclinedOptionalFeatureSkipsAndNamesItsSqlstate) {
     ASSERT_TRUE(run.report.contains("summary")) << run.raw_stderr;
 
     auto t = find_test(run.report, "Array Parameter Tests", "test_param_status_array");
-    ASSERT_TRUE(t.has_value());
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
     const auto status = t->value("status", std::string{});
     if (status == "SKIP_INCONCLUSIVE") {
         // The probe did not get as far as the attribute. On Linux the
