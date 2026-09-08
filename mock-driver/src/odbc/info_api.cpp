@@ -346,7 +346,13 @@ SQLRETURN SQL_API SQLGetInfo(
                         SQL_TXN_REPEATABLE_READ | SQL_TXN_SERIALIZABLE);
             
         case SQL_DEFAULT_TXN_ISOLATION:
-            RETURN_ULONG(SQL_TXN_READ_COMMITTED);
+            // I6: what the connection was actually given, not a constant.
+            //
+            // Deliberately *not* affected by `DirtyReads`: that knob exists to
+            // make the driver lie, and reporting the truth here would remove
+            // the lie. A probe that reads this and then observes a dirty read
+            // is seeing exactly the defect the knob models.
+            RETURN_ULONG(static_cast<SQLUINTEGER>(config.isolation_level));
             
         // Identifier Case
         case SQL_IDENTIFIER_CASE:

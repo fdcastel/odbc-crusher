@@ -83,8 +83,17 @@ static TxnContext txn_context_for(StatementHandle* stmt) {
 
     TxnContext ctx;
     ctx.buffered = (conn->autocommit_ == SQL_AUTOCOMMIT_OFF);
+
+    // I6: honestly at READ UNCOMMITTED, or dishonestly under DirtyReads.
+    //
+    // The second is what a probe needs in order to be able to fail. A driver
+    // showing a dirty read at READ UNCOMMITTED is behaving correctly; one that
+    // reports READ COMMITTED and shows them anyway is the defect, and
+    // SQL_DEFAULT_TXN_ISOLATION deliberately keeps reporting the level that was
+    // asked for so the lie stays a lie.
+    const auto& cfg = BehaviorController::instance().config();
     ctx.read_uncommitted =
-        (conn->txn_isolation_ == SQL_TXN_READ_UNCOMMITTED);
+        (conn->txn_isolation_ == SQL_TXN_READ_UNCOMMITTED) || cfg.dirty_reads;
     ctx.writes = conn->pending_writes();
     ctx.conn_id = conn->id();
     return ctx;

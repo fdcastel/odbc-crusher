@@ -201,3 +201,100 @@ TEST_F(TxnIsolationTest, RollbackInAutocommitModeChangesNothing) {
     EXPECT_EQ(Count(a_), 1)
         << "a rollback in autocommit mode deleted a committed row";
 }
+
+
+// ── I6 Stage B: isolation levels, and the configuration that lies ─────────
+//
+// Stage A gave every connection a buffer of uncommitted writes. What makes it
+// useful to a conformance tool is being able to configure a driver that gets
+// isolation *wrong* - because an honest READ UNCOMMITTED cannot fail a probe. A
+// driver showing a dirty read at READ UNCOMMITTED is behaving correctly.
+
+TEST_F(TxnIsolationTest, ReadUncommittedSeesAnotherConnectionsPendingRow) {
+    SQLHDBC reader = Connect("IsolationLevel=ReadUncommitted;");
+
+    ManualCommit(a_);
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "INSERT INTO I6_T VALUES (42)")));
+
+    EXPECT_EQ(Count(reader), 1)
+        << "a READ UNCOMMITTED connection must see another's pending row - "
+           "without that, no isolation probe has a configuration that can fail";
+    EXPECT_EQ(Count(b_), 0)
+        << "and a READ COMMITTED one must not";
+
+    SQLDisconnect(reader);
+    SQLFreeHandle(SQL_HANDLE_DBC, reader);
+}
+
+// IsolationLevel= was not parsed at all before I6: DriverConfig::isolation_level
+// existed, was assigned to the connection, and no key ever set it - the same
+// silent no-op D26 fixed for FailOn. Asserted through SQLGetInfo, which is where
+// an application would look.
+TEST_F(TxnIsolationTest, IsolationLevelIsParsedAndReported) {
+    struct Case { const char* value; SQLUINTEGER expected; };
+    const Case cases[] = {
+        {"ReadUncommitted", SQL_TXN_READ_UNCOMMITTED},
+        {"ReadCommitted",   SQL_TXN_READ_COMMITTED},
+        {"RepeatableRead",  SQL_TXN_REPEATABLE_READ},
+        {"Serializable",    SQL_TXN_SERIALIZABLE},
+    };
+    for (const auto& c : cases) {
+        SQLHDBC dbc = Connect(std::string("IsolationLevel=") + c.value + ";");
+        SQLUINTEGER got = 0;
+        SQLSMALLINT len = 0;
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLGetInfo(dbc, SQL_DEFAULT_TXN_ISOLATION,
+                                             &got, sizeof(got), &len)));
+        EXPECT_EQ(got, c.expected)
+            << "IsolationLevel=" << c.value << " was not honoured";
+        SQLDisconnect(dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    }
+}
+
+// The lever a probe needs. DirtyReads makes the driver behave as READ
+// UNCOMMITTED while continuing to report READ COMMITTED - a real driver bug,
+// and the only shape a "does this driver honour its isolation level?" probe can
+// be failed by.
+TEST_F(TxnIsolationTest, DirtyReadsLiesAboutTheIsolationLevel) {
+    SQLHDBC liar = Connect("DirtyReads=true;");
+
+    SQLUINTEGER reported = 0;
+    SQLSMALLINT len = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetInfo(liar, SQL_DEFAULT_TXN_ISOLATION,
+                                         &reported, sizeof(reported), &len)));
+    EXPECT_EQ(reported, static_cast<SQLUINTEGER>(SQL_TXN_READ_COMMITTED))
+        << "DirtyReads must not change what the driver *reports* - reporting "
+           "the truth would remove the lie the knob exists to model";
+
+    ManualCommit(a_);
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "INSERT INTO I6_T VALUES (77)")));
+    EXPECT_EQ(Count(liar), 1)
+        << "DirtyReads=true must show another connection's uncommitted row "
+           "while claiming READ COMMITTED";
+
+    SQLDisconnect(liar);
+    SQLFreeHandle(SQL_HANDLE_DBC, liar);
+}
+
+// A disconnected connection's buffer must leave the registry, or a peer at READ
+// UNCOMMITTED keeps reading writes belonging to nobody.
+TEST_F(TxnIsolationTest, DisconnectingRemovesTheBufferFromThePeerView) {
+    SQLHDBC writer = Connect();
+    SQLHDBC reader = Connect("IsolationLevel=ReadUncommitted;");
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLSetConnectAttr(
+        writer, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_OFF, 0)));
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(writer, "INSERT INTO I6_T VALUES (5)")));
+    ASSERT_EQ(Count(reader), 1);
+
+    // Roll back first: SQLDisconnect answers 25000 with a transaction open.
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLEndTran(SQL_HANDLE_DBC, writer, SQL_ROLLBACK)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDisconnect(writer)));
+    SQLFreeHandle(SQL_HANDLE_DBC, writer);
+
+    EXPECT_EQ(Count(reader), 0)
+        << "the disconnected connection's buffer is still in the peer view";
+
+    SQLDisconnect(reader);
+    SQLFreeHandle(SQL_HANDLE_DBC, reader);
+}

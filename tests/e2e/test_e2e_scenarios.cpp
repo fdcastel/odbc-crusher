@@ -1992,3 +1992,61 @@ TEST_F(CrusherE2EFixture, AWScopedFailOnAlsoStopsTheAnsiFallback) {
     }
     EXPECT_GT(compared, 150u) << "too few probes compared to mean anything";
 }
+
+
+// ── I6: the isolation probe, and the configuration that fails it ──────────
+//
+// I6's row said the point of a per-connection write set was that "no
+// isolation-level probe can be given a configuration that makes it fail". This
+// is that sentence as an assertion.
+//
+// Three configurations, three different right answers:
+//
+//   default                          - no dirty read, PASS
+//   DirtyReads=true                  - a dirty read while reporting READ
+//                                      COMMITTED, which is the defect: FAIL
+//   IsolationLevel=ReadUncommitted   - a dirty read while reporting READ
+//                                      UNCOMMITTED, which is correct, so the
+//                                      probe records it and does not grade it
+//
+// The third matters as much as the second. A probe that failed a driver for
+// showing dirty reads at READ UNCOMMITTED would be grading wrongly, and this
+// scenario is what stops that being introduced later.
+TEST_F(CrusherE2EFixture, IsolationProbeGradesTheClaimNotTheBehaviour) {
+    const std::string base =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;";
+
+    struct Case {
+        const char* extra;
+        const char* expected_status;
+        const char* why;
+    };
+    const Case cases[] = {
+        {"", "PASS",
+         "a driver that keeps uncommitted rows to itself must pass"},
+        {"DirtyReads=true;", "FAIL",
+         "a driver reporting READ COMMITTED while showing another "
+         "connection's uncommitted row is the defect this probe exists for - "
+         "if this does not fail, the probe has never been shown to detect "
+         "anything"},
+        {"IsolationLevel=ReadUncommitted;", "INFORMATIONAL",
+         "a dirty read at READ UNCOMMITTED is correct, so it must be recorded "
+         "and not graded"},
+    };
+
+    for (const auto& c : cases) {
+        auto run = run_crusher(base + c.extra);
+        ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+        SKIP_IF_KILLED(run);
+
+        auto t = find_test(run.report, "Transaction Tests",
+                           "test_uncommitted_row_isolation");
+        ASSERT_TRUE(t.has_value())
+            << "the isolation probe is missing from the report\n"
+            << report_outline(run);
+        EXPECT_EQ(t->value("status", std::string{}), c.expected_status)
+            << "with `" << c.extra << "`: " << c.why
+            << "\n  actual: " << t->value("actual", std::string{});
+    }
+}

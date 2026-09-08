@@ -26,6 +26,7 @@ private:
     TestResult test_manual_commit();
     TestResult test_manual_rollback();
     TestResult test_disconnect_rolls_back_open_transaction();   // I8
+    TestResult test_uncommitted_row_isolation();                // I6
     TestResult test_transaction_isolation_levels();
 
     // PORT plan §4.9 — cross-state interactions between transaction

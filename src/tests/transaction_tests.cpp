@@ -13,7 +13,8 @@ std::vector<TestResult> TransactionTests::run() {
         test_manual_rollback(),
         test_transaction_isolation_levels(),
         test_rollback_with_open_cursor(),
-        test_disconnect_rolls_back_open_transaction()   // I8
+        test_disconnect_rolls_back_open_transaction(),
+        test_uncommitted_row_isolation()
     };
 }
 
@@ -622,6 +623,129 @@ TestResult TransactionTests::test_rollback_with_open_cursor() {
 
             drop_test_table();
             restore_autocommit();
+        });
+}
+
+// I6 — does this driver honour the isolation level it reports?
+//
+// An uncommitted row visible to another connection is a **dirty read**. At READ
+// UNCOMMITTED that is correct and the probe must not grade it; at READ
+// COMMITTED or above it is the defect. So the probe asks the driver what it
+// promises before deciding what to do with what it sees - grading behaviour
+// against a claim rather than against an assumption.
+//
+// Needs a second connection, which is what C13's open_sibling_connection is
+// for. The table lives on the primary so it survives whatever the sibling does.
+TestResult TransactionTests::test_uncommitted_row_isolation() {
+    return run_test(
+        "test_uncommitted_row_isolation",
+        "SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT)/SQLGetInfo",
+        "Uncommitted rows stay invisible to another connection, unless the "
+        "driver reports READ UNCOMMITTED",
+        Severity::ERR, ConformanceLevel::LEVEL_1,
+        "ODBC 3.8 SQL_DEFAULT_TXN_ISOLATION; SQL-92 isolation levels",
+        [&](TestResult& r) {
+            auto sibling = open_sibling_connection();
+            if (!sibling) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "No connection string available to open a second "
+                           "connection with";
+                return;
+            }
+
+            SQLUINTEGER isolation = 0;
+            SQLSMALLINT len = 0;
+            SQLRETURN rc = SQLGetInfo(conn_.get_handle(),
+                                      SQL_DEFAULT_TXN_ISOLATION,
+                                      &isolation, sizeof(isolation), &len);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "SQLGetInfo(SQL_DEFAULT_TXN_ISOLATION) failed, so "
+                           "there is no claim to grade this against";
+                return;
+            }
+
+            RoundTripTableGuard table(conn_, "ODBC_CRUSHER_ISOLATION",
+                                      "INTEGER");
+            if (!table.ok()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not create a table to test with: " +
+                           table.last_error();
+                return;
+            }
+
+            rc = SQLSetConnectAttr(
+                sibling->get_handle(), SQL_ATTR_AUTOCOMMIT,
+                reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "Driver declined SQL_AUTOCOMMIT_OFF (" +
+                           first_sqlstate(SQL_HANDLE_DBC, sibling->get_handle(),
+                                          "no SQLSTATE") +
+                           "), so it cannot hold a row uncommitted";
+                return;
+            }
+
+            {
+                core::OdbcStatement stmt(*sibling);
+                stmt.execute("INSERT INTO " + table.name() + " VALUES (8888)");
+            }
+
+            // Read from the *primary* while the sibling's transaction is still
+            // open. Anything found here was never committed.
+            long long seen = 0;
+            try {
+                core::OdbcStatement stmt(conn_);
+                stmt.execute("SELECT COUNT(*) FROM " + table.name() +
+                             " WHERE ID = 8888");
+                if (stmt.fetch()) {
+                    SQLLEN ind = 0;
+                    SQLBIGINT v = 0;
+                    if (SQL_SUCCEEDED(SQLGetData(stmt.get_handle(), 1,
+                                                 SQL_C_SBIGINT, &v, 0, &ind))
+                        && ind != SQL_NULL_DATA) {
+                        seen = static_cast<long long>(v);
+                    }
+                }
+            } catch (const core::OdbcError& e) {
+                SQLEndTran(SQL_HANDLE_DBC, sibling->get_handle(), SQL_ROLLBACK);
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = std::string("Could not read the table back: ") +
+                           e.what();
+                return;
+            }
+
+            // Leave nothing behind for the probes that follow.
+            SQLEndTran(SQL_HANDLE_DBC, sibling->get_handle(), SQL_ROLLBACK);
+
+            const bool claims_read_uncommitted =
+                (isolation & SQL_TXN_READ_UNCOMMITTED) != 0;
+            const std::string claim = claims_read_uncommitted
+                ? "READ UNCOMMITTED" : "at least READ COMMITTED";
+
+            r.actual = "Driver reports " + claim +
+                       "; a second connection saw " + std::to_string(seen) +
+                       " uncommitted row(s)";
+
+            if (seen == 0) {
+                r.status = TestStatus::PASS;
+                return;
+            }
+            if (claims_read_uncommitted) {
+                // Correct, and worth recording rather than grading: at this
+                // level a dirty read is the documented behaviour.
+                r.status = TestStatus::INFORMATIONAL;
+                r.actual += " - which is correct at this isolation level";
+                return;
+            }
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::ERR;
+            r.suggestion =
+                "The driver reports " + claim + " through "
+                "SQL_DEFAULT_TXN_ISOLATION but let another connection read a "
+                "row that was never committed. Either honour the level or "
+                "report the one actually implemented - an application choosing "
+                "an isolation level is choosing it for a reason.";
         });
 }
 

@@ -47,8 +47,21 @@ struct DriverConfig {
     // Transaction mode
     std::string transaction_mode = "Autocommit";
     
-    // Isolation level
+    // Isolation level, from `IsolationLevel=`. I6: this existed and was
+    // assigned to the connection, but nothing ever parsed a key for it, so it
+    // was always the default - the silent-no-op shape D26 fixed for FailOn.
     int isolation_level = SQL_TXN_READ_COMMITTED;
+
+    // I6: `DirtyReads=true` - behave as READ UNCOMMITTED while continuing to
+    // *report* READ COMMITTED.
+    //
+    // The lying configuration, and it is the point of the row. An honest READ
+    // UNCOMMITTED cannot fail an isolation probe: a driver showing a dirty read
+    // at that level is correct, and a probe failing there would be grading
+    // wrongly. A driver that promises READ COMMITTED and delivers dirty reads
+    // is a real bug and the only configuration that can make such a probe
+    // fail.
+    bool dirty_reads = false;
     
     // Random failure probability (0-100)
     int failure_probability = 50;

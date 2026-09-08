@@ -351,6 +351,26 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     
     // Transaction mode
     config.transaction_mode = get_string_value(pairs, "transactionmode", "Autocommit");
+
+    // I6: the isolation level, which nothing parsed before - so
+    // `DriverConfig::isolation_level` was always its default however the
+    // connection string was written.
+    const std::string isolation =
+        to_lower(get_string_value(pairs, "isolationlevel", ""));
+    if (isolation == "readuncommitted") {
+        config.isolation_level = SQL_TXN_READ_UNCOMMITTED;
+    } else if (isolation == "readcommitted") {
+        config.isolation_level = SQL_TXN_READ_COMMITTED;
+    } else if (isolation == "repeatableread") {
+        config.isolation_level = SQL_TXN_REPEATABLE_READ;
+    } else if (isolation == "serializable") {
+        config.isolation_level = SQL_TXN_SERIALIZABLE;
+    }
+
+    // I6: read uncommitted rows while still reporting READ COMMITTED. See the
+    // header for why the honest level is not enough.
+    config.dirty_reads =
+        (to_lower(get_string_value(pairs, "dirtyreads", "false")) == "true");
     
     // Failure probability
     // A percentage; anything outside 0-100 would make Mode=Random either
