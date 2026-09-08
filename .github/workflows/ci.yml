@@ -270,14 +270,19 @@ jobs:
       run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -L unit --timeout 300
 
     - name: Download Mock Driver
-      if: matrix.build_type == 'Release'
+      # F9: no build_type gate. The Debug halves of the matrix used to
+      # build the binary and never run it against anything, and Debug
+      # catches a different class of bug - assertions, iterator debugging
+      # - which is exactly what several D-series findings were. The mock
+      # artifact stays Release: a driver is always someone else's release
+      # build, which is the realistic pairing anyway.
       uses: actions/download-artifact@v4
       with:
         name: mock-odbc-driver-${{ runner.os }}-Release
         path: mock-driver-artifact
 
     - name: Register Mock Driver and Run E2E Tests (Windows)
-      if: runner.os == 'Windows' && matrix.build_type == 'Release'
+      if: runner.os == 'Windows'
       shell: pwsh
       # No `|| true` and no `continue-on-error: true` — once the mock
       # driver is registered, e2e failures are real regressions (the
@@ -290,10 +295,10 @@ jobs:
         & mock-driver-artifact/install/register.ps1 -DriverPath $driverDest
         # D51: in CI a driver that will not load must fail, not skip.
         $env:ODBC_CRUSHER_REQUIRE_MOCK = "1"
-        ctest --test-dir build -C Release --output-on-failure -L e2e --timeout 300
+        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -L e2e --timeout 300
 
     - name: Register Mock Driver and Run E2E Tests (Linux/macOS)
-      if: runner.os != 'Windows' && matrix.build_type == 'Release'
+      if: runner.os != 'Windows'
       shell: bash
       run: |
         # On Ubuntu 24.04 (noble), the `odbcinst` binary lives in its
@@ -324,7 +329,7 @@ jobs:
         sudo ./mock-driver-artifact/install/register.sh "$DRIVER_ABS"
         # D51: in CI a driver that will not load must fail, not skip.
         export ODBC_CRUSHER_REQUIRE_MOCK=1
-        ctest --test-dir build -C Release --output-on-failure -L e2e --timeout 300
+        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure -L e2e --timeout 300
 
     - name: Report the reference-run baseline
       # D56: continue-on-error covers this step failing, not an earlier

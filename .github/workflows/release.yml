@@ -61,6 +61,22 @@ jobs:
     - name: Build
       run: cmake --build build --config Release -j 4
 
+    - name: Run unit tests
+      # F3: this workflow used to run a --version check and nothing else, so
+      # a tag pushed at a commit that never passed ci.yml shipped untested.
+      #
+      # `needs:` the CI workflow is the other option the row offers and it
+      # does not work here: a tag push is its own event, there is no ci.yml
+      # run to depend on, and `workflow_run` cannot gate a job on a *different
+      # trigger's* result. Running the suite is both simpler and stricter —
+      # it tests the commit being packaged rather than a build of it that
+      # happened somewhere else.
+      #
+      # Unit only: the e2e suite needs a registered mock driver, which is a
+      # per-platform install this job has no reason to do. ci.yml covers that
+      # on every push; this is the last gate before an artifact is published.
+      run: ctest --test-dir build -C Release --output-on-failure -L unit --timeout 300
+
     - name: Smoke test (binary launches and reports its version)
       # Catches DLL-load failures, stripped symbols, and "binary built
       # but won't run" classes of release-only breakage before we publish
@@ -108,6 +124,12 @@ jobs:
 
     - name: Build
       run: cmake --build mock-driver/build --config Release -j 4
+
+    - name: Run mock driver tests
+      # F3: this job packaged and published a driver it had never run. The
+      # mock is a released artifact people register on their own machines,
+      # so it gets the same treatment as the tool.
+      run: ctest --test-dir mock-driver/build -C Release --output-on-failure --timeout 300
 
     - name: Package
       shell: powershell
