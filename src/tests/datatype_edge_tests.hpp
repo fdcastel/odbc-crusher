@@ -22,13 +22,15 @@ public:
     std::string category_name() const override { return "Data Type Edge Cases"; }
     
 private:
-    TestResult test_integer_zero();
-    TestResult test_integer_max();
-    TestResult test_integer_min();
+    // C8: the three integer-literal probes and the two NULL
+    // probes are one shape each, driven from a table in the .cpp.
+    // `const void*` keeps the row types out of this header - they
+    // are an implementation detail of the file that owns them.
+    TestResult run_integer_edge_case(const void* row);
+    TestResult run_null_edge_case(const void* row);
+
     TestResult test_varchar_empty();
     TestResult test_varchar_special_chars();
-    TestResult test_null_integer();
-    TestResult test_null_varchar();
     TestResult test_integer_as_string();
     TestResult test_string_as_integer();
     TestResult test_decimal_values();

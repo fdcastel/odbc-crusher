@@ -15,168 +15,191 @@
 
 namespace odbc_crusher::tests {
 
+// ── C8: the two shapes that repeat ───────────────────────────────────────
+//
+// Five of this file's probes are one of two shapes with a label and a query
+// changed. The other five are not: they each carry distinct logic and three
+// or four bespoke messages, and forcing them into a table would mean a
+// std::function per row - code moved into data, none of it removed. Only
+// what actually repeats is table-driven here.
+//
+// Every message string below is the one the probe it replaces produced. The
+// check that this changed nothing is a normalised report diff, not a reading.
+
+namespace {
+
+// A probe that selects one integer literal and expects it back.
+struct IntegerEdgeCase {
+    const char* name;
+    const char* expected;        // the report's `expected` text
+    const char* label;           // "0", "INT_MAX", "INT_MIN" — for messages
+    const char* success_text;    // the whole PASS message
+    const char* skip_noun;       // "integer 0", "INT_MAX", …
+    SQLINTEGER  want;
+    const char* queries[2];
+};
+
+// A probe that selects a typed NULL and expects SQL_NULL_DATA.
+struct NullEdgeCase {
+    const char* name;
+    const char* expected;
+    const char* success_text;
+    const char* skip_noun;
+    SQLSMALLINT c_type;          // SQL_C_SLONG or SQL_C_CHAR
+    const char* queries[2];
+};
+
+}  // namespace
+
+TestResult DataTypeEdgeCaseTests::run_integer_edge_case(const void* row) {
+    const auto& tc = *static_cast<const IntegerEdgeCase*>(row);
+    return run_test(
+        tc.name, "SQLGetData", tc.expected,
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetData, Integer Types",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            std::vector<std::string> queries = {tc.queries[0], tc.queries[1]};
+            bool success = false;
+
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                // C2: nothing executed. Say what each variant failed with,
+                // instead of leaving the report to shrug.
+                r.diagnostic = attempt.format_failures();
+            } else if (stmt.fetch()) {
+                SQLINTEGER value = 0;
+                SQLLEN indicator = 0;
+                SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                          &value, sizeof(value), &indicator);
+                if (SQL_SUCCEEDED(rc)) {
+                    if (value == tc.want) {
+                        r.status = TestStatus::PASS;
+                        r.actual = tc.success_text;
+                    } else {
+                        r.status = TestStatus::FAIL;
+                        r.actual = std::string("Expected ") + tc.label +
+                                   ", got " + std::to_string(value);
+                        r.severity = Severity::ERR;
+                    }
+                    success = true;
+                }
+            }
+
+            if (!success) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = std::string("Could not execute query for ") +
+                           tc.skip_noun + " test";
+            }
+        });
+}
+
+TestResult DataTypeEdgeCaseTests::run_null_edge_case(const void* row) {
+    const auto& tc = *static_cast<const NullEdgeCase*>(row);
+    return run_test(
+        tc.name, "SQLGetData", tc.expected,
+        Severity::INFO, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetData, NULL Data",
+        [&](TestResult& r) {
+            core::OdbcStatement stmt(conn_);
+            std::vector<std::string> queries = {tc.queries[0], tc.queries[1]};
+            bool success = false;
+
+            auto attempt = execute_first_working(stmt, queries);
+            if (!attempt) {
+                r.diagnostic = attempt.format_failures();
+            } else if (stmt.fetch()) {
+                // The sentinel is the one test_null_integer used: a non-zero
+                // value, so a driver reporting NULL without writing is
+                // distinguishable from one that writes a zero. The char
+                // buffer is left uninitialised exactly as test_null_varchar
+                // had it - nothing reads it unless SQLGetData succeeded.
+                SQLINTEGER ivalue = 42;
+                char buffer[256];
+                SQLLEN indicator = 0;
+                SQLRETURN rc =
+                    (tc.c_type == SQL_C_SLONG)
+                        ? SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
+                                     &ivalue, sizeof(ivalue), &indicator)
+                        : SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
+                                     buffer, sizeof(buffer), &indicator);
+                if (SQL_SUCCEEDED(rc)) {
+                    if (indicator == SQL_NULL_DATA) {
+                        r.status = TestStatus::PASS;
+                        r.actual = tc.success_text;
+                    } else {
+                        r.status = TestStatus::FAIL;
+                        r.actual = "Expected SQL_NULL_DATA, got indicator=" +
+                                   std::to_string(indicator);
+                        r.severity = Severity::WARNING;
+                    }
+                    success = true;
+                }
+            }
+
+            if (!success) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = std::string("Could not execute query for ") +
+                           tc.skip_noun + " test";
+            }
+        });
+}
+
+namespace {
+
+constexpr IntegerEdgeCase kIntegerEdgeCases[] = {
+    {"test_integer_zero", "Integer value 0 retrieved correctly", "0",
+     "Integer 0 retrieved correctly", "integer 0", 0,
+     {"SELECT 0", "SELECT 0 FROM RDB$DATABASE"}},
+    {"test_integer_max", "Large integer value retrieved correctly",
+     "2147483647", "INT_MAX (2147483647) retrieved correctly", "INT_MAX",
+     2147483647,
+     {"SELECT 2147483647", "SELECT 2147483647 FROM RDB$DATABASE"}},
+    {"test_integer_min", "Negative integer retrieved correctly",
+     "-2147483648", "INT_MIN (-2147483648) retrieved correctly", "INT_MIN",
+     INT32_MIN,
+     {"SELECT -2147483648", "SELECT -2147483648 FROM RDB$DATABASE"}},
+};
+
+constexpr NullEdgeCase kNullEdgeCases[] = {
+    {"test_null_integer", "NULL integer returns SQL_NULL_DATA indicator",
+     "NULL integer correctly returned SQL_NULL_DATA", "NULL integer",
+     SQL_C_SLONG,
+     {"SELECT CAST(NULL AS INTEGER)", "SELECT NULL FROM RDB$DATABASE"}},
+    {"test_null_varchar", "NULL varchar returns SQL_NULL_DATA indicator",
+     "NULL varchar correctly returned SQL_NULL_DATA", "NULL varchar",
+     SQL_C_CHAR,
+     {"SELECT CAST(NULL AS VARCHAR(50))",
+      "SELECT NULL FROM RDB$DATABASE"}},
+};
+
+}  // namespace
+
 std::vector<TestResult> DataTypeEdgeCaseTests::run() {
-    return {
-        test_integer_zero(),
-        test_integer_max(),
-        test_integer_min(),
-        test_varchar_empty(),
-        test_varchar_special_chars(),
-        test_null_integer(),
-        test_null_varchar(),
-        test_integer_as_string(),
-        test_string_as_integer(),
-        test_decimal_values(),
-        test_varchar_raw_byte_integrity(),
-        test_null_vs_empty_distinction_varchar(),
-        test_null_vs_zero_distinction_integer(),
-        test_null_in_numeric_struct()
-    };
+    // C8: the table-driven five keep their original report order, so
+    // the report is byte-identical to the one the ten probes produced.
+    std::vector<TestResult> results;
+    for (const auto& tc : kIntegerEdgeCases) {
+        results.push_back(run_integer_edge_case(&tc));
+    }
+    results.push_back(test_varchar_empty());
+    results.push_back(test_varchar_special_chars());
+    for (const auto& tc : kNullEdgeCases) {
+        results.push_back(run_null_edge_case(&tc));
+    }
+    for (auto&& t : {
+             test_integer_as_string(),
+             test_string_as_integer(),
+             test_decimal_values(),
+             test_varchar_raw_byte_integrity(),
+             test_null_vs_empty_distinction_varchar(),
+             test_null_vs_zero_distinction_integer(),
+             test_null_in_numeric_struct()}) {
+        results.push_back(std::move(t));
+    }
+    return results;
 }
 
-TestResult DataTypeEdgeCaseTests::test_integer_zero() {
-    return run_test(
-        "test_integer_zero", "SQLGetData",
-        "Integer value 0 retrieved correctly",
-        Severity::INFO, ConformanceLevel::CORE,
-        "ODBC 3.8 SQLGetData, Integer Types",
-        [&](TestResult& r) {
-            core::OdbcStatement stmt(conn_);
-
-            std::vector<std::string> queries = {"SELECT 0", "SELECT 0 FROM RDB$DATABASE"};
-            bool success = false;
-
-            auto attempt = execute_first_working(stmt, queries);
-            if (!attempt) {
-                // C2: nothing executed. Say what each variant failed with,
-                // instead of leaving the report to shrug.
-                r.diagnostic = attempt.format_failures();
-            } else do {
-                // do/while(false): the body still uses `break` to mean
-                // "stop here", which is what it meant when this was a
-                // loop over dialect variants.
-                if (stmt.fetch()) {
-                    SQLINTEGER value = -1;
-                    SQLLEN indicator = 0;
-                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                             &value, sizeof(value), &indicator);
-
-                    if (SQL_SUCCEEDED(rc)) {
-                        if (value == 0) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "Integer 0 retrieved correctly";
-                        } else {
-                            r.status = TestStatus::FAIL;
-                            r.actual = "Expected 0, got " + std::to_string(value);
-                            r.severity = Severity::ERR;
-                        }
-                        success = true;
-                        break;
-                    }
-                }                } while (false);
-
-            if (!success) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not execute query for integer 0 test";
-            }
-        });
-}
-
-TestResult DataTypeEdgeCaseTests::test_integer_max() {
-    return run_test(
-        "test_integer_max", "SQLGetData",
-        "Large integer value retrieved correctly",
-        Severity::INFO, ConformanceLevel::CORE,
-        "ODBC 3.8 SQLGetData, Integer Types",
-        [&](TestResult& r) {
-            core::OdbcStatement stmt(conn_);
-
-            std::vector<std::string> queries = {"SELECT 2147483647", "SELECT 2147483647 FROM RDB$DATABASE"};
-            bool success = false;
-
-            auto attempt = execute_first_working(stmt, queries);
-            if (!attempt) {
-                // C2: nothing executed. Say what each variant failed with,
-                // instead of leaving the report to shrug.
-                r.diagnostic = attempt.format_failures();
-            } else do {
-                // do/while(false): the body still uses `break` to mean
-                // "stop here", which is what it meant when this was a
-                // loop over dialect variants.
-                if (stmt.fetch()) {
-                    SQLINTEGER value = 0;
-                    SQLLEN indicator = 0;
-                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                             &value, sizeof(value), &indicator);
-
-                    if (SQL_SUCCEEDED(rc)) {
-                        if (value == 2147483647) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "INT_MAX (2147483647) retrieved correctly";
-                        } else {
-                            r.status = TestStatus::FAIL;
-                            r.actual = "Expected 2147483647, got " + std::to_string(value);
-                            r.severity = Severity::WARNING;
-                        }
-                        success = true;
-                        break;
-                    }
-                }                } while (false);
-
-            if (!success) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not execute query for INT_MAX test";
-            }
-        });
-}
-
-TestResult DataTypeEdgeCaseTests::test_integer_min() {
-    return run_test(
-        "test_integer_min", "SQLGetData",
-        "Negative integer retrieved correctly",
-        Severity::INFO, ConformanceLevel::CORE,
-        "ODBC 3.8 SQLGetData, Integer Types",
-        [&](TestResult& r) {
-            core::OdbcStatement stmt(conn_);
-
-            std::vector<std::string> queries = {"SELECT -2147483648", "SELECT -2147483648 FROM RDB$DATABASE"};
-            bool success = false;
-
-            auto attempt = execute_first_working(stmt, queries);
-            if (!attempt) {
-                // C2: nothing executed. Say what each variant failed with,
-                // instead of leaving the report to shrug.
-                r.diagnostic = attempt.format_failures();
-            } else do {
-                // do/while(false): the body still uses `break` to mean
-                // "stop here", which is what it meant when this was a
-                // loop over dialect variants.
-                if (stmt.fetch()) {
-                    SQLINTEGER value = 0;
-                    SQLLEN indicator = 0;
-                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                             &value, sizeof(value), &indicator);
-
-                    if (SQL_SUCCEEDED(rc)) {
-                        if (value == (-2147483647 - 1)) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "INT_MIN (-2147483648) retrieved correctly";
-                        } else {
-                            r.status = TestStatus::FAIL;
-                            r.actual = "Expected -2147483648, got " + std::to_string(value);
-                            r.severity = Severity::WARNING;
-                        }
-                        success = true;
-                        break;
-                    }
-                }                } while (false);
-
-            if (!success) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not execute query for INT_MIN test";
-            }
-        });
-}
 
 TestResult DataTypeEdgeCaseTests::test_varchar_empty() {
     return run_test(
@@ -312,111 +335,6 @@ TestResult DataTypeEdgeCaseTests::test_varchar_special_chars() {
             if (!success) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "Could not execute query for special characters test";
-            }
-        });
-}
-
-TestResult DataTypeEdgeCaseTests::test_null_integer() {
-    return run_test(
-        "test_null_integer", "SQLGetData",
-        "NULL integer returns SQL_NULL_DATA indicator",
-        Severity::INFO, ConformanceLevel::CORE,
-        "ODBC 3.8 SQLGetData, NULL Data",
-        [&](TestResult& r) {
-            core::OdbcStatement stmt(conn_);
-
-            std::vector<std::string> queries = {
-                "SELECT CAST(NULL AS INTEGER)",
-                "SELECT NULL FROM RDB$DATABASE"
-            };
-            bool success = false;
-
-            auto attempt = execute_first_working(stmt, queries);
-            if (!attempt) {
-                // C2: nothing executed. Say what each variant failed with,
-                // instead of leaving the report to shrug.
-                r.diagnostic = attempt.format_failures();
-            } else do {
-                // do/while(false): the body still uses `break` to mean
-                // "stop here", which is what it meant when this was a
-                // loop over dialect variants.
-                if (stmt.fetch()) {
-                    SQLINTEGER value = 42;  // sentinel
-                    SQLLEN indicator = 0;
-                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_SLONG,
-                                             &value, sizeof(value), &indicator);
-
-                    if (SQL_SUCCEEDED(rc)) {
-                        if (indicator == SQL_NULL_DATA) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "NULL integer correctly returned SQL_NULL_DATA";
-                        } else {
-                            r.status = TestStatus::FAIL;
-                            r.actual = "Expected SQL_NULL_DATA, got indicator=" +
-                                           std::to_string(indicator);
-                            r.severity = Severity::WARNING;
-                        }
-                        success = true;
-                        break;
-                    }
-                }                } while (false);
-
-            if (!success) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not execute query for NULL integer test";
-            }
-        });
-}
-
-TestResult DataTypeEdgeCaseTests::test_null_varchar() {
-    return run_test(
-        "test_null_varchar", "SQLGetData",
-        "NULL varchar returns SQL_NULL_DATA indicator",
-        Severity::INFO, ConformanceLevel::CORE,
-        "ODBC 3.8 SQLGetData, NULL Data",
-        [&](TestResult& r) {
-            core::OdbcStatement stmt(conn_);
-
-            std::vector<std::string> queries = {
-                "SELECT CAST(NULL AS VARCHAR(50))",
-                "SELECT NULL FROM RDB$DATABASE"
-            };
-            bool success = false;
-
-            auto attempt = execute_first_working(stmt, queries);
-            if (!attempt) {
-                // C2: nothing executed. Say what each variant failed with,
-                // instead of leaving the report to shrug.
-                r.diagnostic = attempt.format_failures();
-            } else do {
-                // do/while(false): the body still uses `break` to mean
-                // "stop here", which is what it meant when this was a
-                // loop over dialect variants.
-                if (stmt.fetch()) {
-                    char buffer[256];
-                    std::memset(buffer, 'X', sizeof(buffer));
-                    SQLLEN indicator = 0;
-                    SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
-                                             buffer, sizeof(buffer), &indicator);
-
-                    if (SQL_SUCCEEDED(rc)) {
-                        if (indicator == SQL_NULL_DATA) {
-                            r.status = TestStatus::PASS;
-                            r.actual = "NULL varchar correctly returned SQL_NULL_DATA";
-                        } else {
-                            r.status = TestStatus::FAIL;
-                            r.actual = "Expected SQL_NULL_DATA, got indicator=" +
-                                           std::to_string(indicator);
-                            r.severity = Severity::WARNING;
-                        }
-                        success = true;
-                        break;
-                    }
-                }                } while (false);
-
-            if (!success) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Could not execute query for NULL varchar test";
             }
         });
 }
