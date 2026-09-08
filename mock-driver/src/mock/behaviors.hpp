@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../driver/config.hpp"
+#include <atomic>
 #include <mutex>
 
 namespace mock_odbc {
@@ -22,11 +23,24 @@ public:
     bool should_fail(const std::string& function_name) const;
     void apply_latency() const;
 
+    // D62: BufferValidation=Lenient, asked cheaply.
+    //
+    // copy_chars/copy_wchars consult this once per string handed back to the
+    // caller - per column, per row, per SQLGetData chunk - so it cannot go
+    // through config(), which locks the mutex and copies six std::strings.
+    // Mirrored into an atomic by set_config instead; the only reader wants
+    // one bit and a stale read cannot happen, because the connect that sets
+    // the config happens-before any call that copies a string on it.
+    bool lenient_buffers() const {
+        return lenient_buffers_.load(std::memory_order_relaxed);
+    }
+
 private:
     BehaviorController() = default;
 
     mutable std::mutex mu_;
     DriverConfig config_;
+    std::atomic<bool> lenient_buffers_{false};
 };
 
 // D34: numeric fault injection, for probes that assert a specific value.

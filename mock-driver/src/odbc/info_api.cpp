@@ -140,15 +140,18 @@ namespace {
 
 // D33. BufferValidation=Lenient was parsed into DriverConfig and then never
 // read by anything, so the knob README.md:211 documents did nothing at all.
-// It now does what its name says on the SQLGetInfo string path: the value is
-// returned without its NUL terminator, which is the classic careless-driver
-// behaviour and the one thing a "does this driver null-terminate its output?"
-// probe needs in order to be able to fail.
+// It now does what its name says: the value is returned without its NUL
+// terminator, which is the classic careless-driver behaviour and the one
+// thing a "does this driver null-terminate its output?" probe needs in order
+// to be able to fail.
+//
+// D62 moved the injection itself into copy_chars, where every string-returning
+// entry point already passes through. What is left in this helper is the
+// truncation diagnostic.
 //
 // Strict (the default) is unchanged, so no existing caller is affected.
 
-SQLRETURN info_return_string(const DriverConfig& config,
-                             ConnectionHandle* conn,
+SQLRETURN info_return_string(ConnectionHandle* conn,
                              const std::string& value,
                              SQLCHAR* target,
                              SQLSMALLINT buffer_length,
@@ -165,16 +168,9 @@ SQLRETURN info_return_string(const DriverConfig& config,
         conn->add_diagnostic(sqlstate::STRING_TRUNCATED, 0,
                              "String data, right truncated");
     }
-    if (config.buffer_validation != DriverConfig::BufferValidationMode::Lenient ||
-        !target || buffer_length <= 0) {
-        return ret;
-    }
-
-    // copy_string_to_buffer wrote the terminator at min(len, buffer_length-1);
-    // overwrite it with a filler byte, still inside the caller's buffer.
-    const size_t written =
-        std::min(value.size(), static_cast<size_t>(buffer_length - 1));
-    target[written] = static_cast<SQLCHAR>('X');
+    // D62: the Lenient terminator-drop used to be repeated here. It now
+    // lives in copy_chars, so every string the driver returns loses its
+    // terminator rather than only this one - see buffer_copy.cpp.
     return ret;
 }
 
@@ -258,7 +254,7 @@ SQLRETURN SQL_API SQLGetInfo(
     const auto& config = BehaviorController::instance().config();
     
     #define RETURN_STRING(s) \
-        return info_return_string(config, conn, s, \
+        return info_return_string(conn, s, \
                                   static_cast<SQLCHAR*>(rgbInfoValue), \
                                   cbInfoValueMax, pcbInfoValue)
     

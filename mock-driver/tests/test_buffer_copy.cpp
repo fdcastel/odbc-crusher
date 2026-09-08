@@ -12,6 +12,7 @@
 // GCC does not pull these in transitively the way MSVC does.
 #include <cstring>
 
+#include "mock/behaviors.hpp"
 #include <string>
 #include <vector>
 
@@ -297,4 +298,128 @@ TEST(BufferCopy, WideLengthNeverReportsNegative) {
 
     EXPECT_GT(reported, 0)
         << "a negative length is SQL_NULL_DATA to the application";
+}
+
+
+// ── D62: BufferValidation=Lenient, at the level of the copy itself ─────────
+//
+// D33 scoped this knob to SQLGetInfo and said in its own row that broadening
+// it "would break unrelated paths". The cost of that scoping was five rows of
+// hand-enumerated buffers (D58, D60, D61, D63, D64): the fixture could only
+// expose the sites SQLGetInfo reached, so every other unguarded buffer in the
+// tool was a guess. The injection now lives in copy_chars/copy_wchars, which
+// is the one place every string the driver returns passes through (D18).
+//
+// These call the helpers directly, so what they pin is exactly what the mock
+// promises: the terminator goes, the value stays, and nothing is written past
+// what the caller declared. (Nothing in this binary goes through a driver
+// manager in any case - see the note on D62 in test_fault_injection.cpp.)
+
+namespace {
+
+// RAII around the process-global config, so a failing assertion cannot leave
+// Lenient set for whatever runs next.
+class LenientBuffers {
+public:
+    LenientBuffers() : saved_(BehaviorController::instance().config()) {
+        DriverConfig c = saved_;
+        c.buffer_validation = DriverConfig::BufferValidationMode::Lenient;
+        BehaviorController::instance().set_config(c);
+    }
+    ~LenientBuffers() { BehaviorController::instance().set_config(saved_); }
+
+private:
+    DriverConfig saved_;
+};
+
+}  // namespace
+
+TEST(BufferCopyLenient, DropsTheTerminatorButKeepsTheValue) {
+    char buf[16];
+    std::memset(buf, 0x7F, sizeof(buf));
+
+    BufferCopyResult r;
+    {
+        LenientBuffers lenient;
+        r = copy_chars("abc", 0, buf, sizeof(buf));
+    }
+
+    // Everything the caller is told is unchanged. Only the buffer differs,
+    // which is what makes this the interesting fault: the return code and the
+    // reported length both say the value arrived intact.
+    EXPECT_EQ(r.rc, SQL_SUCCESS);
+    EXPECT_FALSE(r.truncated);
+    EXPECT_EQ(r.remaining, 3);
+
+    EXPECT_EQ(std::memcmp(buf, "abc", 3), 0) << "the value must still arrive";
+    EXPECT_EQ(buf[3], 'X') << "the terminator must have been overwritten";
+    EXPECT_EQ(std::memchr(buf, 0, sizeof(buf)), nullptr)
+        << "a NUL anywhere in the buffer means the fault never happened";
+    EXPECT_EQ(buf[4], 0x7F) << "and nothing beyond the terminator was touched";
+}
+
+// The bounds are the part that must not move. Lenient models a driver that
+// forgets its terminator, not one that overruns - an overrun would make every
+// probe crash for a reason unrelated to what it is testing.
+TEST(BufferCopyLenient, StaysInsideTheDeclaredBuffer) {
+    struct { char buf[4]; char guard[4]; } m;
+    std::memset(&m, 0x5A, sizeof(m));
+
+    {
+        LenientBuffers lenient;
+        copy_chars("abcdefgh", 0, m.buf, sizeof(m.buf));
+    }
+
+    EXPECT_EQ(std::memcmp(m.buf, "abcX", 4), 0)
+        << "three characters plus the filler where the terminator was";
+    for (size_t i = 0; i < sizeof(m.guard); ++i) {
+        EXPECT_EQ(m.guard[i], 0x5A) << "wrote past the declared buffer at " << i;
+    }
+}
+
+// A zero-length value in a one-byte buffer is the tightest case: capacity is
+// zero, the terminator is the only byte written, and the filler replaces it.
+TEST(BufferCopyLenient, HandlesABufferWithRoomForOnlyTheTerminator) {
+    struct { char buf[1]; char guard[4]; } m;
+    std::memset(&m, 0x5A, sizeof(m));
+
+    {
+        LenientBuffers lenient;
+        copy_chars("", 0, m.buf, 1);
+    }
+
+    EXPECT_EQ(m.buf[0], 'X');
+    for (size_t i = 0; i < sizeof(m.guard); ++i) {
+        EXPECT_EQ(m.guard[i], 0x5A) << "wrote past a one-byte buffer at " << i;
+    }
+}
+
+TEST(BufferCopyLenient, DropsTheWideTerminatorToo) {
+    SQLWCHAR buf[8];
+    std::memset(buf, 0x7F, sizeof(buf));
+
+    {
+        LenientBuffers lenient;
+        copy_wchars("abc", 0, buf, static_cast<SQLLEN>(sizeof(buf)));
+    }
+
+    EXPECT_EQ(buf[0], 'a');
+    EXPECT_EQ(buf[1], 'b');
+    EXPECT_EQ(buf[2], 'c');
+    EXPECT_EQ(buf[3], static_cast<SQLWCHAR>('X'))
+        << "the wide terminator must be overwritten in units, not bytes";
+}
+
+// Strict is the default and must be untouched by any of this, or every
+// existing scenario changes meaning.
+//
+// It runs with no guard on purpose. The driver's configuration is
+// process-global, so this doubles as the canary for a fixture that connects
+// with Lenient and does not put it back - which is how D67 was found, within
+// an hour of D62 giving the leak something to corrupt.
+TEST(BufferCopyLenient, StrictIsUnchanged) {
+    char buf[16];
+    std::memset(buf, 0x7F, sizeof(buf));
+    copy_chars("abc", 0, buf, sizeof(buf));
+    EXPECT_STREQ(buf, "abc");
 }

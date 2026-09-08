@@ -1,5 +1,7 @@
 #include "buffer_copy.hpp"
 
+#include "../mock/behaviors.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -38,6 +40,29 @@ uint32_t decode_utf8(const char* s, size_t len) {
     }
 }
 
+// D62: BufferValidation=Lenient, applied where the terminator is written.
+//
+// D33 put this on SQLGetInfo alone and said so in its row: "broadening it
+// would break unrelated paths". That scoping is what left D58/D60/D61/D63/D64
+// enumerating buffers by hand - the fixture could only expose the sites
+// SQLGetInfo reached, so every other unguarded buffer in the tool was a guess
+// rather than a finding. Here the corruption sits in the one copy every
+// string return passes through (D18), which reaches SQLGetData,
+// SQLDescribeCol, SQLColAttribute, SQLGetCursorName, SQLNativeSql,
+// SQLGetDiagRec and the descriptor string fields at once.
+//
+// The write stays inside the caller's buffer: it overwrites the terminator
+// copy_chars/copy_wchars has just written, which sits at most one unit below
+// the declared capacity. What the caller loses is the terminator, not the
+// bounds - which is the real-driver defect being modelled. An application or
+// a driver manager then scans for a NUL that is not there.
+//
+// A filler byte rather than random data, so a probe that reports what it read
+// can be read back: 'X' is what D53 identified the injection by.
+bool lenient_buffers() {
+    return BehaviorController::instance().lenient_buffers();
+}
+
 } // namespace
 
 BufferCopyResult copy_chars(const std::string& src,
@@ -70,6 +95,7 @@ BufferCopyResult copy_chars(const std::string& src,
     char* dst = static_cast<char*>(target);
     if (out.copied > 0) std::memcpy(dst, src.data() + start, out.copied);
     dst[out.copied] = '\0';
+    if (lenient_buffers()) dst[out.copied] = 'X';  // D62
 
     out.truncated = out.copied < available;
     out.rc = out.truncated ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
@@ -130,6 +156,7 @@ BufferCopyResult copy_wchars(const std::string& src,
         i += len;
     }
     dst[written] = 0;
+    if (lenient_buffers()) dst[written] = static_cast<SQLWCHAR>('X');  // D62
 
     out.copied = written;
     out.truncated = written < remaining_units;

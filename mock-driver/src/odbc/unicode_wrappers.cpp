@@ -439,21 +439,11 @@ MOCK_ENTRY_TRY {
                                  "String data, right truncated");
         }
 
-        // D33: BufferValidation=Lenient drops the terminator here too. The
-        // .def exports only SQLGetInfoW, so on Windows this is the path the
-        // Driver Manager actually takes and the ANSI one is unreachable from
-        // an application.
-        if (BehaviorController::instance().config().buffer_validation ==
-                DriverConfig::BufferValidationMode::Lenient &&
-            rgbInfoValue && cbInfoValueMax > 0) {
-            const size_t capacity_units =
-                static_cast<size_t>(cbInfoValueMax) / sizeof(SQLWCHAR);
-            if (capacity_units > 0) {
-                const size_t written = std::min(val.size(), capacity_units - 1);
-                static_cast<SQLWCHAR*>(rgbInfoValue)[written] =
-                    static_cast<SQLWCHAR>('X');
-            }
-        }
+        // D33/D62: BufferValidation=Lenient drops the terminator here too -
+        // the .def exports only SQLGetInfoW, so on Windows this is the path
+        // the Driver Manager takes and the ANSI one is unreachable from an
+        // application. copy_string_to_wbuffer above applies the drop now, so
+        // nothing follows it here.
         return str_ret;
     }
 

@@ -21,6 +21,7 @@
 #include <sqlext.h>
 
 #include <cstring>
+#include <vector>
 #include <string>
 
 namespace {
@@ -39,6 +40,20 @@ protected:
     void TearDown() override {
         if (hstmt != SQL_NULL_HSTMT) SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
         if (hdbc != SQL_NULL_HDBC) {
+            // D67: the driver's configuration is process-global, so a test
+            // that connects with BufferValidation=Lenient leaves every test
+            // after it running against a driver that drops its terminators.
+            // Nothing noticed while D33 confined the knob to SQLGetInfo;
+            // D62 broadened it to every string copy and BufferCopyLenient.
+            // StrictIsUnchanged failed on the leak within the hour.
+            // FaultReachTest already did this - the same reconnect, for the
+            // same reason.
+            SQLDisconnect(hdbc);
+            const char* clean =
+                "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;";
+            SQLDriverConnect(hdbc, nullptr,
+                             reinterpret_cast<SQLCHAR*>(const_cast<char*>(clean)),
+                             SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT);
             SQLDisconnect(hdbc);
             SQLFreeHandle(SQL_HANDLE_DBC, hdbc);
         }
@@ -313,4 +328,181 @@ TEST_F(FaultInjectionTest, FetchIsQuietByDefault) {
               reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT * FROM USERS")),
               SQL_NTS), SQL_SUCCESS);
     EXPECT_EQ(SQLFetch(hstmt), SQL_SUCCESS);
+}
+
+
+// ── D62: how far the Lenient injection reaches ────────────────────────────
+//
+// D33 put the terminator-drop on SQLGetInfo alone, so the only crusher buffers
+// the fixture could expose were the ones SQLGetInfo filled - which is why
+// D58/D60/D61/D63/D64 each found their sites by hand and D61 claimed a
+// complete set twice before it was one. The injection now sits in copy_chars,
+// the copy every string return passes through, so SQLGetData, SQLDescribeCol,
+// SQLColAttribute, SQLGetCursorName, SQLNativeSql and SQLGetDiagRec all carry
+// it.
+//
+// **These tests do not go through a driver manager**, which is worth stating
+// because the connection strings make it look as though they do. This binary
+// links mock_core, so the linker resolves SQLDriverConnect, SQLGetData and the
+// rest to the driver's own definitions ahead of any import library; the
+// executable has no odbc32 import at all (`mockodbc.dll` appears in it only as
+// the string SQL_DRIVER_NAME returns). So `Driver={Mock ODBC Driver}` is
+// parsed by the mock itself and every call below reaches it unconverted.
+//
+// That is what makes the byte-exact assertions here legitimate. D53 is the
+// record of what a manager does to an injected fault when there is one in the
+// middle - the macOS manager rescans its own zeroed buffer, finds the NUL one
+// place later and re-terminates - and that is a question for the e2e suite,
+// which runs crusher as a real ODBC application. Here there is nothing
+// between the write and the assertion.
+//
+// It also means the driver's configuration is this process's global state,
+// which is why the fixture's TearDown reconnects clean (D67).
+
+namespace {
+
+// Read the first column of the current row into a caller buffer of `c_type`,
+// and return the raw bytes - not a std::string, because the whole question is
+// what sits past the value.
+std::vector<char> fetch_first_column(SQLHSTMT hstmt, SQLSMALLINT c_type,
+                                     size_t bytes, SQLLEN* indicator) {
+    std::vector<char> buf(bytes, 0x7F);
+    *indicator = 0;
+    SQLRETURN rc = SQLGetData(hstmt, 1, c_type, buf.data(),
+                              static_cast<SQLLEN>(bytes), indicator);
+    if (!SQL_SUCCEEDED(rc)) buf.clear();
+    return buf;
+}
+
+}  // namespace
+
+TEST_F(FaultInjectionTest, LenientDropsTheTerminatorOnSQLGetData) {
+    Connect("BufferValidation=Lenient;Catalog=Default;");
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, reinterpret_cast<SQLCHAR*>(
+            const_cast<char*>("SELECT 'HELLOWORLD'")), SQL_NTS)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+
+    SQLLEN ind = 0;
+    const auto buf = fetch_first_column(hstmt, SQL_C_CHAR, 64, &ind);
+    ASSERT_FALSE(buf.empty()) << "SQLGetData failed outright";
+
+    EXPECT_GT(ind, 0) << "the value must still arrive; only its terminator "
+                         "is meant to go";
+    EXPECT_EQ(std::memchr(buf.data(), 0, buf.size()), nullptr)
+        << "nothing sits between this call and the driver, so a NUL here "
+           "means D62's injection is not on the SQLGetData path";
+    EXPECT_EQ(buf[static_cast<size_t>(ind)], 'X')
+        << "the filler must sit exactly where the terminator belonged";
+}
+
+TEST_F(FaultInjectionTest, StrictTerminatesSQLGetData) {
+    Connect("Catalog=Default;");
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, reinterpret_cast<SQLCHAR*>(
+            const_cast<char*>("SELECT 'HELLOWORLD'")), SQL_NTS)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+
+    SQLLEN ind = 0;
+    const auto buf = fetch_first_column(hstmt, SQL_C_CHAR, 64, &ind);
+    ASSERT_FALSE(buf.empty());
+    EXPECT_GT(ind, 0);
+    EXPECT_EQ(buf[static_cast<size_t>(ind)], '\0')
+        << "the default must terminate, or every existing caller changes "
+           "meaning";
+}
+
+namespace {
+
+// The bytes SQLGetCursorName / SQLDescribeCol / SQLNativeSql leave behind,
+// as a hex string, so a difference between two runs can be reported rather
+// than merely detected.
+std::string hex(const char* p, size_t n) {
+    static const char* d = "0123456789abcdef";
+    std::string out;
+    for (size_t i = 0; i < n; ++i) {
+        const unsigned char c = static_cast<unsigned char>(p[i]);
+        out += d[c >> 4];
+        out += d[c & 0xF];
+    }
+    return out;
+}
+
+}  // namespace
+
+// The entry points the .def exports only as W. Compared as whole buffers
+// rather than by asserting "no NUL": these three return names short enough
+// that where the filler lands is the only difference, and a hex dump of the
+// two runs says which byte moved if one of them ever stops carrying the
+// injection.
+TEST_F(FaultInjectionTest, LenientReachesTheOtherStringEntryPoints) {
+    struct Sample {
+        std::string cursor;
+        std::string column;
+        std::string native;
+    };
+
+    auto sample = [this](const std::string& extra) {
+        Connect(extra + "Catalog=Default;");
+        Sample s;
+
+        char cur[64];
+        std::memset(cur, 0x7F, sizeof(cur));
+        SQLSMALLINT cur_len = 0;
+        if (SQL_SUCCEEDED(SQLGetCursorName(
+                hstmt, reinterpret_cast<SQLCHAR*>(cur),
+                static_cast<SQLSMALLINT>(sizeof(cur)), &cur_len))) {
+            s.cursor = hex(cur, sizeof(cur));
+        }
+
+        if (SQL_SUCCEEDED(SQLExecDirect(
+                hstmt, reinterpret_cast<SQLCHAR*>(
+                    const_cast<char*>("SELECT NAME FROM CUSTOMERS")),
+                SQL_NTS))) {
+            char col[64];
+            std::memset(col, 0x7F, sizeof(col));
+            SQLSMALLINT name_len = 0, type = 0, scale = 0, nullable = 0;
+            SQLULEN size = 0;
+            if (SQL_SUCCEEDED(SQLDescribeCol(
+                    hstmt, 1, reinterpret_cast<SQLCHAR*>(col),
+                    static_cast<SQLSMALLINT>(sizeof(col)), &name_len, &type,
+                    &size, &scale, &nullable))) {
+                s.column = hex(col, sizeof(col));
+            }
+            SQLCloseCursor(hstmt);
+        }
+
+        char nat[64];
+        std::memset(nat, 0x7F, sizeof(nat));
+        SQLINTEGER nat_len = 0;
+        if (SQL_SUCCEEDED(SQLNativeSql(
+                hdbc, reinterpret_cast<SQLCHAR*>(
+                    const_cast<char*>("SELECT {fn UCASE(NAME)} FROM CUSTOMERS")),
+                SQL_NTS, reinterpret_cast<SQLCHAR*>(nat),
+                static_cast<SQLINTEGER>(sizeof(nat)), &nat_len))) {
+            s.native = hex(nat, sizeof(nat));
+        }
+        return s;
+    };
+
+    const Sample strict = sample("");
+    // The fixture keeps one connection per test; start over for the second.
+    if (hstmt != SQL_NULL_HSTMT) {
+        SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+        hstmt = SQL_NULL_HSTMT;
+    }
+    SQLDisconnect(hdbc);
+    const Sample lenient = sample("BufferValidation=Lenient;");
+
+    ASSERT_FALSE(strict.cursor.empty()) << "SQLGetCursorName gave nothing to "
+                                           "compare";
+    EXPECT_NE(strict.cursor, lenient.cursor)
+        << "SQLGetCursorName is unchanged by BufferValidation=Lenient, so the "
+           "injection is not reaching copy_chars on that path";
+    ASSERT_FALSE(strict.column.empty());
+    EXPECT_NE(strict.column, lenient.column)
+        << "SQLDescribeCol is unchanged by BufferValidation=Lenient";
+    ASSERT_FALSE(strict.native.empty());
+    EXPECT_NE(strict.native, lenient.native)
+        << "SQLNativeSql is unchanged by BufferValidation=Lenient";
 }

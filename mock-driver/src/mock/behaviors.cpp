@@ -10,6 +10,10 @@ BehaviorController& BehaviorController::instance() {
 void BehaviorController::set_config(const DriverConfig& config) {
     std::lock_guard<std::mutex> g(mu_);
     config_ = config;
+    // D62: mirrored so copy_chars can ask without taking the mutex.
+    lenient_buffers_.store(
+        config.buffer_validation == DriverConfig::BufferValidationMode::Lenient,
+        std::memory_order_relaxed);
 }
 
 DriverConfig BehaviorController::config() const {
