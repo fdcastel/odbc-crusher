@@ -12,6 +12,7 @@
 #include "core/odbc_connection.hpp"
 #include "core/odbc_error.hpp"
 #include "core/crash_guard.hpp"
+#include "tests/category_teardown.hpp"
 #include "tests/connection_tests.hpp"
 #include "tests/statement_tests.hpp"
 #include "tests/metadata_tests.hpp"
@@ -391,7 +392,24 @@ int main(int argc, char** argv) {
                               total_failed, total_skipped, total_errors,
                               total_informational);
         }
-        
+
+        // D76: destroy the categories here, under the crash guard, rather than
+        // letting the vector go out of scope at the end of this block.
+        //
+        // Three of them hold a RoundTripTableGuard past run(), and
+        // ~RoundTripTableGuard issues SQLSetConnectAttr and a DROP TABLE. At
+        // end of scope that ran unguarded *and* after report_end(), so a
+        // driver that faults while dropping a table killed the process with
+        // nothing in the report to say why - and no report left to write it
+        // into even if it had been caught.
+        if (auto teardown_crashes = tests::teardown_categories(categories);
+            !teardown_crashes.empty()) {
+            reporter->report_category("Teardown", teardown_crashes);
+            tally_results(teardown_crashes, total_tests, total_passed,
+                          total_failed, total_skipped, total_errors,
+                          total_informational);
+        }
+
         auto overall_end = std::chrono::high_resolution_clock::now();
         auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(
             overall_end - overall_start);

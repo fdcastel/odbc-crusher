@@ -1,6 +1,7 @@
 # ODBC Tests library
 add_library(odbc_crusher_tests_lib
     test_base.cpp
+    category_teardown.cpp
     connection_tests.cpp
     statement_tests.cpp
     metadata_tests.cpp
