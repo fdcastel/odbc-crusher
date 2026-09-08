@@ -137,9 +137,50 @@ struct DriverConfig {
 
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
-    
+
     // Apply latency if configured
     void apply_latency() const;
+};
+
+// D78: which Unicode entry point is this call inside?
+//
+// Every `should_fail` call site names an ANSI function, because the 31 W
+// wrappers all convert their arguments and delegate. So `FailOn=SQLPrepare`
+// failed both widths and nothing could fail `SQLPrepareW` alone - which meant
+// the tool's W-then-ANSI fallbacks had no configuration that could exercise
+// them.
+//
+// A marker rather than a check per wrapper: `should_fail` is already the one
+// place that decides, and the ANSI site below it already knows how to report a
+// failure with the right SQLSTATE, the configured `ErrorCode` and the right
+// handle. Thirty-one copies of that block would be thirty-one chances to get
+// one of them wrong.
+//
+// `thread_local` for the same reason config.cpp's random generator is: which
+// entry point one thread is inside means nothing to another. It also keeps new
+// state off DriverConfig, which BehaviorController::config() copies on every
+// call.
+//
+// Semantics worth stating: a W name in `FailOn` means "the call entered through
+// this W entry point", not "this exact function". Each wrapper makes one
+// delegate call, so the two are indistinguishable - except for
+// SQLBrowseConnectW, which delegates to SQLDriverConnectW and so leaves both
+// names active.
+class WEntryScope {
+public:
+    explicit WEntryScope(const char* name) noexcept;
+    ~WEntryScope() noexcept;
+
+    WEntryScope(const WEntryScope&) = delete;
+    WEntryScope& operator=(const WEntryScope&) = delete;
+
+    // True when a call on this thread is inside a W entry point whose
+    // lower-cased name is `lower_name`.
+    static bool active(const std::string& lower_name) noexcept;
+
+private:
+    const char* name_;
+    WEntryScope* prev_;
 };
 
 // Parse connection string into configuration

@@ -146,6 +146,7 @@ SQLRETURN SQL_API SQLConnectW(
     SQLWCHAR* szUID,     SQLSMALLINT cbUID,
     SQLWCHAR* szAuthStr, SQLSMALLINT cbAuthStr)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     std::string dsn  = sqlw_to_string(szDSN,     cbDSN);
     std::string uid  = sqlw_to_string(szUID,     cbUID);
     std::string auth = sqlw_to_string(szAuthStr, cbAuthStr);
@@ -165,6 +166,7 @@ SQLRETURN SQL_API SQLDriverConnectW(
     SQLSMALLINT* pcbConnStrOut,
     SQLUSMALLINT fDriverCompletion)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     std::string connIn = sqlw_to_string(szConnStrIn, cbConnStrIn);
 
     // Prepare ANSI output buffer
@@ -202,6 +204,7 @@ SQLRETURN SQL_API SQLBrowseConnectW(
     SQLWCHAR* szConnStrOut,  SQLSMALLINT cbConnStrOutMax,
     SQLSMALLINT* pcbConnStrOut)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     return SQLDriverConnectW(hdbc, nullptr,
                              szConnStrIn, cbConnStrIn,
                              szConnStrOut, cbConnStrOutMax,
@@ -220,6 +223,7 @@ SQLRETURN SQL_API SQLGetConnectAttrW(
     SQLINTEGER cbValueMax,
     SQLINTEGER* pcbValue)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // For string attributes we need to convert the output
     if (fAttribute == SQL_ATTR_CURRENT_CATALOG) {
         // Call ANSI version into temp buffer
@@ -248,6 +252,7 @@ SQLRETURN SQL_API SQLSetConnectAttrW(
     SQLPOINTER rgbValue,
     SQLINTEGER cbValue)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // All current mock connection attributes are numeric — pass through
     return SQLSetConnectAttr(hdbc, fAttribute, rgbValue, cbValue);
 }
@@ -262,6 +267,7 @@ SQLRETURN SQL_API SQLExecDirectW(
     SQLWCHAR* szSqlStr,
     SQLINTEGER cbSqlStr)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     std::string sql = sqlw_to_string(szSqlStr, cbSqlStr);
     return SQLExecDirect(hstmt,
                          (SQLCHAR*)sql.c_str(),
@@ -274,6 +280,7 @@ SQLRETURN SQL_API SQLPrepareW(
     SQLWCHAR* szSqlStr,
     SQLINTEGER cbSqlStr)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     std::string sql = sqlw_to_string(szSqlStr, cbSqlStr);
     return SQLPrepare(hstmt,
                       (SQLCHAR*)sql.c_str(),
@@ -296,6 +303,7 @@ SQLRETURN SQL_API SQLDescribeColW(
     SQLSMALLINT* pibScale,
     SQLSMALLINT* pfNullable)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // Call ANSI version to get name into temp buffer
     SQLCHAR ansi_name[512] = {0};
     SQLSMALLINT ansi_len = 0;
@@ -321,6 +329,7 @@ SQLRETURN SQL_API SQLColAttributeW(
     SQLSMALLINT* pcbCharAttr,   // bytes
     SQLLEN* pNumAttr)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // Determine if this field returns a string
     bool is_string_field = (iField == SQL_DESC_NAME ||
                             iField == SQL_COLUMN_NAME ||
@@ -367,6 +376,7 @@ SQLRETURN SQL_API SQLSetCursorNameW(
     SQLWCHAR* szCursor,
     SQLSMALLINT cbCursor)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     std::string name = sqlw_to_string(szCursor, cbCursor);
     return SQLSetCursorName(hstmt,
                             (SQLCHAR*)name.c_str(),
@@ -380,6 +390,7 @@ SQLRETURN SQL_API SQLGetCursorNameW(
     SQLSMALLINT cbCursorMax,    // characters
     SQLSMALLINT* pcbCursor)     // characters (excl NUL)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     SQLCHAR ansi[256] = {0};
     SQLSMALLINT ansi_len = 0;
     SQLRETURN ret = SQLGetCursorName(hstmt, ansi, sizeof(ansi), &ansi_len);
@@ -402,6 +413,7 @@ SQLRETURN SQL_API SQLGetInfoW(
     SQLSMALLINT cbInfoValueMax,   // bytes
     SQLSMALLINT* pcbInfoValue)    // bytes
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     auto* conn = validate_dbc_handle(hdbc);
     if (!conn) return SQL_INVALID_HANDLE;
 
@@ -481,6 +493,7 @@ SQLRETURN SQL_API SQLGetTypeInfoW(
     SQLHSTMT hstmt,
     SQLSMALLINT fSqlType)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // No string parameters — just forward
     return SQLGetTypeInfo(hstmt, fSqlType);
 }
@@ -497,6 +510,7 @@ SQLRETURN SQL_API SQLGetStmtAttrW(
     SQLINTEGER cbValueMax,
     SQLINTEGER* pcbValue)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // All mock stmt attributes are numeric — pass through
     return SQLGetStmtAttr(hstmt, fAttribute, rgbValue, cbValueMax, pcbValue);
 }
@@ -508,6 +522,7 @@ SQLRETURN SQL_API SQLSetStmtAttrW(
     SQLPOINTER rgbValue,
     SQLINTEGER cbValue)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     return SQLSetStmtAttr(hstmt, fAttribute, rgbValue, cbValue);
 }
 MOCK_ENTRY_CATCH(hstmt)
@@ -551,6 +566,7 @@ SQLRETURN SQL_API SQLTablesW(
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName,
     SQLWCHAR* szTableType,    SQLSMALLINT cbTableType)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg tab(szTableName, cbTableName);
@@ -571,6 +587,7 @@ SQLRETURN SQL_API SQLColumnsW(
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName,
     SQLWCHAR* szColumnName,   SQLSMALLINT cbColumnName)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg tab(szTableName, cbTableName);
@@ -590,6 +607,7 @@ SQLRETURN SQL_API SQLPrimaryKeysW(
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg tab(szTableName, cbTableName);
@@ -610,6 +628,7 @@ SQLRETURN SQL_API SQLForeignKeysW(
     SQLWCHAR* szFkSchemaName,  SQLSMALLINT cbFkSchemaName,
     SQLWCHAR* szFkTableName,   SQLSMALLINT cbFkTableName)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg pkCat(szPkCatalogName, cbPkCatalogName);
     WArg pkSch(szPkSchemaName, cbPkSchemaName);
     WArg pkTab(szPkTableName, cbPkTableName);
@@ -636,6 +655,7 @@ SQLRETURN SQL_API SQLSpecialColumnsW(
     SQLUSMALLINT fScope,
     SQLUSMALLINT fNullable)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg tab(szTableName, cbTableName);
@@ -656,6 +676,7 @@ SQLRETURN SQL_API SQLStatisticsW(
     SQLUSMALLINT fUnique,
     SQLUSMALLINT fAccuracy)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg tab(szTableName, cbTableName);
@@ -674,6 +695,7 @@ SQLRETURN SQL_API SQLProceduresW(
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szProcName,     SQLSMALLINT cbProcName)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg prc(szProcName, cbProcName);
@@ -692,6 +714,7 @@ SQLRETURN SQL_API SQLProcedureColumnsW(
     SQLWCHAR* szProcName,     SQLSMALLINT cbProcName,
     SQLWCHAR* szColumnName,   SQLSMALLINT cbColumnName)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg prc(szProcName, cbProcName);
@@ -711,6 +734,7 @@ SQLRETURN SQL_API SQLTablePrivilegesW(
     SQLWCHAR* szSchemaName,   SQLSMALLINT cbSchemaName,
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg tab(szTableName, cbTableName);
@@ -729,6 +753,7 @@ SQLRETURN SQL_API SQLColumnPrivilegesW(
     SQLWCHAR* szTableName,    SQLSMALLINT cbTableName,
     SQLWCHAR* szColumnName,   SQLSMALLINT cbColumnName)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     WArg cat(szCatalogName, cbCatalogName);
     WArg sch(szSchemaName, cbSchemaName);
     WArg tab(szTableName, cbTableName);
@@ -752,6 +777,7 @@ SQLRETURN SQL_API SQLNativeSqlW(
     SQLWCHAR* szSqlStr,      SQLINTEGER cbSqlStrMax,
     SQLINTEGER* pcbSqlStr)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     std::string sqlIn = sqlw_to_string(szSqlStrIn, cbSqlStrIn);
 
     SQLCHAR ansi_out[4096] = {0};
@@ -796,6 +822,7 @@ SQLRETURN SQL_API SQLGetDiagRecW(
     SQLSMALLINT cbErrorMsgMax,   // characters
     SQLSMALLINT* pcbErrorMsg)    // characters (excl NUL)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     SQLCHAR ansi_state[6] = {0};
     SQLCHAR ansi_msg[2048] = {0};
     SQLSMALLINT ansi_msg_len = 0;
@@ -835,6 +862,7 @@ SQLRETURN SQL_API SQLGetDiagFieldW(
     SQLSMALLINT cbDiagInfoMax,   // bytes
     SQLSMALLINT* pcbDiagInfo)    // bytes
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // String diagnostic fields need conversion
     bool is_string_field = (fDiagField == SQL_DIAG_SQLSTATE ||
                             fDiagField == SQL_DIAG_MESSAGE_TEXT ||
@@ -881,6 +909,7 @@ SQLRETURN SQL_API SQLGetDescFieldW(
     SQLINTEGER cbValueMax,
     SQLINTEGER* pcbValue)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // The mock driver descriptor fields are all numeric — pass through
     return SQLGetDescField(hdesc, iRecord, iField, rgbValue,
                            cbValueMax, pcbValue);
@@ -900,6 +929,7 @@ SQLRETURN SQL_API SQLGetDescRecW(
     SQLSMALLINT* pScale,
     SQLSMALLINT* pNullable)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     SQLCHAR ansi_name[512] = {0};
     SQLSMALLINT ansi_len = 0;
     SQLRETURN ret = SQLGetDescRec(hdesc, iRecord,
@@ -921,6 +951,7 @@ SQLRETURN SQL_API SQLSetDescFieldW(
     SQLPOINTER rgbValue,
     SQLINTEGER cbValue)
 MOCK_ENTRY_TRY {
+    const WEntryScope w_entry(__func__);   // D78
     // Mock descriptor fields are all numeric — pass through
     return SQLSetDescField(hdesc, iRecord, iField, rgbValue, cbValue);
 }

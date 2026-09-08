@@ -1932,3 +1932,63 @@ TEST_F(CrusherE2EFixture, AFailedPrepareNamesTheStatementItCouldNotPrepare) {
            "this scenario proves nothing\n"
         << report_outline(run);
 }
+
+
+// ── D78: a W-scoped FailOn stops the ANSI fallback too ────────────────────
+//
+// D78 gave the mock a lever that fails a Unicode entry point without failing
+// its ANSI implementation, so `FailOn=SQLPrepareW` and `FailOn=SQLPrepare` are
+// now genuinely different configurations *of the driver*. Through a driver
+// manager they are not distinguishable by the application, and that is the
+// point worth pinning.
+//
+// The mock exports W only (D2), so a manager classifies it as a Unicode driver
+// and converts every ANSI call into its W form. The tool's six W-then-ANSI
+// fallbacks therefore call SQLPrepareW, get an error, fall back to SQLPrepare -
+// and the manager turns that into SQLPrepareW as well. Both attempts land on
+// the entry point that was named.
+//
+// So the two runs must be identical, probe for probe. This is a tripwire, not
+// coverage: if some driver manager ever dispatches per width, the reports
+// diverge and this test forces D78's row to be corrected instead of quietly
+// becoming untrue.
+TEST_F(CrusherE2EFixture, AWScopedFailOnAlsoStopsTheAnsiFallback) {
+    const std::string base =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;FailOn=";
+
+    auto ansi = run_crusher(base + "SQLPrepare;");
+    ASSERT_TRUE(ansi.report.contains("summary")) << report_outline(ansi);
+    auto wide = run_crusher(base + "SQLPrepareW;");
+    ASSERT_TRUE(wide.report.contains("summary")) << report_outline(wide);
+
+    // The lever has to be doing something, or "identical" proves nothing.
+    ASSERT_GT(ansi.report["summary"].value("skipped", 0), 10)
+        << "FailOn=SQLPrepare stopped almost nothing, so this comparison has "
+           "no content\n"
+        << report_outline(ansi);
+
+    EXPECT_EQ(ansi.report["summary"].value("skipped", -1),
+              wide.report["summary"].value("skipped", -2))
+        << "naming the W entry point produced a different number of skips from "
+           "naming the ANSI one. That would mean this driver manager dispatches "
+           "per width - correct D78's row, which says it does not.";
+
+    size_t compared = 0;
+    for (const auto& cat : ansi.report["categories"]) {
+        const auto name = cat.value("name", std::string{});
+        for (const auto& t : cat["tests"]) {
+            auto other = find_test(wide.report, name,
+                                   t.value("test_name", std::string{}));
+            if (!other.has_value()) continue;
+            ++compared;
+            EXPECT_EQ(t.value("status", std::string{}),
+                      other->value("status", std::string{}))
+                << name << " / " << t.value("test_name", std::string{})
+                << " graded differently under FailOn=SQLPrepareW than under "
+                   "FailOn=SQLPrepare. The tool cannot tell the two apart "
+                   "through a driver manager that converts ANSI to W.";
+        }
+    }
+    EXPECT_GT(compared, 150u) << "too few probes compared to mean anything";
+}

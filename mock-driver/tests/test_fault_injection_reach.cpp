@@ -20,6 +20,8 @@
 #endif
 #include <sql.h>
 #include <sqlext.h>
+#include <functional>
+#include <vector>
 #include <string>
 
 namespace {
@@ -237,3 +239,144 @@ TEST_F(FaultReachTest, NamingOneFunctionDoesNotFailTheRest) {
 }
 
 }  // namespace
+
+
+// ── D78: failing a W entry point without failing its ANSI implementation ──
+//
+// Every `should_fail` call site names an ANSI function, because the 31 W
+// wrappers convert their arguments and delegate. So `FailOn=SQLPrepare` failed
+// both widths and nothing could fail `SQLPrepareW` alone.
+//
+// These tests are possible only in this binary. It links mock_core directly and
+// has no odbc32 import, so `SQLPrepareW` and `SQLPrepare` both resolve to the
+// driver's own definitions and the two can be called independently. Through a
+// driver manager they cannot: a Unicode-only driver receives both widths as W,
+// which is why D78's row records that the tool's own W-then-ANSI fallbacks
+// still cannot be exercised end to end.
+
+namespace {
+
+// A wide copy of a narrow string. Same shape as the helper in
+// test_unicode_wrappers.cpp - a `L"..."` literal will not do, because SQLWCHAR
+// is two bytes on every platform and wchar_t is four on Linux.
+std::vector<SQLWCHAR> Wide(const std::string& s) {
+    std::vector<SQLWCHAR> out(s.size() + 1, 0);
+    for (size_t i = 0; i < s.size(); ++i) {
+        out[i] = static_cast<SQLWCHAR>(static_cast<unsigned char>(s[i]));
+    }
+    return out;
+}
+
+// One entry per wrapper family: the W call and the ANSI call behind it.
+struct WidthPair {
+    const char* w_name;
+    std::function<SQLRETURN(SQLHDBC, SQLHSTMT)> call_w;
+    std::function<SQLRETURN(SQLHDBC, SQLHSTMT)> call_ansi;
+};
+
+std::vector<WidthPair> width_pairs() {
+    return {
+        {"SQLPrepareW",
+         [](SQLHDBC, SQLHSTMT s) {
+             auto w = Wide("SELECT 1");
+             return SQLPrepareW(s, w.data(), SQL_NTS);
+         },
+         [](SQLHDBC, SQLHSTMT s) {
+             return SQLPrepare(s, (SQLCHAR*)"SELECT 1", SQL_NTS);
+         }},
+        {"SQLExecDirectW",
+         [](SQLHDBC, SQLHSTMT s) {
+             SQLFreeStmt(s, SQL_CLOSE);
+             auto w = Wide("SELECT 1");
+             return SQLExecDirectW(s, w.data(), SQL_NTS);
+         },
+         [](SQLHDBC, SQLHSTMT s) {
+             SQLFreeStmt(s, SQL_CLOSE);
+             return SQLExecDirect(s, (SQLCHAR*)"SELECT 1", SQL_NTS);
+         }},
+        {"SQLGetInfoW",
+         [](SQLHDBC c, SQLHSTMT) {
+             SQLWCHAR buf[128] = {0};
+             SQLSMALLINT len = 0;
+             return SQLGetInfoW(c, SQL_DBMS_NAME, buf,
+                                static_cast<SQLSMALLINT>(sizeof(buf)), &len);
+         },
+         [](SQLHDBC c, SQLHSTMT) {
+             SQLCHAR buf[128] = {0};
+             SQLSMALLINT len = 0;
+             return SQLGetInfo(c, SQL_DBMS_NAME, buf,
+                               static_cast<SQLSMALLINT>(sizeof(buf)), &len);
+         }},
+        {"SQLTablesW",
+         [](SQLHDBC, SQLHSTMT s) {
+             SQLFreeStmt(s, SQL_CLOSE);
+             return SQLTablesW(s, nullptr, 0, nullptr, 0, nullptr, 0,
+                               nullptr, 0);
+         },
+         [](SQLHDBC, SQLHSTMT s) {
+             SQLFreeStmt(s, SQL_CLOSE);
+             return SQLTables(s, nullptr, 0, nullptr, 0, nullptr, 0,
+                              nullptr, 0);
+         }},
+        {"SQLNativeSqlW",
+         [](SQLHDBC c, SQLHSTMT) {
+             auto w = Wide("SELECT 1");
+             SQLWCHAR out[256] = {0};
+             SQLINTEGER out_len = 0;
+             return SQLNativeSqlW(c, w.data(), SQL_NTS, out, 256, &out_len);
+         },
+         [](SQLHDBC c, SQLHSTMT) {
+             SQLCHAR out[256] = {0};
+             SQLINTEGER out_len = 0;
+             return SQLNativeSql(c, (SQLCHAR*)"SELECT 1", SQL_NTS,
+                                 out, 256, &out_len);
+         }},
+    };
+}
+
+}  // namespace
+
+TEST_F(FaultReachTest, AWEntryPointCanFailWhileItsAnsiImplementationSucceeds) {
+    for (const auto& p : width_pairs()) {
+        Open(p.w_name);
+        EXPECT_EQ(p.call_w(hdbc, hstmt), SQL_ERROR)
+            << "FailOn=" << p.w_name << " did not reach the W entry point";
+        EXPECT_TRUE(SQL_SUCCEEDED(p.call_ansi(hdbc, hstmt)))
+            << "FailOn=" << p.w_name << " also failed the ANSI implementation, "
+               "which is the one thing D78 exists to separate";
+        Close();
+    }
+}
+
+// The backward-compatibility pin, as a test rather than as prose. Every e2e
+// FailOn scenario names an ANSI function and reaches it *through* a W wrapper
+// via the driver manager; if an ANSI name stopped matching a W-arriving call,
+// that whole suite would die quietly.
+TEST_F(FaultReachTest, AnAnsiFailOnStillFailsBothWidths) {
+    Open("SQLPrepare");
+    auto w = Wide("SELECT 1");
+    EXPECT_EQ(SQLPrepareW(hstmt, w.data(), SQL_NTS), SQL_ERROR)
+        << "an ANSI FailOn must still fail calls arriving through the W entry "
+           "point - every e2e scenario depends on it";
+    EXPECT_EQ(SQLPrepare(hstmt, (SQLCHAR*)"SELECT 1", SQL_NTS), SQL_ERROR);
+}
+
+// A marker, not a latch: pushed and popped per call, so the next W call fails
+// again and the ANSI one in between does not.
+TEST_F(FaultReachTest, TheWMarkerDoesNotOutliveTheCall) {
+    Open("SQLPrepareW");
+    auto w = Wide("SELECT 1");
+    EXPECT_EQ(SQLPrepareW(hstmt, w.data(), SQL_NTS), SQL_ERROR);
+    EXPECT_TRUE(SQL_SUCCEEDED(SQLPrepare(hstmt, (SQLCHAR*)"SELECT 1", SQL_NTS)));
+    EXPECT_EQ(SQLPrepareW(hstmt, w.data(), SQL_NTS), SQL_ERROR)
+        << "the marker did not survive its own scope, or did not come back";
+}
+
+// The D36-style over-correction guard: naming one entry point must not break
+// the others.
+TEST_F(FaultReachTest, NamingAWEntryPointDoesNotFailTheOthers) {
+    Open("SQLPrepareW");
+    auto w = Wide("SELECT 1");
+    EXPECT_TRUE(SQL_SUCCEEDED(SQLExecDirectW(hstmt, w.data(), SQL_NTS)))
+        << "FailOn=SQLPrepareW broke an unrelated W entry point";
+}

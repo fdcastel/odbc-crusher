@@ -41,6 +41,34 @@ int clamp_int(int value, int lo, int hi) {
 
 } // anonymous namespace
 
+namespace {
+
+// D78: the active W entry points on this thread, innermost first.
+//
+// An intrusive stack of stack-allocated nodes - no allocation, and correct
+// under nesting (SQLBrowseConnectW delegates to SQLDriverConnectW) and under
+// exception unwinding, because the local is destroyed before MOCK_ENTRY_CATCH
+// runs.
+thread_local WEntryScope* g_w_entry = nullptr;
+
+}  // namespace
+
+WEntryScope::WEntryScope(const char* name) noexcept
+    : name_(name), prev_(g_w_entry) {
+    g_w_entry = this;
+}
+
+WEntryScope::~WEntryScope() noexcept {
+    g_w_entry = prev_;
+}
+
+bool WEntryScope::active(const std::string& lower_name) noexcept {
+    for (const WEntryScope* s = g_w_entry; s; s = s->prev_) {
+        if (to_lower(s->name_) == lower_name) return true;
+    }
+    return false;
+}
+
 bool DriverConfig::should_fail(const std::string& function_name) const {
     // D26: `FailOn` names specific functions, so it is a per-function
     // override rather than a property of a mode - and it used to be read only
@@ -50,7 +78,12 @@ bool DriverConfig::should_fail(const std::string& function_name) const {
     if (!fail_on.empty()) {
         const std::string lower_name = to_lower(function_name);
         for (const auto& f : fail_on) {
-            if (to_lower(f) == lower_name) return true;
+            const std::string wanted = to_lower(f);
+            if (wanted == lower_name) return true;
+            // D78: ...or it names the W entry point this call arrived through.
+            // An ANSI name still fails both widths, because every W call
+            // reaches this same site through its delegate.
+            if (WEntryScope::active(wanted)) return true;
         }
         // A named list that does not name this function means "not this one",
         // which is the whole point of naming it - so Partial says no here
