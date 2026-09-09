@@ -23,6 +23,11 @@ private:
     TestResult test_unicode_types();
     TestResult test_binary_types();
     TestResult test_guid_type();
+
+    // P9 (IMPROVEMENT_PLAN_V2): the *input* path. test_guid_type covers
+    // SQLGetData; PR #296 fixed a corruption that only happens when a
+    // SQL_C_GUID is bound as a parameter.
+    TestResult test_guid_parameter_binding();
     // Note: Interval types are rarely supported, skipping for now
 };
 

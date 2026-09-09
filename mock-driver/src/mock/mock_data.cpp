@@ -456,6 +456,22 @@ static std::vector<std::string> split_value_tuples(const std::string& slice) {
     return tuples;
 }
 
+// P12: does this row leave a NOT NULL column empty?
+//
+// Without this the mock accepted anything, and no probe could make one
+// parameter set out of five fail - the shape every per-row error path needs,
+// and the reason test_param_status_per_row_partial_failure never actually
+// violated the constraint its own name promises.
+static std::string not_null_violation(const MockRow& row, const MockTable& table) {
+    for (size_t i = 0; i < table.columns.size() && i < row.size(); ++i) {
+        if (table.columns[i].nullable == SQL_NO_NULLS &&
+            std::holds_alternative<std::monostate>(row[i])) {
+            return table.columns[i].name;
+        }
+    }
+    return {};
+}
+
 InsertValuesResult parse_insert_values(const std::string& values_str) {
     InsertValuesResult result;
     auto exprs = split_expressions(values_str);
@@ -999,6 +1015,9 @@ std::vector<ParsedQuery::ColumnDef> parse_column_defs(const std::string& defs_st
         }
         std::string type_part = (constraint_pos != std::string::npos) ? trim(rest.substr(0, constraint_pos)) : rest;
         def.data_type = parse_sql_type(type_part, def.column_size, def.decimal_digits);
+        // P12: keep the constraint, do not just step over it.
+        def.not_null = (upper_rest.find("NOT NULL") != std::string::npos) ||
+                       (upper_rest.find("PRIMARY KEY") != std::string::npos);
         result.push_back(def);
     }
     return result;
@@ -1948,7 +1967,7 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size,
             col.data_type = def.data_type;
             col.column_size = def.column_size;
             col.decimal_digits = def.decimal_digits;
-            col.nullable = SQL_NULLABLE;
+            col.nullable = def.not_null ? SQL_NO_NULLS : SQL_NULLABLE;
             col.is_primary_key = false;
             col.is_auto_increment = false;
             new_table.columns.push_back(col);
@@ -2425,11 +2444,25 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size,
                     while (row.size() < table->columns.size())
                         row.push_back(std::monostate{});
                 }
+                // P12: 23000, and stop. The specification has an array
+                // execute report the failing set and the sets that ran before
+                // it, which is exactly what a driver's status array is for.
+                const std::string offender = not_null_violation(row, *table);
+                if (!offender.empty()) {
+                    result.success = false;
+                    result.error_sqlstate = "23000";
+                    result.error_message =
+                        "Column '" + offender + "' cannot be NULL";
+                    result.affected_rows = inserted;
+                    result.failed_row_index = static_cast<long long>(r);
+                    break;
+                }
                 if (apply_silent_corruption(row, *table, corruption)) {
                     write_insert(catalog, query.table_name, std::move(row), txn);
                     ++inserted;
                 }
             }
+            if (!result.success) break;
             result.affected_rows = inserted;
             break;
         }

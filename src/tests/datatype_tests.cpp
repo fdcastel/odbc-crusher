@@ -3,6 +3,8 @@
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
+#include <algorithm>
+#include <cctype>
 
 namespace odbc_crusher::tests {
 
@@ -16,7 +18,9 @@ std::vector<TestResult> DataTypeTests::run() {
         test_null_values(),
         test_unicode_types(),
         test_binary_types(),
-        test_guid_type()
+        test_guid_type(),
+        // P9 (IMPROVEMENT_PLAN_V2)
+        test_guid_parameter_binding()
     };
 }
 
@@ -529,6 +533,178 @@ TestResult DataTypeTests::test_binary_types() {
                            first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "no SQLSTATE");
                 r.suggestion = "Driver may not support SQL_C_BINARY retrieval.";
             }
+        });
+}
+
+// ── P9 (IMPROVEMENT_PLAN_V2) — SQL_C_GUID as a *parameter* ─────────────
+//
+// `SQL_C_GUID` appeared once in the whole suite, in `test_guid_type` above, on
+// the **output** path via `SQLGetData`. The defect PR #296 fixed is entirely on
+// the input path: `SQLBindParameter(SQL_C_GUID, SQL_GUID, …, ptr, 16, &len)`
+// returned `SQL_SUCCESS` and the server never saw the sixteen UUID bytes. A
+// binary target got the ASCII of the first sixteen characters of the canonical
+// string; a text target under `CHARSET=UTF8` got UTF-16 on the wire, because
+// the driver mapped UTF8 text to a wide C type and picked the wide converter.
+//
+// Real applications do exactly this: DuckDB's ODBC scanner binds its `::UUID`
+// values this way, and its Firebird round-trip test was parked on the bug.
+//
+// The probe is written round-trip rather than against a literal, so it needs no
+// engine-specific UUID function to *check* the answer — only one to make the
+// server render what it received. Both shapes come from issue #295, and both
+// are tried, because the two failure modes are different: a binary parameter
+// slot and a text one exercise different converters.
+TestResult DataTypeTests::test_guid_parameter_binding() {
+    return run_test(
+        "test_guid_parameter_binding",
+        "SQLBindParameter(SQL_C_GUID)",
+        "A 16-byte SQL_C_GUID bound as a parameter reaches the server as that "
+        "UUID, not as the text of its canonical form",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter — SQL_C_GUID input conversion",
+        [&](TestResult& r) {
+            // A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11, the example from the issue.
+            // Data1/2/3 are little-endian fields in SQLGUID and big-endian on
+            // the wire, which is the conversion under test; Data4 is bytes.
+            SQLGUID guid{};
+            guid.Data1 = 0xA0EEBC99u;
+            guid.Data2 = 0x9C0B;
+            guid.Data3 = 0x4EF8;
+            const unsigned char d4[8] = {0xBB, 0x6D, 0x6B, 0xB9,
+                                         0xBD, 0x38, 0x0A, 0x11};
+            std::memcpy(guid.Data4, d4, sizeof(d4));
+            static const char* const kCanonical =
+                "A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11";
+
+            // Statements that hand the bound UUID back as text. Each engine
+            // spells this its own way and most have nothing like it; a driver
+            // with no UUID rendering simply skips, which is a fact about the
+            // engine rather than a verdict on the driver.
+            struct Shape { const char* sql; const char* what; };
+            static const Shape shapes[] = {
+                // Firebird: the parameter is described as CHAR(16) OCTETS,
+                // which is reproducer A from the issue.
+                {"SELECT UUID_TO_CHAR(?) FROM RDB$DATABASE", "binary parameter slot"},
+                // Firebird: described as CHAR(36) in the connection charset,
+                // reproducer B - the one that produced UTF-16 on the wire.
+                {"SELECT UUID_TO_CHAR(CHAR_TO_UUID(?)) FROM RDB$DATABASE", "text parameter slot"},
+                // SQL Server and friends: CAST to the engine's own UUID type.
+                {"SELECT CAST(? AS UNIQUEIDENTIFIER)", "uniqueidentifier cast"},
+            };
+
+            std::string tried;
+            std::string mismatches;
+            int measured = 0;
+
+            for (const auto& shape : shapes) {
+                core::OdbcStatement stmt(conn_);
+                if (!SQL_SUCCEEDED(SQLPrepare(
+                        stmt.get_handle(),
+                        reinterpret_cast<SQLCHAR*>(const_cast<char*>(shape.sql)),
+                        SQL_NTS))) {
+                    continue;   // this engine does not have that function
+                }
+
+                SQLLEN ind = sizeof(SQLGUID);
+                SQLRETURN rc = SQLBindParameter(
+                    stmt.get_handle(), 1, SQL_PARAM_INPUT, SQL_C_GUID, SQL_GUID,
+                    36, 0, &guid, sizeof(guid), &ind);
+                if (!SQL_SUCCEEDED(rc)) {
+                    if (!tried.empty()) tried += "; ";
+                    tried += std::string(shape.what) + ": SQLBindParameter(SQL_C_GUID) "
+                             "refused with " +
+                             first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "no SQLSTATE");
+                    continue;
+                }
+
+                rc = SQLExecute(stmt.get_handle());
+                if (!SQL_SUCCEEDED(rc)) {
+                    // A driver that refuses the conversion outright is at least
+                    // telling the truth; one that corrupts it silently is the
+                    // subject here. Recorded, not graded.
+                    if (!tried.empty()) tried += "; ";
+                    tried += std::string(shape.what) + ": execute failed with " +
+                             first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "no SQLSTATE");
+                    continue;
+                }
+                // Raw SQLFetch, not OdbcStatement::fetch(): that throws, and a
+                // driver declining this conversion is a fact to record rather
+                // than an exception to unwind the probe with.
+                SQLRETURN fetch_rc = SQLFetch(stmt.get_handle());
+                if (!SQL_SUCCEEDED(fetch_rc)) {
+                    if (!tried.empty()) tried += "; ";
+                    tried += std::string(shape.what) + ": fetch returned " +
+                             std::to_string(fetch_rc) + " (" +
+                             first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(),
+                                            "no SQLSTATE") + ")";
+                    continue;
+                }
+
+                std::string got = get_string(stmt.get_handle(), 1);
+                std::transform(got.begin(), got.end(), got.begin(),
+                               [](unsigned char c) {
+                                   return static_cast<char>(std::toupper(c));
+                               });
+                while (!got.empty() && got.back() == ' ') got.pop_back();
+
+                // Only a UUID-shaped answer is evidence about the conversion.
+                // An engine with no UUID rendering may echo the expression back
+                // as text - the mock returns the literal "UUID_TO_CHAR(?)" -
+                // and reading that as a corrupted GUID would be a false
+                // positive of exactly the kind R3 was. 8-4-4-4-12 of hex is the
+                // shape; note the *wrong* answers this probe exists to catch are
+                // themselves canonical-shaped, so the guard does not hide them.
+                auto looks_like_uuid = [](const std::string& v) {
+                    if (v.size() != 36) return false;
+                    for (size_t i = 0; i < v.size(); ++i) {
+                        const bool dash = (i == 8 || i == 13 || i == 18 || i == 23);
+                        if (dash) { if (v[i] != '-') return false; }
+                        else if (!std::isxdigit(static_cast<unsigned char>(v[i]))) return false;
+                    }
+                    return true;
+                };
+                if (!looks_like_uuid(got)) {
+                    if (!tried.empty()) tried += "; ";
+                    tried += std::string(shape.what) +
+                             ": the engine returned '" + got +
+                             "', which is not a UUID rendering, so the "
+                             "conversion cannot be judged from it";
+                    continue;
+                }
+
+                ++measured;
+                if (got != kCanonical) {
+                    if (!mismatches.empty()) mismatches += "; ";
+                    mismatches += std::string(shape.what) + ": got '" + got +
+                                  "', expected '" + kCanonical + "'";
+                }
+            }
+
+            std::ostringstream oss;
+            oss << measured << " parameter shape(s) round-tripped a GUID";
+            if (!tried.empty()) oss << "; not measurable here: " << tried;
+
+            if (measured == 0) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                oss << " — this engine has no statement that renders a bound "
+                       "UUID back as text, so the input path cannot be checked";
+                r.actual = oss.str();
+                return;
+            }
+            if (!mismatches.empty()) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::CRITICAL;
+                oss << "; " << mismatches;
+                r.suggestion =
+                    "A SQL_C_GUID parameter must reach the server as the sixteen "
+                    "bytes of the UUID, in canonical order. Two ways to get this "
+                    "wrong, both silent: stringifying the GUID into a 16-byte "
+                    "binary slot, which stores the ASCII of the first sixteen "
+                    "characters; and picking a wide converter for a text slot "
+                    "the driver maps to a wide C type, which puts UTF-16 on the "
+                    "wire. Both return SQL_SUCCESS.";
+            }
+            r.actual = oss.str();
         });
 }
 

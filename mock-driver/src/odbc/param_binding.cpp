@@ -151,6 +151,22 @@ CellValue read_param_value(
             if (len < 0) len = 0;
             return std::string(data_ptr, static_cast<size_t>(len));
         }
+        case SQL_C_GUID: {
+            // P9: the canonical 8-4-4-4-12 form. Data1/2/3 are integers in the
+            // host's byte order and render big-endian; Data4 is already bytes.
+            // Getting this wrong is the point of the probe that reads it back,
+            // so it is written out explicitly rather than memcpy'd.
+            const SQLGUID* g = reinterpret_cast<const SQLGUID*>(data_ptr);
+            char buf[40];
+            std::snprintf(buf, sizeof(buf),
+                          "%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                          static_cast<unsigned long>(g->Data1),
+                          static_cast<unsigned>(g->Data2),
+                          static_cast<unsigned>(g->Data3),
+                          g->Data4[0], g->Data4[1], g->Data4[2], g->Data4[3],
+                          g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+            return std::string(buf);
+        }
         case SQL_C_NUMERIC: {
             // Read SQL_NUMERIC_STRUCT and convert to double
             const SQL_NUMERIC_STRUCT* ns = reinterpret_cast<const SQL_NUMERIC_STRUCT*>(data_ptr);

@@ -57,6 +57,11 @@ private:
     // graded against the driver's own SQL_PARAM_ARRAY_ROW_COUNTS answer.
     TestResult test_array_row_count_matches_its_claim();
 
+    // P12 (IMPROVEMENT_PLAN_V2): the statement handle after a server
+    // error inside the array - where PR #313 says the damage is, and
+    // where no probe looked.
+    TestResult test_handle_reuse_after_array_error();
+
     TestResult test_param_operation_array();
     TestResult test_paramset_size_one();
 

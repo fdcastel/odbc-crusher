@@ -1373,6 +1373,12 @@ SQLRETURN SQL_API SQLBindParameter(
         case SQL_C_TYPE_TIME:
         case SQL_C_TYPE_TIMESTAMP:
         case SQL_C_NUMERIC:
+        // IMPROVEMENT_PLAN_V2 P9: the driver used to answer HY003 for
+        // SQL_C_GUID, so the whole GUID *input* path was untestable here and
+        // the probe for it could only skip. PR #296 in the Firebird driver is
+        // a corruption on exactly this path - two silent ones, in fact - so a
+        // mock that cannot be asked the question is a mock that hides them.
+        case SQL_C_GUID:
         case SQL_C_DEFAULT:
             break; // Valid
         default:

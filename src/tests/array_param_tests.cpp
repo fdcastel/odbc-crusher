@@ -112,6 +112,8 @@ std::vector<TestResult> ArrayParamTests::run() {
     results.push_back(test_paramset_size_unsupported_returns_error());
     // P11 (IMPROVEMENT_PLAN_V2)
     results.push_back(test_array_row_count_matches_its_claim());
+    // P12 (IMPROVEMENT_PLAN_V2)
+    results.push_back(test_handle_reuse_after_array_error());
 
     // Cleanup
     if (table_ok) drop_test_table();
@@ -973,6 +975,196 @@ TestResult ArrayParamTests::test_array_row_count_matches_its_claim() {
                 std::to_string(reachable) + " of them — an ORM using the count "
                 "to confirm its write sees a number that is simply wrong, with "
                 "no error to catch.";
+        }
+        });
+}
+
+// ── P12 (IMPROVEMENT_PLAN_V2) — the handle, after the array threw ────────
+//
+// `test_param_status_per_row_partial_failure` executes once and reads the
+// status array. It never touches the handle afterwards — and that is where the
+// damage is.
+//
+// `executeStatementParamArray` pointed the APD's bind-offset pointer at a local
+// for the duration of the loop and restored it on the normal exit and on the
+// `inputParam` failure exit. A server error thrown by `executeStatement` took a
+// third exit that restored nothing, so `sqlExecute` caught the exception with
+// the descriptor pointing into a dead stack frame, and *the next execute on
+// that handle* read a garbage offset. In the issue that was an access
+// violation; on the operation-pointer branch it inserted a garbage row.
+//
+// So this probe provokes the error and then keeps using the handle, which is
+// what an application does. It also checks the failed set is marked
+// `SQL_PARAM_ERROR` rather than left `SQL_PARAM_UNUSED` — an application that
+// reads the status array to find out which row to retry needs that.
+//
+// The error is a NOT NULL violation, which is standard SQL and needs no
+// dialect knowledge. If the engine will not accept a NOT NULL column the probe
+// has no way to fail one set out of five and says so.
+TestResult ArrayParamTests::test_handle_reuse_after_array_error() {
+    return run_test(
+        "test_handle_reuse_after_array_error",
+        "SQLExecute(paramset)/SQLExecute on the same handle",
+        "After a server error inside a parameter array, the failed set is "
+        "marked SQL_PARAM_ERROR and the statement handle is still usable",
+        Severity::CRITICAL, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Arrays of Parameter Values — error inside the array",
+        [&](TestResult& r) {
+        static const char* const kTable = "ODBC_TEST_ARRAY_ERR";
+        auto guard = RoundTripTableGuard::create_first_working(
+            conn_, kTable, {"VARCHAR(50) NOT NULL"});
+        if (!guard.ok()) {
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not create a table with a NOT NULL column, so no "
+                       "single parameter set can be made to fail";
+            r.diagnostic = guard.last_error();
+            return;
+        }
+
+        core::OdbcStatement stmt(conn_);
+        constexpr SQLULEN kSets = 5;
+
+        // Before the prepare, so a driver that latches its executor at prepare
+        // time still runs five sets - PR #308's second defect would otherwise
+        // turn this into a single-row insert with nothing to fail.
+        if (!configure_array_exec(stmt, r, kSets)) return;
+        if (!prepare_array_insert(stmt, r,
+                std::string("INSERT INTO " + std::string(kTable) +
+                            " (ID, " + guard.val_column() + ") VALUES (?, ?)").c_str())) {
+            return;
+        }
+
+        SQLUSMALLINT status[kSets];
+        for (SQLULEN i = 0; i < kSets; ++i) status[i] = SQL_PARAM_UNUSED;
+        if (!set_stmt_attr_or_skip(stmt, r, SQL_ATTR_PARAM_STATUS_PTR, status,
+                                   "SQL_ATTR_PARAM_STATUS_PTR")) return;
+        SQLULEN processed = 0;
+        if (!set_stmt_attr_or_skip(stmt, r, SQL_ATTR_PARAMS_PROCESSED_PTR,
+                                   &processed, "SQL_ATTR_PARAMS_PROCESSED_PTR")) return;
+
+        SQLINTEGER ids[kSets] = {8001, 8002, 8003, 8004, 8005};
+        SQLLEN id_ind[kSets] = {0, 0, 0, 0, 0};
+        char names[kSets][51] = {"one", "two", "three", "four", "five"};
+        SQLLEN name_ind[kSets] = {SQL_NTS, SQL_NTS, SQL_NULL_DATA, SQL_NTS, SQL_NTS};
+        //                                          ^ set 3 violates NOT NULL
+
+        SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                         SQL_INTEGER, 0, 0, ids, 0, id_ind);
+        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT, SQL_C_CHAR,
+                         SQL_VARCHAR, 50, 0, names, 51, name_ind);
+
+        const SQLRETURN exec_rc = SQLExecute(stmt.get_handle());
+        const std::string exec_state =
+            first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "none");
+
+        std::ostringstream oss;
+        oss << "array execute rc=" << exec_rc << " (" << exec_state
+            << "), processed=" << processed << ", status=[";
+        for (SQLULEN i = 0; i < kSets; ++i) {
+            if (i) oss << ", ";
+            switch (status[i]) {
+                case SQL_PARAM_SUCCESS: oss << "SUCCESS"; break;
+                case SQL_PARAM_ERROR:   oss << "ERROR";   break;
+                case SQL_PARAM_UNUSED:  oss << "UNUSED";  break;
+                default:                oss << status[i]; break;
+            }
+        }
+        oss << "]";
+
+        const bool marked_error = (status[2] == SQL_PARAM_ERROR);
+
+        // SQL_SUCCESS_WITH_INFO is the *correct* return when some parameter
+        // sets succeed and others fail - only an execute where nothing worked
+        // is SQL_ERROR. So "did a set fail" is answered by the return code or
+        // by the status array, not by the return code alone; reading only the
+        // return code made this probe skip against a driver that had just
+        // reported the failure properly.
+        bool any_set_failed = !SQL_SUCCEEDED(exec_rc);
+        for (SQLULEN i = 0; i < kSets; ++i) {
+            if (status[i] == SQL_PARAM_ERROR) any_set_failed = true;
+        }
+        if (!any_set_failed) {
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = oss.str() + " — the NOT NULL violation was accepted, so "
+                                   "no set failed and there is no error path to "
+                                   "exercise";
+            return;
+        }
+
+        // The part that matters: keep using the handle. An application does.
+        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                       reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0);
+        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMS_PROCESSED_PTR, nullptr, 0);
+
+        SQLINTEGER reuse_id = 8007;
+        SQLLEN reuse_id_ind = 0;
+        char reuse_name[51] = "seven";
+        SQLLEN reuse_name_ind = SQL_NTS;
+        SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                         SQL_INTEGER, 0, 0, &reuse_id, 0, &reuse_id_ind);
+        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT, SQL_C_CHAR,
+                         SQL_VARCHAR, 50, 0, reuse_name, 51, &reuse_name_ind);
+
+        const SQLRETURN reuse_rc = SQLExecute(stmt.get_handle());
+        oss << "; reuse execute rc=" << reuse_rc;
+        if (!SQL_SUCCEEDED(reuse_rc)) {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::CRITICAL;
+            oss << " (" << first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "none")
+                << ")";
+            r.actual = oss.str() + " — the handle was left unusable by the array error";
+            r.suggestion =
+                "A server error inside a parameter array must leave the "
+                "statement handle as usable as any other failed execute. "
+                "Restoring the descriptor's bind-offset pointer on the "
+                "exception path is what makes that true; leaving it pointing "
+                "into a dead stack frame gives the next execute a garbage "
+                "offset.";
+            return;
+        }
+
+        commit_now();
+
+        // And did the reused handle write the row it was asked to write?
+        std::string found;
+        try {
+            core::OdbcStatement check(conn_);
+            check.execute("SELECT " + guard.val_column() + " FROM " +
+                          std::string(kTable) + " WHERE ID = 8007");
+            if (check.fetch()) found = get_string(check.get_handle(), 1);
+        } catch (const core::OdbcError& e) {
+            r.status = TestStatus::FAIL;
+            r.actual = oss.str() + " — could not read the reused handle's row back: " +
+                       e.what();
+            return;
+        }
+        oss << "; row 8007 reads back as '" << found << "'";
+        r.actual = oss.str();
+
+        if (found != "seven") {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::CRITICAL;
+            r.actual = oss.str() + ", expected 'seven'";
+            r.suggestion =
+                "The execute after the array error returned success and stored "
+                "something else — the classic symptom of a descriptor left "
+                "pointing at a dead stack frame. This is silent: the "
+                "application is told the row went in.";
+            return;
+        }
+        if (!marked_error) {
+            // Reported after the handle check, because a wedged handle is the
+            // worse fault and should be the headline when both are true.
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::ERR;
+            r.actual = oss.str() + " — but the failed set was not marked "
+                                   "SQL_PARAM_ERROR";
+            r.suggestion =
+                "The set that failed must be marked SQL_PARAM_ERROR in "
+                "SQL_ATTR_PARAM_STATUS_PTR. An application reading the status "
+                "array to decide what to retry cannot otherwise tell which set "
+                "was rejected from which was never attempted.";
         }
         });
 }

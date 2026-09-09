@@ -65,6 +65,13 @@ struct ParsedQuery {
         SQLSMALLINT data_type = SQL_VARCHAR;
         SQLULEN column_size = 255;
         SQLSMALLINT decimal_digits = 0;
+        // IMPROVEMENT_PLAN_V2 P12: the parser always recognised NOT NULL - it
+        // had to, to strip the constraint off the type - and then dropped it,
+        // so every column this driver created was nullable. That made the mock
+        // kinder than every real database and left the suite with no way to
+        // fail one parameter set out of five, which is the shape every
+        // per-row-error probe needs.
+        bool not_null = false;
     };
     std::vector<ColumnDef> create_columns;
 
@@ -121,6 +128,13 @@ struct QueryResult {
     std::vector<SQLULEN> column_sizes;
     std::vector<MockRow> data;
     SQLLEN affected_rows = 0;
+
+    // P12: which tuple of a multi-row INSERT was rejected, or -1. The driver's
+    // array-execute path needs it to mark the right entry of
+    // SQL_ATTR_PARAM_STATUS_PTR - a status array that says UNUSED for the set
+    // that actually failed leaves an application unable to tell which row to
+    // retry.
+    long long failed_row_index = -1;
 
     // CALL-specific — when this was an `EXECUTE PROCEDURE`, holds the
     // procedure name (so SQLExecute can look up params for writeback) and
