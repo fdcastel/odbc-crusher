@@ -2093,7 +2093,19 @@ TEST_F(CrusherE2EFixture, AStaleGetDataOffsetIsCaughtByReadingACellTwice) {
            "in someone else's driver\n  actual: "
         << t->value("actual", std::string{});
 
-    // And nothing else notices, which is what makes the result attributable.
+    // And the mode stays narrow, which is what makes the result
+    // attributable. A bound rather than an exact count, because the exact
+    // count is not a property of the mode: any probe that reuses one
+    // statement handle across two executes and reads the same cell will
+    // observe a stale offset too, and how many probes do that depends on how
+    // the driver manager routes SQLGetData. Measured at **1 on Windows** and
+    // **4 on unixODBC and iODBC** - both correct, and the first draft of this
+    // asserted the Windows number as though it were universal.
+    //
+    // The point survives as a ceiling: a mode that broke fetching generally
+    // would fail dozens, and would say nothing about whether this probe can
+    // see its own subject. Same shape as the Mode=Success canary's
+    // kMaxFailed, which §8 loosened for exactly this reason.
     int failed = 0;
     for (const auto& category : stale.report["categories"]) {
         if (!category.is_object() || !category.contains("tests")) continue;
@@ -2103,10 +2115,13 @@ TEST_F(CrusherE2EFixture, AStaleGetDataOffsetIsCaughtByReadingACellTwice) {
             if (status == "FAIL" || status == "ERROR") ++failed;
         }
     }
-    EXPECT_EQ(failed, 1)
-        << "StaleGetDataOffset should fail exactly the one probe written for "
-           "it; failing more would mean the mode breaks fetching generally "
-           "and says nothing about this probe's reach";
+    constexpr int kMaxFailedUnderTheMode = 6;
+    EXPECT_GE(failed, 1) << "the mode failed nothing at all";
+    EXPECT_LE(failed, kMaxFailedUnderTheMode)
+        << "StaleGetDataOffset failed " << failed << " probes. It is meant to "
+           "stop one thing being reset; failing this many means it breaks "
+           "fetching generally, and a probe that fails under a driver broken "
+           "everywhere has not been shown to detect anything in particular.";
 }
 
 TEST_F(CrusherE2EFixture, AnUpdateThatChangesNothingIsCaughtByReadingItBack) {
