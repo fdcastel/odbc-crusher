@@ -674,6 +674,16 @@ TestResult TransactionTests::test_uncommitted_row_isolation() {
                 return;
             }
 
+            // H15: this probe writes on the sibling and reads on the primary.
+            // Both halves need the same catalog; if they do not share one,
+            // "the primary saw nothing" is guaranteed and says nothing about
+            // isolation.
+            if (!sibling_shares_catalog(*sibling, table.name())) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = per_connection_catalog_skip(table.name());
+                return;
+            }
+
             rc = SQLSetConnectAttr(
                 sibling->get_handle(), SQL_ATTR_AUTOCOMMIT,
                 reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
@@ -781,6 +791,16 @@ TestResult TransactionTests::test_disconnect_rolls_back_open_transaction() {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "Could not create a table to test with: " +
                            table.last_error();
+                return;
+            }
+
+            // H15: the sibling inserts into the primary's table and the
+            // primary counts the rows afterwards. On a per-connection data
+            // source the INSERT fails outright, which grades a disconnect
+            // contract on a table the sibling could never reach.
+            if (!sibling_shares_catalog(*sibling, table.name())) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = per_connection_catalog_skip(table.name());
                 return;
             }
 

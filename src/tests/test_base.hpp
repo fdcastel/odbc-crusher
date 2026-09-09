@@ -543,6 +543,49 @@ protected:
         return sibling;
     }
 
+    // H15: can `sibling` see a table created on the primary connection?
+    //
+    // Every cross-connection probe assumes both handles address the same
+    // catalog. That holds for a server — postgres, mysql, firebird — and does
+    // not hold for a data source that is per-connection. DuckDB with no
+    // `Database=` opens `:memory:` and then deliberately declines to cache
+    // the instance, so each `SQLConnect` receives its own database object;
+    // the sibling is connected to a different, empty database and never sees
+    // the primary's table.
+    //
+    // Without this check those probes report `Table ... does not exist` as a
+    // driver fault, which is wrong twice over: the driver is behaving exactly
+    // as documented, and no driver could pass. The honest answer is
+    // SKIP_UNSUPPORTED — the question cannot be asked of this data source.
+    // Fixing the connection string is the other half; this half means the
+    // probes stay correct against any per-connection driver, including one
+    // whose config we do not control.
+    bool sibling_shares_catalog(core::OdbcConnection& sibling,
+                                const std::string& table_name) {
+        try {
+            core::OdbcStatement s(sibling);
+            s.execute("SELECT 1 FROM " + table_name + " WHERE 1=0");
+            return true;
+        } catch (...) {
+            // Best-effort: leave the sibling usable for the SKIP path. This
+            // swallows deliberately and rethrows nothing, so there is no
+            // primary exception for the rollback to hide.
+            SQLEndTran(SQL_HANDLE_DBC, sibling.get_handle(), SQL_ROLLBACK);
+            return false;
+        }
+    }
+
+    // The SKIP text every caller of sibling_shares_catalog() shares, so the
+    // three probes cannot drift into describing the same condition three ways.
+    static std::string per_connection_catalog_skip(const std::string& table_name) {
+        return "The second connection cannot see " + table_name +
+               ", which was created on the first — this data source gives "
+               "each connection its own catalog, so there is no shared state "
+               "for a cross-connection probe to observe. Point the driver at "
+               "a persistent database (for DuckDB, `Database=<file>`) to make "
+               "this testable.";
+    }
+
     // Helper to create test result
     TestResult make_result(
         const std::string& test_name,

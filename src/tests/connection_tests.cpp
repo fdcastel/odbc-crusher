@@ -268,6 +268,16 @@ TestResult ConnectionTests::test_reused_connection_starts_clean() {
                 return;
             }
 
+            // H15: the INSERT below runs on the sibling against a table made
+            // on the primary. Confirm they share a catalog before grading the
+            // result, or a per-connection data source fails here for a reason
+            // that has nothing to do with connection reuse.
+            if (!sibling_shares_catalog(*sibling, table.name())) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = per_connection_catalog_skip(table.name());
+                return;
+            }
+
             {
                 core::OdbcStatement stmt(*sibling);
                 stmt.execute("INSERT INTO " + table.name() + " VALUES (7777)");

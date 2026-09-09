@@ -85,7 +85,8 @@
         "driver_ver_reliable": false,
         "_note": "H11. Both halves of the provenance cross-check are unusable for this driver, and saying so is the point of this block. (a) The job has no version string to extract from the bare .so, so it echoes this file's `version` into actual_version.txt - comparing the two therefore compares the manifest with itself and can never fail. (b) DuckDB answers SQLGetInfo(SQL_DRIVER_VER) with `03.51.0000`, its ODBC *compliance level*, not its product version, so driver_info.driver_version is no help either. Triage reports this as PROVENANCE=UNVERIFIABLE rather than a false OK. Use SQL_DBMS_VER if you need a real number at runtime."
       },
-      "conn_string": "Driver={DuckDB Driver};",
+      "conn_string": "Driver={DuckDB Driver};Database=/tmp/crusher.duckdb;",
+      "_conn_string_note": "H15: `Database=` is required, not optional. Without it the driver falls back to IN_MEMORY_PATH (`:memory:`) at connect.cpp:148, and connect.cpp:187 sets `cache_instance = database != IN_MEMORY_PATH` — false — so every SQLConnect gets its *own* database object. Five probes that create a table on the primary connection and read it from a sibling therefore could not pass against any driver, and the catalog probes saw an empty schema. Keys are lowercased at connect.cpp:56, so the `Database=` spelling matches. A file also persists across the two crusher invocations the run-crusher action makes; that is safe because RoundTripTableGuard reuses and empties a pre-existing table (A15), which is the same situation the postgres/mysql jobs are already in.",
       "platform": "linux"
     },
 
