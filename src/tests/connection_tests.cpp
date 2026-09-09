@@ -409,14 +409,19 @@ TestResult ConnectionTests::test_failed_connect_diagnostics_are_wellformed() {
             // the reason we chose.
             auto spoil = [&](const std::string& key) -> std::string {
                 const std::string needle = key + "=";
-                const size_t at = upper.find(needle);
-                if (at == std::string::npos) return {};
-                // Only at the start of a keyword, or PWD would match a
-                // connection string carrying NEWPWD.
-                if (at > 0 && upper[at - 1] != ';' &&
-                    !std::isspace(static_cast<unsigned char>(upper[at - 1]))) {
-                    return {};
+                // Keep looking past a match that is not at a keyword
+                // boundary, rather than giving up on the keyword. `PWD=`
+                // occurs inside `NEWPWD=`, a real ODBC keyword for changing an
+                // expiring password, and a connection string carrying both
+                // with NEWPWD first would otherwise have its PWD left alone -
+                // a probe that skipped for a reason that is not true.
+                size_t at = upper.find(needle);
+                while (at != std::string::npos && at > 0 &&
+                       upper[at - 1] != ';' &&
+                       !std::isspace(static_cast<unsigned char>(upper[at - 1]))) {
+                    at = upper.find(needle, at + needle.size());
                 }
+                if (at == std::string::npos) return {};
                 const size_t value_start = at + needle.size();
                 size_t value_end = base.find(';', value_start);
                 if (value_end == std::string::npos) value_end = base.size();
