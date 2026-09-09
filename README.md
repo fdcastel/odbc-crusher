@@ -362,7 +362,7 @@ In verbose mode (`-v`), each test also shows:
 ## Tested Databases
 
 The `stress-test` GitHub Actions workflow exercises crusher against
-six real ODBC drivers plus the in-repo mock. Driver versions, install
+eight real ODBC drivers plus the in-repo mock. Driver versions, install
 methods, source repos, and tags are all pinned in
 [.github/drivers.json](./.github/drivers.json) — single source of truth
 consumed by both the workflow (at runtime via `jq`) and the
@@ -376,12 +376,20 @@ consumed by both the workflow (at runtime via `jq`) and the
 | **DuckDB ODBC** | 1.5.2.0 | [duckdb/duckdb-odbc](https://github.com/duckdb/duckdb-odbc) |
 | **ClickHouse ODBC** | 1.5.3.20260311 | [ClickHouse/clickhouse-odbc](https://github.com/ClickHouse/clickhouse-odbc) |
 | **Firebird ODBC Driver** | 3.5.0-rc1 | [FirebirdSQL/firebird-odbc-driver](https://github.com/FirebirdSQL/firebird-odbc-driver) |
+| **Firebird ODBC Driver** (official, Windows) | 3.0.1.21 | [FirebirdSQL/firebird-odbc-driver](https://github.com/FirebirdSQL/firebird-odbc-driver) @ `dee624f` |
+| **Firebird ODBC Driver** (patched, Windows) | 3.5.1-rc2 | [fdcastel/firebird-odbc-driver](https://github.com/fdcastel/firebird-odbc-driver) |
 | **Mock ODBC Driver** (in-repo) | tracks master | `mock-driver/` |
+
+The last two are a matched pair (`firebird-official` / `firebird-patched`),
+added so one driver can be measured against itself: same Firebird server,
+same connection string, same crusher binary, two builds. The official 3.0.x
+line ships only Windows installers, which is why that pair runs on
+`windows-2022` while the `firebird` row above runs on Linux.
 
 ## Stress-Test Workflow
 
 ```bash
-# Run all 6 drivers in parallel
+# Run all 8 drivers in parallel
 gh workflow run stress-test.yml
 
 # Run a single driver

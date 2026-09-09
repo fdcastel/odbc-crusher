@@ -1,0 +1,112 @@
+# H17. The Windows counterpart of the inline Firebird steps in the linux
+# `firebird` job. It exists because H17 added *two* Windows Firebird jobs
+# (firebird-official and firebird-patched) whose whole point is to be identical
+# apart from the driver they install — and the surest way to keep two jobs
+# identical is to not write the shared half twice. Same reasoning as
+# run-crusher, one step further up the job.
+#
+# The server is PSFirebird's, exactly as on Linux: it vendors the Firebird
+# release rather than relying on anything preinstalled on the runner, so the
+# two Firebird versions in this repo's matrix (linux 5.0.3, windows 5.0.3) are
+# the same server on both platforms.
+name: Bring up Firebird on a Windows runner
+description: >
+  Stages a Firebird server with PSFirebird, creates the crusher database,
+  starts it listening on a TCP port, and puts fbclient.dll on PATH so an ODBC
+  driver loaded by the driver manager can find it at connect time.
+
+inputs:
+  firebird-version:
+    description: 'Firebird release to stage'
+    required: false
+    default: '5.0.3'
+  port:
+    description: 'TCP port for the server to listen on'
+    required: false
+    default: '3050'
+  database:
+    description: 'Database path, written the same way the connection string writes it'
+    required: false
+    default: 'C:/crusher/crusher.fdb'
+
+runs:
+  using: composite
+  steps:
+    - name: Bring up Firebird via PSFirebird
+      shell: pwsh
+      # Inputs reach the script through `env`, never `${{ }}` inside the run
+      # body — same rule the repro workflow follows.
+      env:
+        # PSFirebird's release lookup calls the GitHub API; unauthenticated it
+        # gets 60 req/hr and starts failing with "Could not find Firebird
+        # release for version X on GitHub."
+        GITHUB_TOKEN: ${{ github.token }}
+        FB_VERSION: ${{ inputs.firebird-version }}
+        FB_PORT: ${{ inputs.port }}
+        FB_DATABASE: ${{ inputs.database }}
+      run: |
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        Install-Module -Name PSFirebird -MinimumVersion 1.2.1 -Force -Scope CurrentUser
+        Import-Module PSFirebird
+
+        # Retry up to 3x for the same reason the linux job does: the release
+        # lookup is intermittently empty on hosted runners and the failure
+        # surfaces as a missing version rather than a network error.
+        $fbRoot = Join-Path $env:RUNNER_TEMP 'firebird'
+        $fb = $null
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+          try {
+            $fb = New-FirebirdEnvironment -Version $env:FB_VERSION -Path $fbRoot -Force
+            break
+          } catch {
+            Write-Host "PSFirebird setup attempt $attempt failed: $_"
+            if ($attempt -lt 3) {
+              Remove-Item -Recurse -Force $fbRoot -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 15
+            } else { throw }
+          }
+        }
+
+        # TCP connections need SYSDBA's password set in the security database;
+        # authenticate up front so the embedded isql call may write to it.
+        $env:ISC_USER = 'SYSDBA'
+        $env:ISC_PASSWORD = 'masterkey'
+
+        $dbDir = Split-Path -Parent $env:FB_DATABASE
+        New-Item -ItemType Directory -Path $dbDir -Force | Out-Null
+
+        $db = New-FirebirdDatabase -Database $env:FB_DATABASE -Environment $fb
+        "CREATE OR ALTER USER SYSDBA PASSWORD 'masterkey';" |
+          Invoke-FirebirdIsql -Database $db -Environment $fb
+
+        $instance = Start-FirebirdInstance -Port ([int]$env:FB_PORT) -Environment $fb
+        Write-Host "Firebird PID: $($instance.Process.Id)  Port: $($instance.Port)"
+
+        # Neither the Inno nor the WiX installer ships fbclient.dll — the ODBC
+        # driver loads it by name at connect time, and on Windows that is a
+        # PATH search. Without this the driver returns a connect failure whose
+        # diagnostics say nothing about a missing client library.
+        $client = Join-Path $fb.Path 'fbclient.dll'
+        if (-not (Test-Path $client)) {
+          throw "fbclient.dll not found at $client — cannot make it loadable by the ODBC driver"
+        }
+        Write-Host "Client library: $client"
+        $fb.Path | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+    - name: Smoke-test Firebird is listening
+      shell: pwsh
+      env:
+        FB_PORT: ${{ inputs.port }}
+      # Verify the detached server is reachable before spending a 200-probe
+      # crusher run on a connection-refused failure.
+      run: |
+        for ($i = 1; $i -le 5; $i++) {
+          if (Get-NetTCPConnection -State Listen -LocalPort ([int]$env:FB_PORT) -ErrorAction SilentlyContinue) {
+            Write-Host "Firebird is listening on $env:FB_PORT (attempt $i)"
+            exit 0
+          }
+          Start-Sleep -Seconds 1
+        }
+        Write-Host "::error::Firebird not listening on $env:FB_PORT after 5s"
+        Get-NetTCPConnection -State Listen | Format-Table -AutoSize
+        exit 1

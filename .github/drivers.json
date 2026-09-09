@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "_about": "Manifest of ODBC drivers under stress-test. Single source of truth for (a) the version of each driver to install in CI, (b) the URL/apt package to install it from, and (c) the upstream git repo + tag whose source matches that binary version. Consumed by .github/workflows/stress-test.yml at runtime via `jq` and by the /triage-driver skill at analysis time. apt_version strings are formatted for `apt-get install pkg=version`; if Ubuntu drops a pinned version from its repos the workflow will fail loudly at the install step and this file must be updated. The `version` field is the upstream form (what SQLGetInfo reports); apt_version is the Debian-formatted form. Firebird is included as of v3.5.0-rc1 (the first release of the refactored driver). H11 adds a `provenance` block per driver, read only by the triage skill: it declares whether actual_version.txt is a real observation or an echo of this file, and whether SQLGetInfo(SQL_DRIVER_VER) can be trusted. Without it the skill's version cross-check compared the manifest against itself for three drivers and could not fail. Purely additive - the workflow does not read it.",
+  "_about": "Manifest of ODBC drivers under stress-test. Single source of truth for (a) the version of each driver to install in CI, (b) the URL/apt package to install it from, and (c) the upstream git repo + tag whose source matches that binary version. Consumed by .github/workflows/stress-test.yml at runtime via `jq` and by the /triage-driver skill at analysis time. apt_version strings are formatted for `apt-get install pkg=version`; if Ubuntu drops a pinned version from its repos the workflow will fail loudly at the install step and this file must be updated. The `version` field is the upstream form (what SQLGetInfo reports); apt_version is the Debian-formatted form. Firebird is included as of v3.5.0-rc1 (the first release of the refactored driver). H11 adds a `provenance` block per driver, read only by the triage skill: it declares whether actual_version.txt is a real observation or an echo of this file, and whether SQLGetInfo(SQL_DRIVER_VER) can be trusted. Without it the skill's version cross-check compared the manifest against itself for three drivers and could not fail. Purely additive - the workflow does not read it. H17 adds `firebird-official` / `firebird-patched`, the manifest's first *pair*: the same server, the same connection string and the same crusher binary against two builds of one driver, so the diff between their two reports isolates the driver. They are Windows entries because the official 3.0.x line has no Linux binary. An `install.sha256` appears on those two: the version resource cannot distinguish a prerelease rebuild, so the digest is what pins the artifact.",
 
   "drivers": {
     "postgresql": {
@@ -134,6 +134,58 @@
       },
       "conn_string": "Driver={Firebird ODBC Driver};DBNAME=localhost/3050:/tmp/crusher.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;",
       "platform": "linux"
+    },
+
+    "firebird-official": {
+      "display_name": "Firebird ODBC Driver 3.0.1.21 (official)",
+      "version": "3.0.1.21",
+      "install": {
+        "method": "inno_silent",
+        "url": "https://github.com/fdcastel/firebird-odbc-driver-repack/releases/download/v3.0.1.21/Firebird_ODBC_3.0.1.21_x64.exe",
+        "sha256": "42c8f60147ae74f2f17058c123112ef73e719d6a11b11c0f5600718d6285530e",
+        "library_name": "FirebirdODBC.dll",
+        "driver_section": "Firebird ODBC Driver",
+        "_note": "H17. Windows by necessity, not by preference: the official 3.0.x line ships as Inno Setup installers and the repack publishes exactly two assets per tag (Win32 + x64 .exe). There is no Linux .so for this build, so the existing linux `firebird` job could not have run it. Installed with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`; the default setup type is DeveloperInstall, the one that drops FirebirdODBC.dll in System32 and self-registers it - Install/Win32/OdbcJdbcSetup.iss marks the file `Flags: regserver`, so registration happens inside the DLL's DllRegisterServer and there is no [Registry] section to read the driver name from. `driver_section` is what that registration writes: OdbcJdbcSetup/Setup.cpp:249 passes DRIVER_FULL_NAME, which SetupAttributes.h:39 defines as \"Firebird ODBC Driver\" - the same name the v3.5.x WiX installer uses, which is why this entry and firebird-patched can share one connection string verbatim."
+      },
+      "source": {
+        "repo": "https://github.com/FirebirdSQL/firebird-odbc-driver",
+        "tag": "dee624fac13182f569532a5785e32eb5d27bed98",
+        "_note": "H17. A commit, not a tag, because upstream never tagged this build. The 3.0.x line keeps its build number in WriteBuildNo.h, and dee624f (\"Issue #270 : Fix incorrect behavior, buildno++ (21)\", 2026-01-16) is the commit that set BUILDNUM_VERSION to 21; the next bump (8e64f5e, 2026-03-31) goes to 22, and the repack published these installers on 2026-01-22, so the whole 21 window is dee624f..8e64f5e^. The nearest real tag, v3-0-1-release, is build 18 - it would have pointed triage at source three builds older than the binary it is explaining. triage.ps1 accepts a 40-hex SHA here and fetches it by object id."
+      },
+      "provenance": {
+        "version_source": "observed",
+        "driver_ver_reliable": false,
+        "_note": "H17. The first Firebird entry whose actual_version.txt is a genuine observation rather than an echo of this file. On Windows the installed System32\\FirebirdODBC.dll carries a VERSIONINFO resource and the job reads its ProductVersion back out after the installer runs - \"3.0.1.21\", which is exactly the string to compare. The download is separately gated on the sha256 above, so a re-cut release asset fails the job instead of being triaged as this build. SQLGetInfo(SQL_DRIVER_VER) stays unusable for the reason recorded on the `firebird` entry."
+      },
+      "conn_string": "Driver={Firebird ODBC Driver};DBNAME=localhost/3050:C:/crusher/crusher.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;",
+      "_conn_string_note": "Deliberately identical to firebird-patched's, character for character, so that any difference between the two reports is the driver and not the configuration - that comparison is the entire point of the pair. Forward slashes in the Windows path are also deliberate: Firebird accepts them (verified against a live 5.0.3 through this same driver name), and they keep the string free of backslashes that would otherwise have to survive JSON, $GITHUB_ENV and a bash double-quoted argument unscathed.",
+      "platform": "windows"
+    },
+
+    "firebird-patched": {
+      "display_name": "Firebird ODBC Driver 3.5.1-rc2 (master + 13 PRs)",
+      "version": "3.5.1-rc2",
+      "install": {
+        "method": "msi_silent",
+        "url": "https://github.com/fdcastel/firebird-odbc-driver/releases/download/v3.5.1-rc2/firebird-odbc-driver-3.5.1-rc2-win-x64.msi",
+        "sha256": "0205a4634570e754eb863f9918c0a0ba18001a6a19e188ba25afa43493b8f0b8",
+        "library_name": "FirebirdODBC.dll",
+        "driver_section": "Firebird ODBC Driver",
+        "_note": "H17. The MSI rather than the .zip, so the driver is registered by the same route a user takes; installer/Product.wxs defines DriverName as \"Firebird ODBC Driver\" and writes the ODBCINST.INI keys itself. `msiexec /i <msi> /qn /norestart`. The x64 MSI also registers the 32-bit driver for WoW64, which is irrelevant here - crusher is x64 - but harmless."
+      },
+      "source": {
+        "repo": "https://github.com/fdcastel/firebird-odbc-driver",
+        "tag": "v3.5.1-rc2",
+        "_note": "H17. fdcastel's fork, not FirebirdSQL's: this is an unofficial build, upstream `master` @ 35fae3e with thirteen open pull requests merged on top, and only the fork carries the tag. The release notes enumerate the thirteen; they are the fixes this pair exists to measure."
+      },
+      "provenance": {
+        "version_source": "observed",
+        "driver_ver_reliable": false,
+        "_note": "H17. actual_version.txt is the installed DLL's ProductVersion, a real observation - but it reads \"3.5.1.0\", because the MSI drops the prerelease suffix (the release notes say so, and warn that rc1 must be uninstalled first for exactly this reason). So the version resource cannot tell rc1 from rc2 and the sha256 gate is what does; the version comparison here can only confirm the 3.5.1 line. triage.ps1's ConvertTo-VersionParts strips the `-rc2` suffix so this reads MATCH rather than a spurious MISMATCH."
+      },
+      "conn_string": "Driver={Firebird ODBC Driver};DBNAME=localhost/3050:C:/crusher/crusher.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;",
+      "_conn_string_note": "See firebird-official's note - the two are identical on purpose. Both installers register the driver under the same name, so the two jobs cannot run on one machine, which is why they are separate jobs and not a matrix over one.",
+      "platform": "windows"
     },
 
     "mock-driver": {

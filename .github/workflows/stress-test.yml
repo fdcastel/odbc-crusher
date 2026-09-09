@@ -44,6 +44,8 @@ on:
           - duckdb
           - clickhouse
           - firebird
+          - firebird-official
+          - firebird-patched
           - mock-driver
 
 # F6: least privilege. This workflow hands github.token to
@@ -482,6 +484,176 @@ jobs:
         artifact-name: firebird
         conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.FIREBIRD_LIB_DIR }}
+
+  # ── Firebird 3.0.1.21 (official) on Windows ─────────────────
+  # Driver / version / source: see `.github/drivers.json` → drivers["firebird-official"]
+  #
+  # H17. This job and `firebird-patched` below are a *pair*: same runner image,
+  # same PSFirebird server, same database path, same connection string, same
+  # crusher binary. Only the install step differs. That is what makes the two
+  # reports subtractable — a probe that fails here and passes there is evidence
+  # about the driver, and nothing else.
+  #
+  # Windows rather than Linux because there is no choice: the official 3.0.x
+  # line is distributed as Inno Setup installers and the repack publishes two
+  # .exe assets per tag. Both installers register the driver under the same
+  # name ("Firebird ODBC Driver"), so the two builds cannot coexist on one
+  # machine — hence two jobs rather than a matrix.
+  firebird-official:
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird-official' }}
+    name: Firebird 3.0.1.21 official (Windows)
+    # Pinned to windows-2022 to match the driver project's own CI matrix, which
+    # is where this Firebird-on-Windows recipe is already exercised daily.
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      shell: bash
+      run: |
+        # `--arg k` rather than a literal path: the key contains a hyphen, which
+        # jq would read as subtraction in the bare `.drivers.firebird-official`
+        # form.
+        K='firebird-official'
+        {
+          echo "DRIVER_VERSION=$(jq -er --arg k "$K" '.drivers[$k].version'                .github/drivers.json)"
+          echo "DRIVER_URL=$(jq -er --arg k "$K" '.drivers[$k].install.url'                .github/drivers.json)"
+          echo "DRIVER_SHA256=$(jq -er --arg k "$K" '.drivers[$k].install.sha256'          .github/drivers.json)"
+          echo "DRIVER_SECTION=$(jq -er --arg k "$K" '.drivers[$k].install.driver_section' .github/drivers.json)"
+          echo "CONN_STRING=$(jq -er --arg k "$K" '.drivers[$k].conn_string'               .github/drivers.json)"
+        } >> "$GITHUB_ENV"
+
+    - uses: ./.github/actions/firebird-windows
+
+    - name: Install the official ODBC driver (Inno Setup, silent)
+      shell: pwsh
+      run: |
+        $exe = Join-Path $env:RUNNER_TEMP 'firebird-odbc-setup.exe'
+        curl.exe --no-progress-meter -L -o $exe $env:DRIVER_URL
+
+        # The digest is the real pin. A version resource cannot tell a re-cut
+        # release asset from the one that was triaged, so failing here is
+        # cheaper than publishing a report about a binary nobody can identify.
+        $got = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+        if ($got -ne $env:DRIVER_SHA256) {
+          Write-Host "::error::$env:DRIVER_URL has sha256 $got but the manifest pins $env:DRIVER_SHA256"
+          exit 1
+        }
+
+        # No /TYPE=: the default is DeveloperInstall, the setup type that puts
+        # FirebirdODBC.dll in System32 and registers it. Registration is the
+        # DLL's own DllRegisterServer (the .iss marks the file `Flags:
+        # regserver`), so there is no [Registry] section to override.
+        $p = Start-Process -FilePath $exe `
+                           -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' `
+                           -Wait -PassThru
+        Write-Host "installer exit code: $($p.ExitCode)"
+        if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+
+    - name: Record actual installed version (provenance for triage)
+      shell: pwsh
+      run: |
+        $dll = Join-Path $env:SystemRoot 'System32\FirebirdODBC.dll'
+        if (-not (Test-Path $dll)) {
+          Write-Host "::error::$dll is missing — the installer ran but placed no driver"
+          exit 1
+        }
+        $key = "HKLM:\SOFTWARE\ODBC\ODBCINST.INI\$env:DRIVER_SECTION"
+        if (-not (Test-Path $key)) {
+          Write-Host "::error::$key is missing — the driver did not register under the name the connection string uses"
+          Get-ChildItem 'HKLM:\SOFTWARE\ODBC\ODBCINST.INI' | Select-Object -ExpandProperty PSChildName
+          exit 1
+        }
+        Get-ItemProperty $key | Format-List
+
+        # A genuine observation, unlike the linux firebird job's echo of the
+        # manifest: the shipped DLL carries a VERSIONINFO resource. Whether it
+        # agrees with the manifest is triage.ps1's call, not this job's — the
+        # digest check above is the gate that belongs here.
+        $installed = ($dll | Get-Item).VersionInfo.ProductVersion.Trim()
+        [System.IO.File]::WriteAllText("$PWD/actual_version.txt", $installed)
+        Write-Host "Installed FirebirdODBC.dll ProductVersion: $installed (manifest pins $env:DRIVER_VERSION)"
+
+    - uses: ./.github/actions/run-crusher
+      with:
+        artifact-name: firebird-official
+        conn-string: ${{ env.CONN_STRING }}
+
+  # ── Firebird 3.5.1-rc2 (master + 13 PRs) on Windows ─────────
+  # Driver / version / source: see `.github/drivers.json` → drivers["firebird-patched"]
+  # The other half of the H17 pair; see firebird-official above for why the two
+  # exist and why they are kept identical apart from this job's install step.
+  firebird-patched:
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird-patched' }}
+    name: Firebird 3.5.1-rc2 patched (Windows)
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      shell: bash
+      run: |
+        K='firebird-patched'
+        {
+          echo "DRIVER_VERSION=$(jq -er --arg k "$K" '.drivers[$k].version'                .github/drivers.json)"
+          echo "DRIVER_URL=$(jq -er --arg k "$K" '.drivers[$k].install.url'                .github/drivers.json)"
+          echo "DRIVER_SHA256=$(jq -er --arg k "$K" '.drivers[$k].install.sha256'          .github/drivers.json)"
+          echo "DRIVER_SECTION=$(jq -er --arg k "$K" '.drivers[$k].install.driver_section' .github/drivers.json)"
+          echo "CONN_STRING=$(jq -er --arg k "$K" '.drivers[$k].conn_string'               .github/drivers.json)"
+        } >> "$GITHUB_ENV"
+
+    - uses: ./.github/actions/firebird-windows
+
+    - name: Install the patched ODBC driver (MSI, silent)
+      shell: pwsh
+      run: |
+        $msi = Join-Path $env:RUNNER_TEMP 'firebird-odbc.msi'
+        curl.exe --no-progress-meter -L -o $msi $env:DRIVER_URL
+
+        # See firebird-official: the digest matters more here, not less. The
+        # MSI drops the prerelease suffix from ProductVersion, so rc1 and rc2
+        # both install as 3.5.1.0 and this is the only check that can tell
+        # which one was tested.
+        $got = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
+        if ($got -ne $env:DRIVER_SHA256) {
+          Write-Host "::error::$env:DRIVER_URL has sha256 $got but the manifest pins $env:DRIVER_SHA256"
+          exit 1
+        }
+
+        $log = Join-Path $env:RUNNER_TEMP 'msi.log'
+        $p = Start-Process -FilePath 'msiexec.exe' `
+                           -ArgumentList '/i',"`"$msi`"",'/qn','/norestart','/l*v',"`"$log`"" `
+                           -Wait -PassThru
+        Write-Host "msiexec exit code: $($p.ExitCode)"
+        if ($p.ExitCode -ne 0) {
+          if (Test-Path $log) { Get-Content $log -Tail 80 }
+          exit $p.ExitCode
+        }
+
+    - name: Record actual installed version (provenance for triage)
+      shell: pwsh
+      run: |
+        $dll = Join-Path $env:SystemRoot 'System32\FirebirdODBC.dll'
+        if (-not (Test-Path $dll)) {
+          Write-Host "::error::$dll is missing — the MSI ran but placed no driver"
+          exit 1
+        }
+        $key = "HKLM:\SOFTWARE\ODBC\ODBCINST.INI\$env:DRIVER_SECTION"
+        if (-not (Test-Path $key)) {
+          Write-Host "::error::$key is missing — the driver did not register under the name the connection string uses"
+          Get-ChildItem 'HKLM:\SOFTWARE\ODBC\ODBCINST.INI' | Select-Object -ExpandProperty PSChildName
+          exit 1
+        }
+        Get-ItemProperty $key | Format-List
+
+        $installed = ($dll | Get-Item).VersionInfo.ProductVersion.Trim()
+        [System.IO.File]::WriteAllText("$PWD/actual_version.txt", $installed)
+        Write-Host "Installed FirebirdODBC.dll ProductVersion: $installed (manifest pins $env:DRIVER_VERSION)"
+
+    - uses: ./.github/actions/run-crusher
+      with:
+        artifact-name: firebird-patched
+        conn-string: ${{ env.CONN_STRING }}
 
   # ── Mock Driver on Windows ──────────────────────────────────
   # Driver / conn-string: see `.github/drivers.json` → drivers["mock-driver"]

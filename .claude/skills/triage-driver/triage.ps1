@@ -135,7 +135,24 @@ function ConvertTo-VersionParts([string]$Raw) {
     $v = $v -replace '^\d+:', ''        # Debian epoch:   1:16.00.0000 -> 16.00.0000
     $v = $v -replace '-\d+$', ''        # Debian revision: 16.00.0000-1 -> 16.00.0000
     $v = $v -replace '^[vV]', ''        # tag prefix:     v1.5.2.0      -> 1.5.2.0
+    # H17: semver prerelease suffix, 3.5.1-rc2 -> 3.5.1. A Windows VERSIONINFO
+    # resource has four numeric fields and nowhere to put `rc2`, so the
+    # firebird-patched MSI installs as `3.5.1.0` while the manifest pins
+    # `3.5.1-rc2`; without this the observed value splits as `3`,`5`,`1-rc2`
+    # and the comparer aborts the triage on a MISMATCH that is an artefact of
+    # the format. What the suffix carries is not recoverable from the binary at
+    # all - `install.sha256` is what identifies the build, and the entry's
+    # provenance note says so rather than letting this look like a full check.
+    $v = $v -replace '-[A-Za-z][0-9A-Za-z.]*$', ''
     return @($v.Split('.') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+}
+
+function Test-IsCommitSha([string]$Ref) {
+    # H17: `source.tag` may be a commit. Upstream firebird-odbc-driver never
+    # tagged the 3.0.1.21 build - the version lives in WriteBuildNo.h and moves
+    # by commit - so pinning the nearest tag would have cited source three
+    # builds away from the binary being triaged.
+    return ($Ref -match '^[0-9a-f]{7,40}$')
 }
 
 function Test-VersionMatch([string]$A, [string]$B) {
@@ -146,8 +163,14 @@ function Test-VersionMatch([string]$A, [string]$B) {
     # `1.4.4`, so the documented case would have aborted. Component-wise prefix
     # matching in whichever direction is shorter handles that, the Debian epoch
     # form, and the `v` tag prefix - all three occur in this manifest.
-    $pa = ConvertTo-VersionParts $A
-    $pb = ConvertTo-VersionParts $B
+    # H17: the `@()` are load-bearing. ConvertTo-VersionParts returns `@()` for
+    # an empty input, PowerShell unrolls that to nothing on the way out, and
+    # under the Set-StrictMode -Version Latest at the top of this file `.Count`
+    # on the resulting $null throws - so the UNKNOWN branch below, which exists
+    # precisely for an empty actual_version.txt, could never be reached. Same
+    # unrolling hazard H11 hit with a single-element [string[]].
+    $pa = @(ConvertTo-VersionParts $A)
+    $pb = @(ConvertTo-VersionParts $B)
     if ($pa.Count -eq 0 -or $pb.Count -eq 0) { return 'UNKNOWN' }
 
     $short, $long = if ($pa.Count -le $pb.Count) { $pa, $pb } else { $pb, $pa }
@@ -346,9 +369,44 @@ elseif ($SkipClone) {
 }
 else {
     $tag   = $d.source.tag
+    $isSha = Test-IsCommitSha $tag
     $state = 'failed'
 
-    if (Test-Path (Join-Path $SrcPath '.git')) {
+    if ($isSha) {
+        # A commit cannot be reached by `clone --branch`, and `describe
+        # --exact-match` has no tag to answer with, so the whole tag path below
+        # is wrong for it end to end. github.com serves arbitrary reachable
+        # object ids to `fetch`, which is all this needs; the shallow depth and
+        # the reuse-before-refetch behaviour are the same as the tag path's.
+        $head = if (Test-Path (Join-Path $SrcPath '.git')) {
+            (& git -C $SrcPath rev-parse HEAD 2>$null)
+        } else { $null }
+
+        if ($head -and $head.StartsWith($tag)) {   # $head is always full-length
+            $state = 'reused'
+            Write-Note "Existing clone is already at $tag — reused"
+        }
+        elseif ($Offline) {
+            Write-Warn "Clone is at '$head', want commit '$tag', and -Offline forbids fetching"
+        }
+        else {
+            if (-not (Test-Path (Join-Path $SrcPath '.git'))) {
+                if (Test-Path $SrcPath) {
+                    Write-Warn "$SrcPath exists but is not a git repository — replacing it"
+                    Remove-Item $SrcPath -Recurse -Force
+                }
+                & git init --quiet $SrcPath 2>&1 | ForEach-Object { Write-Note $_ }
+                & git -C $SrcPath remote add origin $d.source.repo 2>&1 | ForEach-Object { Write-Note $_ }
+            }
+            Write-Note "Fetching $($d.source.repo) at commit $tag (depth 50)"
+            & git -C $SrcPath fetch --depth 50 origin $tag 2>&1 | ForEach-Object { Write-Note $_ }
+            if ($LASTEXITCODE -eq 0) {
+                & git -C $SrcPath checkout --force FETCH_HEAD 2>&1 | ForEach-Object { Write-Note $_ }
+                if ($LASTEXITCODE -eq 0) { $state = if ($head) { 'refetched' } else { 'cloned' } }
+            }
+        }
+    }
+    elseif (Test-Path (Join-Path $SrcPath '.git')) {
         # Reuse when the working tree is already at the tag we want. The old
         # skill ran a bare `git clone` into this path, which fails once the
         # directory exists - and then recorded "source clone failed", so every
