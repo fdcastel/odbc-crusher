@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "_about": "Manifest of ODBC drivers under stress-test. Single source of truth for (a) the version of each driver to install in CI, (b) the URL/apt package to install it from, and (c) the upstream git repo + tag whose source matches that binary version. Consumed by .github/workflows/stress-test.yml at runtime via `jq` and by the /triage-driver skill at analysis time. apt_version strings are formatted for `apt-get install pkg=version`; if Ubuntu drops a pinned version from its repos the workflow will fail loudly at the install step and this file must be updated. The `version` field is the upstream form (what SQLGetInfo reports); apt_version is the Debian-formatted form. Firebird is included as of v3.5.0-rc1 (the first release of the refactored driver). H11 adds a `provenance` block per driver, read only by the triage skill: it declares whether actual_version.txt is a real observation or an echo of this file, and whether SQLGetInfo(SQL_DRIVER_VER) can be trusted. Without it the skill's version cross-check compared the manifest against itself for three drivers and could not fail. Purely additive - the workflow does not read it. H17 adds `firebird-official` / `firebird-patched`, the manifest's first *pair*: the same server, the same connection string and the same crusher binary against two builds of one driver, so the diff between their two reports isolates the driver. They are Windows entries because the official 3.0.x line has no Linux binary. An `install.sha256` appears on those two: the version resource cannot distinguish a prerelease rebuild, so the digest is what pins the artifact. T4 adds an optional `pair_with` key naming another driver in this manifest that the entry is meant to be compared against; triage.ps1 and fetch-stress-test.ps1 enforce the two conditions that comparison rests on.",
+  "_about": "Manifest of ODBC drivers under stress-test. Single source of truth for (a) the version of each driver to install in CI, (b) the URL/apt package to install it from, and (c) the upstream git repo + tag whose source matches that binary version. Consumed by .github/workflows/stress-test.yml at runtime via `jq` and by the /triage-driver skill at analysis time. apt_version strings are formatted for `apt-get install pkg=version`; if Ubuntu drops a pinned version from its repos the workflow will fail loudly at the install step and this file must be updated. The `version` field is the upstream form (what SQLGetInfo reports); apt_version is the Debian-formatted form. Firebird is included as of v3.5.0-rc1 (the first release of the refactored driver). H11 adds a `provenance` block per driver, read only by the triage skill: it declares whether actual_version.txt is a real observation or an echo of this file, and whether SQLGetInfo(SQL_DRIVER_VER) can be trusted. Without it the skill's version cross-check compared the manifest against itself for three drivers and could not fail. Purely additive - the workflow does not read it. H17 adds `firebird-official` / `firebird-patched`, the manifest's first *pair*: the same server, the same connection string and the same crusher binary against two builds of one driver, so the diff between their two reports isolates the driver. They are Windows entries because the official 3.0.x line has no Linux binary. An `install.sha256` appears on those two: the version resource cannot distinguish a prerelease rebuild, so the digest is what pins the artifact. T4 adds an optional `pair_with` key naming another driver in this manifest that the entry is meant to be compared against; triage.ps1 and fetch-stress-test.ps1 enforce the two conditions that comparison rests on. U2 adds `firebird-official-linux` / `firebird-patched-linux`, a second pair on Linux, where the two Linux-only defects among the seventeen live. `install.method: build_from_source` appears there for the first time: no Linux binary of 3.0.1.21 was ever published, so CI compiles the pinned commit instead of downloading anything, and the entry carries no `install.sha256` because the commit is the pin.",
 
   "drivers": {
     "postgresql": {
@@ -190,6 +190,56 @@
       "conn_string": "Driver={Firebird ODBC Driver};DBNAME=localhost/3050:C:/crusher/crusher.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;",
       "_conn_string_note": "See firebird-official's note - the two are identical on purpose. Both installers register the driver under the same name, so the two jobs cannot run on one machine, which is why they are separate jobs and not a matrix over one.",
       "platform": "windows"
+    },
+
+    "firebird-official-linux": {
+      "display_name": "Firebird ODBC Driver 3.0.1.21 (official, built from source) on Linux",
+      "version": "3.0.1.21",
+      "pair_with": "firebird-patched-linux",
+      "_pair_note": "U2. The Linux half of the H17 pair, and the reason it took a second pass: the Windows pair cannot see the Linux-only defects among the seventeen - #288's ConvertingString heap overflow on the widechar path, and #316 item 6, where SQLColAttribute was exported under its C++ mangled name so the driver manager could not find it and routed every call through the ODBC 2 entry point. Neither exists on Windows, where the .def file names the exports. **This pair is asymmetric in how each binary is obtained, and that is a real caveat**: the patched half is the published Linux x64 tarball pinned by sha256, and the official half is built from its pinned commit in CI because no Linux binary of 3.0.1.21 was ever published. So the two are not guaranteed to share compiler flags the way the Windows pair shares an installer format. A difference between them is still evidence, but it is one step weaker than the Windows pair's, and a finding that turns on optimisation or hardening rather than driver logic would be indistinguishable here.",
+      "install": {
+        "method": "build_from_source",
+        "library_name": "libOdbcFb.so",
+        "driver_section": "Firebird ODBC Driver",
+        "_note": "U2. There is no published Linux binary of 3.0.1.21 to download, and the nearest one - linux_libs.zip at v3-0-1-release - is build 18, not 21. Comparing a build-18 binary against build-21 source is exactly the confusion install.sha256 exists to prevent, so this entry carries no sha256 and is not weaker for it: CI clones source.tag and builds it in the same run, which proves directly the thing a digest can only assert. A from-source build is not byte-reproducible anyway - paths, timestamps and compiler point releases all move it - so a pinned digest here would have to be re-cut every time the runner image changed and would pin nothing in between. The build is what upstream documents in Builds/Gcc.lin/readme.linux: unixodbc-dev, rename makefile.linux, make. The Firebird client headers are vendored in the tree, so no Firebird development package is needed."
+      },
+      "source": {
+        "repo": "https://github.com/FirebirdSQL/firebird-odbc-driver",
+        "tag": "dee624fac13182f569532a5785e32eb5d27bed98"
+      },
+      "provenance": {
+        "version_source": "built_from_source",
+        "driver_ver_reliable": false,
+        "_note": "U2. The strongest provenance in this manifest, and it needed its own version_source because it is not shaped like the others. There is no downloaded artifact to digest: the binary is compiled from source.tag in the same workflow run, so \"is this binary that source\" is answered by construction rather than by comparison. actual_version.txt carries the version the *source tree itself* declares - MAJOR_VERSION, MINOR_VERSION and REVNO_VERSION from SetupAttributes.h with BUILDNUM_VERSION from WriteBuildNo.h, the same four constants the upstream makefile reads to name its own package - so a MISMATCH here means the manifest pins a version the pinned commit does not declare, which is a real manifest bug rather than an artefact. At dee624f those constants read 3, 0, 1 and 21. SQLGetInfo(SQL_DRIVER_VER) stays unusable for the reason recorded on the `firebird` entry."
+      },
+      "conn_string": "Driver={Firebird ODBC Driver};DBNAME=localhost/3050:/tmp/crusher.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;",
+      "platform": "linux"
+    },
+
+    "firebird-patched-linux": {
+      "display_name": "Firebird ODBC Driver 3.5.1-rc2 (master + 13 PRs) on Linux",
+      "version": "3.5.1-rc2",
+      "pair_with": "firebird-official-linux",
+      "_pair_note": "U2. The Linux half of the H17 pair, and the reason it took a second pass: the Windows pair cannot see the Linux-only defects among the seventeen - #288's ConvertingString heap overflow on the widechar path, and #316 item 6, where SQLColAttribute was exported under its C++ mangled name so the driver manager could not find it and routed every call through the ODBC 2 entry point. Neither exists on Windows, where the .def file names the exports. **This pair is asymmetric in how each binary is obtained, and that is a real caveat**: the patched half is the published Linux x64 tarball pinned by sha256, and the official half is built from its pinned commit in CI because no Linux binary of 3.0.1.21 was ever published. So the two are not guaranteed to share compiler flags the way the Windows pair shares an installer format. A difference between them is still evidence, but it is one step weaker than the Windows pair's, and a finding that turns on optimisation or hardening rather than driver logic would be indistinguishable here.",
+      "install": {
+        "method": "binary_download",
+        "url": "https://github.com/fdcastel/firebird-odbc-driver/releases/download/v3.5.1-rc2/firebird-odbc-driver-3.5.1-rc2-linux-x64.tar.gz",
+        "sha256": "e9ee9f640e4cdf6635973120cb4543e76b8e87d25536af51eee5acdd30c11e8e",
+        "library_name": "libOdbcFb.so",
+        "driver_section": "Firebird ODBC Driver",
+        "_note": "U2. Downloaded rather than built, unlike its pair. The 3.5.x line publishes a Linux x64 tarball, so the released artifact is available and pinning it by digest is the strongest claim that can be made about a binary somebody else compiled. Building this half from source too would have made the pair symmetric, and was rejected: the 3.5.x tree builds with CMake whose version comes from `git describe`, so it needs full history rather than the single pinned object, and its own CI runs an install-prerequisites step before configuring. Two more moving parts on the half that already has a published binary. The asymmetry is recorded in _pair_note rather than smoothed over. The tarball ships only libOdbcFb.so and odbcinst.ini.sample, registered manually - same as the `firebird` entry."
+      },
+      "source": {
+        "repo": "https://github.com/fdcastel/firebird-odbc-driver",
+        "tag": "v3.5.1-rc2"
+      },
+      "provenance": {
+        "version_source": "manifest_echo",
+        "driver_ver_reliable": false,
+        "_note": "U2. The .so carries no version resource the way a Windows DLL does, and the tarball has no version string that can be extracted reliably, so actual_version.txt echoes this file - the same convention the duckdb, clickhouse and `firebird` entries use, and it proves nothing. Binary identity here rests entirely on install.sha256. That is a weaker claim than its pair's build-from-source, which is the asymmetry _pair_note records."
+      },
+      "conn_string": "Driver={Firebird ODBC Driver};DBNAME=localhost/3050:/tmp/crusher.fdb;UID=SYSDBA;PWD=masterkey;CHARSET=UTF8;",
+      "platform": "linux"
     },
 
     "mock-driver": {

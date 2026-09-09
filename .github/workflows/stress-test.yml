@@ -54,6 +54,13 @@ on:
           # measuring two things at once. One run, one resolved binary — see
           # `resolve-crusher` below.
           - firebird-pair
+          - firebird-official-linux
+          - firebird-patched-linux
+          # U2. The Linux pair, where the two Linux-only defects among the
+          # seventeen live - #288's widechar heap overflow and #316 item 6's
+          # C++-mangled SQLColAttribute export. Same one-run guarantee as
+          # `firebird-pair`.
+          - firebird-linux-pair
           - mock-driver
 
 # F6: least privilege. This workflow hands github.token to
@@ -80,7 +87,7 @@ jobs:
   # for `all` and for any `firebird-*` selection, and costs one ubuntu job.
   resolve-crusher:
     if: ${{ (inputs.driver || 'all') == 'all' || startsWith(inputs.driver, 'firebird-') }}
-    name: Resolve crusher build for the pair
+    name: Resolve crusher build for the pairs
     runs-on: ubuntu-latest
     outputs:
       run-id: ${{ steps.resolve.outputs.run-id }}
@@ -418,134 +425,14 @@ jobs:
           echo "CONN_STRING=$CONN"
         } >> "$GITHUB_ENV"
 
-    - name: Install unixODBC
-      run: |
-        sudo apt-get update -y -q
-        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst
-
-    - name: Bring up Firebird via PSFirebird (5.0.3 on port 3050)
-      shell: pwsh
-      # PSFirebird's Get-FirebirdReleaseUrl uses GITHUB_TOKEN to authenticate
-      # against the GitHub API (5000 req/hr) — without it, repeated stress-test
-      # runs hit the 60 req/hr unauthenticated cap and fail with "Could not
-      # find Firebird release for version X on GitHub."
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      run: |
-        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-        Install-Module -Name PSFirebird -Force -Scope CurrentUser
-        Import-Module PSFirebird
-
-        # Stage Firebird 5.0.3 under a stable path so subsequent steps
-        # can compute LD_LIBRARY_PATH for libfbclient.so. Retry up to 3x —
-        # PSFirebird's GitHub API release lookup is intermittently flaky on
-        # GitHub-hosted runners (returns an empty/stale release list and
-        # Where-Object filters everything out, surfacing as "Could not find
-        # Firebird release for version 5.0.3 on GitHub").
-        $fb = $null
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-          try {
-            $fb = New-FirebirdEnvironment -Version '5.0.3' -Path '/tmp/firebird5' -Force
-            break
-          } catch {
-            Write-Host "PSFirebird setup attempt $attempt failed: $_"
-            if ($attempt -lt 3) {
-              Remove-Item -Recurse -Force '/tmp/firebird5' -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds 15
-            } else { throw }
-          }
-        }
-
-        # TCP connections need SYSDBA's password set in the security db.
-        # Authenticate as SYSDBA up-front so the embedded isql call has
-        # CREATE-TABLE permission against security5.fdb (the SRP plugin
-        # initialises its PLG$SRP table on first user write). Firebird's
-        # tarball ships security5.fdb with SYSDBA/masterkey pre-defined;
-        # PSFirebird's own Tests/FirebirdInstance.Tests.ps1 follows this
-        # exact pattern.
-        $env:ISC_USER = 'SYSDBA'
-        $env:ISC_PASSWORD = 'masterkey'
-
-        $db = New-FirebirdDatabase -Database '/tmp/crusher.fdb' -Environment $fb
-        "CREATE OR ALTER USER SYSDBA PASSWORD 'masterkey';" |
-          Invoke-FirebirdIsql -Database $db -Environment $fb
-
-        # R1 (IMPROVEMENT_PLAN_V2): the same permanent fixture the Windows
-        # composite seeds — see .github/actions/firebird-windows/action.yml for
-        # why it exists and why it has an index and a foreign key. Kept in step
-        # with that copy by hand; the two jobs must agree or the linux and
-        # windows reports stop being comparable.
-        #
-        # An array joined with newlines, not a here-string: PowerShell wants the
-        # closing `'@` at column 0, and that would end this YAML block scalar.
-        $fixture = @(
-          "CREATE TABLE CRUSHER_FIXTURE_PARENT ("
-          "    ID    INTEGER NOT NULL PRIMARY KEY,"
-          "    LABEL VARCHAR(50));"
-          "CREATE TABLE CRUSHER_FIXTURE ("
-          "    ID        INTEGER NOT NULL PRIMARY KEY,"
-          "    PARENT_ID INTEGER,"
-          "    NAME      VARCHAR(50),"
-          "    CONSTRAINT FK_CRUSHER_FIXTURE_PARENT"
-          "        FOREIGN KEY (PARENT_ID) REFERENCES CRUSHER_FIXTURE_PARENT (ID));"
-          "CREATE INDEX IDX_CRUSHER_FIXTURE_NAME ON CRUSHER_FIXTURE (NAME);"
-          "COMMIT;"
-          "INSERT INTO CRUSHER_FIXTURE_PARENT (ID, LABEL) VALUES (1, 'parent one');"
-          "INSERT INTO CRUSHER_FIXTURE_PARENT (ID, LABEL) VALUES (2, 'parent two');"
-          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (1, 1, 'row one');"
-          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (2, 1, 'row two');"
-          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (3, NULL, 'orphan');"
-          "COMMIT;"
-          "SET TERM ^ ;"
-          "CREATE PROCEDURE CRUSHER_PROC (IN_N INTEGER, IN_S VARCHAR(64))"
-          "RETURNS (OUT_N INTEGER, OUT_S VARCHAR(64)) AS"
-          "BEGIN OUT_N = IN_N * 2; OUT_S = IN_S || '-out'; END^"
-          "CREATE PROCEDURE CRUSHER_FUNC (A INTEGER, B INTEGER)"
-          "RETURNS (RESULT INTEGER) AS"
-          "BEGIN RESULT = A * 10 + B; END^"
-          "SET TERM ; ^"
-          "COMMIT;"
-        ) -join "`n"
-        $fixture | Invoke-FirebirdIsql -Database $db -Environment $fb
-
-        $seeded = 'SELECT COUNT(*) FROM CRUSHER_FIXTURE;' |
-          Invoke-FirebirdIsql -Database $db -Environment $fb
-        Write-Host "Fixture rows: $seeded"
-        if ("$seeded" -notmatch '3') {
-          throw "CRUSHER_FIXTURE was not seeded; the catalog probes would skip"
-        }
-
-        $instance = Start-FirebirdInstance -Port 3050 -Environment $fb
-        Write-Host "Firebird PID: $($instance.Process.Id)  Port: $($instance.Port)"
-
-        # Expose the Firebird lib dir to the next step so libOdbcFb.so
-        # can dlopen libfbclient.so at connect time. PSFirebird stages
-        # libfbclient under <env>/lib (Linux); fall back to a glob just
-        # in case the layout shifts in a future PSFirebird release.
-        $libDir = if (Test-Path "$($fb.Path)/lib/libfbclient.so") {
-          "$($fb.Path)/lib"
-        } else {
-          (Get-ChildItem -Path $fb.Path -Recurse -Filter 'libfbclient.so*' |
-            Select-Object -First 1).Directory.FullName
-        }
-        if (-not $libDir) { throw "Could not locate libfbclient.so under $($fb.Path)" }
-        "FIREBIRD_LIB_DIR=$libDir" | Out-File -Append $env:GITHUB_ENV
-        Write-Host "FIREBIRD_LIB_DIR=$libDir"
-
-    - name: Smoke-test Firebird is listening on 3050
-      run: |
-        # Verify the detached firebird process is reachable before we
-        # waste a 100-test crusher run on a connection-refused failure.
-        for i in 1 2 3 4 5; do
-          if ss -ltn | grep -q ':3050'; then
-            echo "Firebird is listening on 3050 (attempt $i)"
-            exit 0
-          fi
-          sleep 1
-        done
-        echo "::error::Firebird not listening on 3050 after 5s"
-        ss -ltn || true
-        exit 1
+    # U2: the server, the fixture and LD_LIBRARY_PATH are the composite's
+    # now. They used to be ~130 lines inline here, carrying a comment saying
+    # the fixture SQL was "kept in step by hand" with the Windows copy and that
+    # the two jobs must agree "or the linux and windows reports stop being
+    # comparable". A note asking a human to keep two SQL scripts byte-identical
+    # is a defect waiting for its first quiet divergence - and U2 was about to
+    # add two more Linux jobs that needed the same block.
+    - uses: ./.github/actions/firebird-linux
 
     - name: Install Firebird ODBC driver (download + register)
       run: |
@@ -760,6 +647,167 @@ jobs:
   # Driver / conn-string: see `.github/drivers.json` → drivers["mock-driver"]
   # The mock's "source" is this repo's mock-driver/ directory — the triage
   # skill special-cases it (no clone step).
+  # ── Firebird 3.0.1.21 (official) on Linux, built from source ─
+  # Driver / version / source: see `.github/drivers.json` -> drivers["firebird-official-linux"]
+  #
+  # U2. The Windows pair is blind to two of the seventeen fixes by
+  # construction: #288's ConvertingString heap overflow lives on the Linux
+  # widechar path, and #316 item 6 - SQLColAttribute exported under its C++
+  # mangled name, so unixODBC cannot find it and every call falls back to the
+  # ODBC 2 entry point - cannot happen on Windows, where the .def file names
+  # the exports. Neither is reachable without a Linux binary of 3.0.1.21, and
+  # none was ever published.
+  #
+  # So this job compiles one. See the build-firebird-odbc composite for why
+  # that is better provenance than a digest rather than worse, and the
+  # manifest's `_pair_note` for the caveat it does carry: its pair downloads a
+  # published binary rather than building one, so the two halves are not
+  # guaranteed to share compiler flags.
+  firebird-official-linux:
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird-official-linux' || inputs.driver == 'firebird-linux-pair' }}
+    # T3: one resolved crusher binary for both halves.
+    needs: resolve-crusher
+    name: Firebird 3.0.1.21 official, from source (Linux)
+    # ubuntu-22.04 to match the linux `firebird` job and PSFirebird's own
+    # example workflow; noble lacks libncurses5 and upsets PSFirebird's
+    # release-resolution path.
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      shell: bash
+      run: |
+        K='firebird-official-linux'
+        {
+          echo "DRIVER_VERSION=$(jq -er --arg k "$K" '.drivers[$k].version'                .github/drivers.json)"
+          echo "DRIVER_SECTION=$(jq -er --arg k "$K" '.drivers[$k].install.driver_section' .github/drivers.json)"
+          echo "SRC_REPO=$(jq -er --arg k "$K" '.drivers[$k].source.repo'                  .github/drivers.json | sed 's|https://github.com/||')"
+          echo "SRC_REF=$(jq -er --arg k "$K" '.drivers[$k].source.tag'                    .github/drivers.json)"
+          echo "CONN_STRING=$(jq -er --arg k "$K" '.drivers[$k].conn_string'               .github/drivers.json)"
+        } >> "$GITHUB_ENV"
+
+    - uses: ./.github/actions/firebird-linux
+
+    - name: Build the driver from the pinned commit
+      id: build
+      uses: ./.github/actions/build-firebird-odbc
+      with:
+        repo: ${{ env.SRC_REPO }}
+        ref: ${{ env.SRC_REF }}
+
+    - name: Register the built driver with unixODBC
+      run: |
+        {
+          echo "[${DRIVER_SECTION}]"
+          echo "Description = Firebird ODBC Driver"
+          echo "Driver = ${{ steps.build.outputs.library-path }}"
+          echo "Setup = ${{ steps.build.outputs.library-path }}"
+          echo "FileUsage = 1"
+        } | sudo tee -a /etc/odbcinst.ini
+        cat /etc/odbcinst.ini
+
+    - name: Record actual installed version (provenance for triage)
+      run: |
+        # A genuine observation of what was built, not an echo of the manifest:
+        # these are the same four constants the upstream makefile reads to name
+        # its own package. If they disagree with the manifest, the manifest is
+        # pinning a version this commit does not declare - which is exactly
+        # what triage.ps1's `built_from_source` branch is there to say.
+        SRC=firebird-odbc-src
+        MAJOR=$(grep 'define MAJOR_VERSION'    "$SRC/SetupAttributes.h" | tr -d '\r' | awk '{print $NF}')
+        MINOR=$(grep 'define MINOR_VERSION'    "$SRC/SetupAttributes.h" | tr -d '\r' | awk '{print $NF}')
+        REV=$(grep 'define REVNO_VERSION'      "$SRC/SetupAttributes.h" | tr -d '\r' | awk '{print $NF}')
+        BUILD=$(grep 'define BUILDNUM_VERSION' "$SRC/WriteBuildNo.h"    | tr -d '\r' | awk '{print $NF}')
+        DECLARED="${MAJOR}.${MINOR}.${REV}.${BUILD}"
+        echo "$DECLARED" > actual_version.txt
+        echo "Source tree declares $DECLARED (manifest pins $DRIVER_VERSION)"
+
+    - uses: ./.github/actions/run-crusher
+      with:
+        artifact-name: firebird-official-linux
+        conn-string: ${{ env.CONN_STRING }}
+        ld-library-path: ${{ env.FIREBIRD_LIB_DIR }}
+        crusher-run-id: ${{ needs.resolve-crusher.outputs.run-id }}
+
+  # ── Firebird 3.5.1-rc2 (master + 13 PRs) on Linux ───────────
+  # Driver / version / source: see `.github/drivers.json` -> drivers["firebird-patched-linux"]
+  # The other half of the U2 pair. Downloaded rather than built, because the
+  # 3.5.x line publishes a Linux tarball and pinning it by digest is the
+  # strongest claim available about a binary somebody else compiled; the
+  # manifest's install `_note` records why building this half too was rejected.
+  firebird-patched-linux:
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird-patched-linux' || inputs.driver == 'firebird-linux-pair' }}
+    needs: resolve-crusher
+    name: Firebird 3.5.1-rc2 patched (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      shell: bash
+      run: |
+        K='firebird-patched-linux'
+        {
+          echo "DRIVER_VERSION=$(jq -er --arg k "$K" '.drivers[$k].version'                .github/drivers.json)"
+          echo "DRIVER_URL=$(jq -er --arg k "$K" '.drivers[$k].install.url'                .github/drivers.json)"
+          echo "DRIVER_SHA256=$(jq -er --arg k "$K" '.drivers[$k].install.sha256'          .github/drivers.json)"
+          echo "DRIVER_LIB_NAME=$(jq -er --arg k "$K" '.drivers[$k].install.library_name'  .github/drivers.json)"
+          echo "DRIVER_SECTION=$(jq -er --arg k "$K" '.drivers[$k].install.driver_section' .github/drivers.json)"
+          echo "CONN_STRING=$(jq -er --arg k "$K" '.drivers[$k].conn_string'               .github/drivers.json)"
+        } >> "$GITHUB_ENV"
+
+    - uses: ./.github/actions/firebird-linux
+
+    - name: Download, verify and register the driver
+      run: |
+        set -euo pipefail
+        mkdir firebird_odbc && cd firebird_odbc
+        curl --no-progress-meter -fLO "${DRIVER_URL}"
+        TARBALL=$(ls *.tar.gz)
+        # The digest matters more here than on the `firebird` entry, not less:
+        # this binary is one half of a pair, and a re-cut release asset would
+        # silently change what the diff is measuring.
+        echo "${DRIVER_SHA256}  ${TARBALL}" | sha256sum -c -
+        tar xzf "${TARBALL}"
+        DRIVER_PATH=$(readlink -f "${DRIVER_LIB_NAME}")
+        cd ..
+        echo "Firebird ODBC driver ${DRIVER_VERSION}: ${DRIVER_PATH}"
+        {
+          echo "[${DRIVER_SECTION}]"
+          echo "Description = Firebird ODBC Driver"
+          echo "Driver = ${DRIVER_PATH}"
+          echo "Setup = ${DRIVER_PATH}"
+          echo "FileUsage = 1"
+        } | sudo tee -a /etc/odbcinst.ini
+        cat /etc/odbcinst.ini
+        # The counterpart of the built half's export check: #316 item 6 is a
+        # symbol-visibility defect, and the fix is only observable by looking.
+        echo "Exported ODBC entry points (C names only):"
+        for sym in SQLColAttribute SQLColAttributeW SQLColAttributes SQLGetDescField; do
+          if nm -D --defined-only "$DRIVER_PATH" 2>/dev/null | grep -qw "$sym"; then
+            echo "  $sym: exported"
+          elif nm -D --defined-only "$DRIVER_PATH" 2>/dev/null | grep -q "_Z.*${sym}"; then
+            echo "  $sym: MANGLED - exported under a C++ name, so the driver manager cannot find it"
+          else
+            echo "  $sym: absent"
+          fi
+        done
+
+    - name: Record actual installed version (provenance for triage)
+      run: |
+        # An echo of the manifest, and the provenance block says so: a .so has
+        # no version resource and the tarball has no reliable version string.
+        # Binary identity here rests on the sha256 checked above.
+        echo "$DRIVER_VERSION" > actual_version.txt
+
+    - uses: ./.github/actions/run-crusher
+      with:
+        artifact-name: firebird-patched-linux
+        conn-string: ${{ env.CONN_STRING }}
+        ld-library-path: ${{ env.FIREBIRD_LIB_DIR }}
+        crusher-run-id: ${{ needs.resolve-crusher.outputs.run-id }}
+
   mock-driver:
     if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'mock-driver' }}
     name: Mock Driver (Windows)

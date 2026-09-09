@@ -758,6 +758,37 @@ function Test-Provenance {
         return
     }
 
+    if ($VersionSource -eq 'built_from_source') {
+        # U2. The strongest provenance in the manifest, and it needs its own
+        # branch because it is not shaped like the others. There is no
+        # downloaded artifact to digest: CI clones `source.tag` and compiles it
+        # in the same run, so "is this binary that source" is answered by
+        # construction rather than by comparison, and the absence of
+        # `install.sha256` on such an entry is correct rather than an omission.
+        #
+        # actual_version.txt carries what the *source tree* declares, so a
+        # MISMATCH here means the manifest pins a version the pinned commit
+        # does not - a real manifest bug, and the one thing this check can
+        # still catch.
+        $verdict = Test-VersionMatch $manifestVer $RuntimeVersion
+        switch ($verdict) {
+            'MATCH'   { Set-Fact 'PROVENANCE' 'OK'
+                        Set-Fact 'PROVENANCE_DETAIL' ("Built from the pinned commit in CI; the source tree declares " +
+                            "'$RuntimeVersion', matching manifest '$manifestVer'. No digest is involved - the commit is the pin.") }
+            'PARTIAL' { Set-Fact 'PROVENANCE' 'OK'
+                        Set-Fact 'PROVENANCE_DETAIL' ("Built from the pinned commit in CI; the source tree declares " +
+                            "'$RuntimeVersion', a longer form of manifest '$manifestVer'.") }
+            'UNKNOWN' { Set-Fact 'PROVENANCE' 'UNVERIFIABLE'
+                        Set-Fact 'PROVENANCE_DETAIL' ("Built from the pinned commit, but actual_version.txt is empty or " +
+                            "unparseable, so the version the source declares could not be read back. The binary is still " +
+                            "the pinned commit's; only the version cross-check is missing.") }
+            default   { Set-Fact 'PROVENANCE' 'MISMATCH'
+                        Set-Fact 'PROVENANCE_DETAIL' ("The pinned commit's source declares '$RuntimeVersion' but the " +
+                            "manifest pins '$manifestVer'. The build is what it says it is; the manifest is wrong.") }
+        }
+        return
+    }
+
     if ($VersionSource -eq 'observed') {
         $verdict = Test-VersionMatch $manifestVer $RuntimeVersion
         switch ($verdict) {

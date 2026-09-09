@@ -1,0 +1,173 @@
+# U2. The Linux counterpart of `firebird-windows`, and it exists for the same
+# reason that one does: U2 adds a *second* Linux Firebird pair whose whole
+# point is to be identical apart from the driver, and the surest way to keep
+# jobs identical is to not write the shared half three times.
+#
+# The fixture below was previously inline in the `firebird` job with a comment
+# admitting it was "kept in step by hand" with the Windows composite's copy,
+# and that the two jobs must agree "or the linux and windows reports stop being
+# comparable". A note asking a human to keep two SQL scripts byte-identical is
+# a defect waiting for its first quiet divergence. There is one copy per
+# platform now, which is one more than ideal and two fewer than before; the
+# platforms genuinely differ (pwsh here stages a POSIX tree and exports
+# LD_LIBRARY_PATH, Windows appends to PATH), so a single copy would be a
+# shell-scripting exercise rather than a simplification.
+name: Bring up Firebird on a Linux runner
+description: >
+  Stages a Firebird server with PSFirebird, creates and seeds the crusher
+  database, starts it listening on a TCP port, and exports FIREBIRD_LIB_DIR so
+  a driver loaded by unixODBC can dlopen libfbclient.so at connect time.
+
+inputs:
+  firebird-version:
+    description: 'Firebird release to stage'
+    required: false
+    default: '5.0.3'
+  port:
+    description: 'TCP port for the server to listen on'
+    required: false
+    default: '3050'
+  database:
+    description: 'Database path, written the same way the connection string writes it'
+    required: false
+    default: '/tmp/crusher.fdb'
+
+runs:
+  using: composite
+  steps:
+    - name: Install unixODBC
+      shell: bash
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst
+
+    - name: Bring up Firebird via PSFirebird
+      shell: pwsh
+      # Inputs reach the script through `env`, never `${{ }}` inside the run
+      # body — same rule the Windows composite and the repro workflow follow.
+      env:
+        # PSFirebird's release lookup calls the GitHub API; unauthenticated it
+        # gets 60 req/hr and starts failing with "Could not find Firebird
+        # release for version X on GitHub."
+        GITHUB_TOKEN: ${{ github.token }}
+        FB_VERSION: ${{ inputs.firebird-version }}
+        FB_PORT: ${{ inputs.port }}
+        FB_DATABASE: ${{ inputs.database }}
+      run: |
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        Install-Module -Name PSFirebird -MinimumVersion 1.2.1 -Force -Scope CurrentUser
+        Import-Module PSFirebird
+
+        # Retry up to 3x: the release lookup is intermittently empty on hosted
+        # runners, and the failure surfaces as a missing version rather than a
+        # network error.
+        $fbRoot = '/tmp/firebird5'
+        $fb = $null
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+          try {
+            $fb = New-FirebirdEnvironment -Version $env:FB_VERSION -Path $fbRoot -Force
+            break
+          } catch {
+            Write-Host "PSFirebird setup attempt $attempt failed: $_"
+            if ($attempt -lt 3) {
+              Remove-Item -Recurse -Force $fbRoot -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 15
+            } else { throw }
+          }
+        }
+
+        # TCP connections need SYSDBA's password set in the security database;
+        # authenticate up front so the embedded isql call may write to it.
+        $env:ISC_USER = 'SYSDBA'
+        $env:ISC_PASSWORD = 'masterkey'
+
+        $db = New-FirebirdDatabase -Database $env:FB_DATABASE -Environment $fb
+        "CREATE OR ALTER USER SYSDBA PASSWORD 'masterkey';" |
+          Invoke-FirebirdIsql -Database $db -Environment $fb
+
+        # R1 (IMPROVEMENT_PLAN_V2): seed a permanent fixture. Byte-for-byte the
+        # same SQL as .github/actions/firebird-windows/action.yml — the two
+        # platforms' reports are only comparable while it stays that way.
+        #
+        # The database used to be created empty, and every probe that makes a
+        # table drops it again in the same probe — so by the time the catalog
+        # categories run there is no user table, and `SQLTables` returning zero
+        # rows is the *correct* answer to the question asked. Four probes
+        # reported SKIP_INCONCLUSIVE as their result. What was missing was a
+        # fixture, not a diagnosis.
+        #
+        # An array joined with newlines, not a here-string: PowerShell requires
+        # the closing `'@` at column 0, and a column-0 line ends the YAML block
+        # scalar this script lives in.
+        $fixture = @(
+          "CREATE TABLE CRUSHER_FIXTURE_PARENT ("
+          "    ID    INTEGER NOT NULL PRIMARY KEY,"
+          "    LABEL VARCHAR(50));"
+          "CREATE TABLE CRUSHER_FIXTURE ("
+          "    ID        INTEGER NOT NULL PRIMARY KEY,"
+          "    PARENT_ID INTEGER,"
+          "    NAME      VARCHAR(50),"
+          "    CONSTRAINT FK_CRUSHER_FIXTURE_PARENT"
+          "        FOREIGN KEY (PARENT_ID) REFERENCES CRUSHER_FIXTURE_PARENT (ID));"
+          "CREATE INDEX IDX_CRUSHER_FIXTURE_NAME ON CRUSHER_FIXTURE (NAME);"
+          "COMMIT;"
+          "INSERT INTO CRUSHER_FIXTURE_PARENT (ID, LABEL) VALUES (1, 'parent one');"
+          "INSERT INTO CRUSHER_FIXTURE_PARENT (ID, LABEL) VALUES (2, 'parent two');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (1, 1, 'row one');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (2, 1, 'row two');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (3, NULL, 'orphan');"
+          "COMMIT;"
+          "SET TERM ^ ;"
+          "CREATE PROCEDURE CRUSHER_PROC (IN_N INTEGER, IN_S VARCHAR(64))"
+          "RETURNS (OUT_N INTEGER, OUT_S VARCHAR(64)) AS"
+          "BEGIN OUT_N = IN_N * 2; OUT_S = IN_S || '-out'; END^"
+          "CREATE PROCEDURE CRUSHER_FUNC (A INTEGER, B INTEGER)"
+          "RETURNS (RESULT INTEGER) AS"
+          "BEGIN RESULT = A * 10 + B; END^"
+          "SET TERM ; ^"
+          "COMMIT;"
+        ) -join "`n"
+        $fixture | Invoke-FirebirdIsql -Database $db -Environment $fb
+
+        # Fail loudly rather than let four probes go on skipping for a reason
+        # nobody reads.
+        $seeded = 'SELECT COUNT(*) FROM CRUSHER_FIXTURE;' |
+          Invoke-FirebirdIsql -Database $db -Environment $fb
+        Write-Host "Fixture rows: $seeded"
+        if ("$seeded" -notmatch '3') {
+          throw "CRUSHER_FIXTURE was not seeded; the catalog probes would skip"
+        }
+
+        $instance = Start-FirebirdInstance -Port ([int]$env:FB_PORT) -Environment $fb
+        Write-Host "Firebird PID: $($instance.Process.Id)  Port: $($instance.Port)"
+
+        # The ODBC driver dlopens libfbclient.so at connect time. PSFirebird
+        # stages it under <env>/lib; the glob is a fallback in case a future
+        # PSFirebird release moves the layout.
+        $libDir = if (Test-Path "$($fb.Path)/lib/libfbclient.so") {
+          "$($fb.Path)/lib"
+        } else {
+          (Get-ChildItem -Path $fb.Path -Recurse -Filter 'libfbclient.so*' |
+            Select-Object -First 1).Directory.FullName
+        }
+        if (-not $libDir) { throw "Could not locate libfbclient.so under $($fb.Path)" }
+        "FIREBIRD_LIB_DIR=$libDir" | Out-File -Append $env:GITHUB_ENV
+        Write-Host "FIREBIRD_LIB_DIR=$libDir"
+
+    - name: Smoke-test Firebird is listening
+      shell: bash
+      env:
+        FB_PORT: ${{ inputs.port }}
+      # Verify the detached server is reachable before spending a 200-probe
+      # crusher run on a connection-refused failure.
+      run: |
+        for i in 1 2 3 4 5; do
+          if ss -ltn | grep -q ":${FB_PORT}"; then
+            echo "Firebird is listening on ${FB_PORT} (attempt $i)"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "::error::Firebird not listening on ${FB_PORT} after 5s"
+        ss -ltn || true
+        exit 1

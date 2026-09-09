@@ -1,0 +1,142 @@
+# U2. Build the Firebird ODBC driver from a pinned source commit.
+#
+# The Windows half of the H17 pair installs two published binaries and pins
+# each by SHA-256, because a downloaded binary's relationship to any particular
+# source tree is otherwise unverifiable. On Linux there is no such binary to
+# pin: the official 3.0.x line publishes Inno Setup installers only, and the
+# nearest Linux artifact — `linux_libs.zip` at `v3-0-1-release` — is **build
+# 18**, not 21. Comparing a build-18 binary against build-21 source is exactly
+# the confusion `install.sha256` exists to prevent, so it is not an option.
+#
+# Building from the commit inverts the problem rather than restating it. A
+# digest proves "this binary is the one we meant"; it never proves which source
+# produced it. A build from a pinned SHA in the same workflow run proves the
+# stronger thing directly — which is why the manifest entries that use this
+# carry no `install.sha256` and are not weaker for it. A from-source build is
+# not byte-reproducible anyway (paths, timestamps, compiler point releases), so
+# a digest here would pin nothing and would have to be updated whenever the
+# runner image moved.
+#
+# The build itself is what upstream documents in `Builds/Gcc.lin/readme.linux`:
+# unixodbc-dev, rename `makefile.linux` to `makefile`, `make`. The Firebird
+# client headers are vendored in the tree (`FBClient.Headers`), so no Firebird
+# development package is needed — the driver dlopens `libfbclient.so` at
+# connect time, which is what the `firebird-linux` composite's
+# `FIREBIRD_LIB_DIR` is for.
+name: Build the Firebird ODBC driver from source
+description: >
+  Clones firebird-odbc-driver at a pinned commit or tag, builds libOdbcFb.so
+  with the upstream Linux makefile, and reports the resulting library's path,
+  size and SHA-256.
+
+inputs:
+  repo:
+    description: 'Source repository, owner/name'
+    required: true
+  ref:
+    description: 'Commit SHA or tag to build. A SHA is preferred: a tag can move.'
+    required: true
+  dest:
+    description: 'Directory to clone into'
+    required: false
+    default: 'firebird-odbc-src'
+
+outputs:
+  library-path:
+    description: 'Absolute path of the built libOdbcFb.so'
+    value: ${{ steps.build.outputs.library-path }}
+  sha256:
+    description: 'SHA-256 of the built library — recorded, not gated (see the header)'
+    value: ${{ steps.build.outputs.sha256 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Clone the driver source at the pinned ref
+      shell: bash
+      env:
+        SRC_REPO: ${{ inputs.repo }}
+        SRC_REF: ${{ inputs.ref }}
+        DEST: ${{ inputs.dest }}
+      run: |
+        set -euo pipefail
+        # A SHA cannot be `git clone --branch`ed, so fetch it explicitly. Depth
+        # 1 on the exact object: nothing here needs history.
+        git init -q "$DEST"
+        cd "$DEST"
+        git remote add origin "https://github.com/${SRC_REPO}.git"
+        if ! git fetch -q --depth 1 origin "$SRC_REF"; then
+          echo "::error::Could not fetch ${SRC_REF} from ${SRC_REPO}. A commit SHA needs the server to allow fetching it by object name; a tag needs to exist."
+          exit 1
+        fi
+        git checkout -q FETCH_HEAD
+        echo "Building ${SRC_REPO} at $(git rev-parse HEAD)"
+
+    - name: Build libOdbcFb.so
+      id: build
+      shell: bash
+      env:
+        DEST: ${{ inputs.dest }}
+      run: |
+        set -euo pipefail
+        cd "$DEST/Builds/Gcc.lin"
+        # Upstream ships the makefile under a platform suffix and asks the
+        # builder to rename it. Copy rather than move, so a re-run of this step
+        # on a warm checkout still finds the original.
+        cp makefile.linux makefile
+        # `make` is quiet about which compiler it picked, and the readme says
+        # C++17 is required — worth having in the log when a build breaks on a
+        # runner image bump rather than on the driver.
+        g++ --version | head -1
+        # Serial on purpose. The upstream makefile drives its subdirectories
+        # through .PHONY targets (createdirs, IscDbc, OdbcJdbc) with no ordering
+        # between them, so -j is not obviously safe and this is a small build.
+        if ! make; then
+          echo "::error::The upstream Linux makefile failed. This is the driver's build, not crusher's — see the log above. If it broke on a compiler newer than the pinned commit expects, that is a real fact about the commit and belongs in the report, not a workaround here."
+          exit 1
+        fi
+
+        # Release_<arch>/ per the readme; glob rather than hardcode, because
+        # <arch> comes from the makefile's own uname logic.
+        LIB=$(find . -name 'libOdbcFb.so' -type f | head -1)
+        if [ -z "$LIB" ]; then
+          echo "::error::make succeeded but produced no libOdbcFb.so"
+          find . -name '*.so*' -type f || true
+          exit 1
+        fi
+        LIB=$(readlink -f "$LIB")
+        SHA=$(sha256sum "$LIB" | cut -d' ' -f1)
+        echo "Built $LIB"
+        echo "  size:   $(stat -c%s "$LIB") bytes"
+        echo "  sha256: $SHA"
+        {
+          echo "library-path=$LIB"
+          echo "sha256=$SHA"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Confirm the ODBC entry points are exported under C names
+      shell: bash
+      env:
+        LIB: ${{ steps.build.outputs.library-path }}
+      # #316 item 6: on Linux this driver exported SQLColAttribute under its
+      # *C++* mangled name, so the driver manager could not find it and routed
+      # every call through the ODBC 2 entry point instead. That is invisible on
+      # Windows, where the .def file names the exports, and it is one of the
+      # two defects this whole Linux arm exists to reach.
+      #
+      # Reported, never gated: on the 3.0.1.21 commit this is *expected* to
+      # show the defect, and a job that refused to run against a driver with
+      # the bug in it would defeat the purpose. The line in the log is what
+      # makes the crusher findings interpretable.
+      run: |
+        echo "Exported ODBC entry points (C names only):"
+        for sym in SQLColAttribute SQLColAttributeW SQLColAttributes \
+                   SQLGetDescField SQLBindParameter SQLDriverConnect; do
+          if nm -D --defined-only "$LIB" 2>/dev/null | grep -qw "$sym"; then
+            echo "  $sym: exported"
+          elif nm -D --defined-only "$LIB" 2>/dev/null | grep -q "_Z.*${sym}"; then
+            echo "  $sym: MANGLED — exported under a C++ name, so the driver manager cannot find it"
+          else
+            echo "  $sym: absent"
+          fi
+        done
