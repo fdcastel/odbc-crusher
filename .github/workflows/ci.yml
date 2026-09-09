@@ -590,6 +590,32 @@ jobs:
       # ASan intercepts those signals first and aborts the process, so the
       # guard has no chance to run. Exclude that suite from the sanitizer
       # config — it stays covered by the non-sanitizer CI jobs.
+      #
+      # P15: FailedConnectDiagnosticsCatchAnUnreadableRecord is excluded for a
+      # different reason, and a more interesting one. It configures the mock
+      # with `ConnectDiagnostics=Garbled`, which returns the Firebird ODBC
+      # PR #298 shape: one byte of the message written, and the length of the
+      # whole of it reported. unixODBC's SQLDriverConnect believes the length
+      # over the terminator and sprintf's the message out of its own buffer —
+      #
+      #   READ of size 2 ... in printf_common
+      #     #2 __sprintf_chk
+      #     #3 SQLDriverConnect (/lib/x86_64-linux-gnu/libodbc.so.2)
+      #
+      # ASan is right and the bug is not ours: the sibling scenario
+      # FailedConnectDiagnosticsPassWhenTheRecordIsReadable takes the identical
+      # code path with a well-formed record and passes here, so the malformed
+      # record is the whole difference. **This is the most direct statement
+      # anywhere in this repository of why PR #298 mattered** — a driver that
+      # mis-describes its own diagnostic makes the driver manager read out of
+      # bounds, in the driver manager's own address space, before the
+      # application sees anything at all.
+      #
+      # Nothing in this repository can fix libodbc, and softening the mock
+      # would mean giving up the one shape the probe exists to detect. The
+      # scenario stays covered by the ubuntu-22.04, macOS and Windows jobs,
+      # which run it unsanitized. See IMPROVEMENT_PLAN_V2 P15; D71 above is the
+      # same class of finding in the same library.
       env:
         # D57: crusher wedges at exit under ASan, so every run here hits the
         # harness deadline. 20s keeps the job inside its timeout-minutes while
@@ -600,4 +626,4 @@ jobs:
       # D55: --timeout, because this is the job that wedged. Without it
       # ctest waits on a hung test until GitHub kills the runner six
       # hours later, and the log ends mid-suite with no failure named.
-      run: ctest --test-dir build-san -C Debug --output-on-failure -E "CrashGuard" --timeout 300
+      run: ctest --test-dir build-san -C Debug --output-on-failure -E "CrashGuard|FailedConnectDiagnosticsCatchAnUnreadableRecord" --timeout 300
