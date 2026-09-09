@@ -211,6 +211,12 @@ public:
     SQLULEN max_rows_ = 0;
     SQLULEN query_timeout_ = 0;
     SQLULEN row_array_size_ = 1;
+    // IMPROVEMENT_PLAN_V2 P4. Its own field, deliberately: a keyset size is
+    // the size of the keyset a keyset-driven cursor keeps, not the number of
+    // rows a fetch returns, and storing it in row_array_size_ is the defect
+    // the probe looks for. This driver has no keyset-driven cursors, so
+    // storing the number and handing it back is all the specification asks.
+    SQLULEN keyset_size_ = 0;                  // SQL_ATTR_KEYSET_SIZE
     // D11: the rest of the block-fetch attributes. row_array_size_ was stored
     // and the others were not even that, so SQLFetch advanced one row and
     // wrote element 0 whatever the array size said - and reported SQL_SUCCESS,

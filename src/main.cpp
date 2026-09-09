@@ -36,6 +36,7 @@
 #include "tests/escape_sequence_tests.hpp"
 #include "tests/numeric_struct_tests.hpp"
 #include "tests/cursor_stress_tests.hpp"
+#include "tests/block_cursor_tests.hpp"
 #include "discovery/driver_info.hpp"
 #include "discovery/type_info.hpp"
 #include "discovery/function_info.hpp"
@@ -102,6 +103,9 @@ const std::vector<CategoryFactory>& category_registry() {
         make_category<tests::EscapeSequenceTests>(),
         make_category<tests::NumericStructTests>(),
         make_category<tests::CursorStressTests>(),
+        // IMPROVEMENT_PLAN_V2 P1-P5. Last, because it is the newest and
+        // the report preserves this order.
+        make_category<tests::BlockCursorTests>(),
     };
     return kRegistry;
 }

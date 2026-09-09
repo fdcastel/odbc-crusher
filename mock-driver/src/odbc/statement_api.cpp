@@ -1577,6 +1577,12 @@ SQLRETURN SQL_API SQLGetStmtAttr(
             if (pcbValue) *pcbValue = sizeof(SQLULEN);
             break;
 
+        // P4: settable, therefore gettable.
+        case SQL_ATTR_KEYSET_SIZE:
+            if (rgbValue) *static_cast<SQLULEN*>(rgbValue) = stmt->keyset_size_;
+            if (pcbValue) *pcbValue = sizeof(SQLULEN);
+            break;
+
         // D11: read back what the setter now stores.
         case SQL_ATTR_ROWS_FETCHED_PTR:
             if (rgbValue) *static_cast<SQLULEN**>(rgbValue) = stmt->rows_fetched_ptr_;
@@ -1749,6 +1755,13 @@ SQLRETURN SQL_API SQLSetStmtAttr(
             
         case SQL_ATTR_ROW_ARRAY_SIZE:
             stmt->row_array_size_ = value;
+            break;
+
+        // P4: its own field. Folding it into row_array_size_ would give an
+        // application that asked for a keyset a rowset of that size, and the
+        // next SQLFetch would write that many rows into buffers bound for one.
+        case SQL_ATTR_KEYSET_SIZE:
+            stmt->keyset_size_ = value;
             break;
 
         // D11: stored, and honoured by SQLFetch.

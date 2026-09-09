@@ -1792,9 +1792,13 @@ TestResult EscapeSequenceTests::test_function_call_escape_return_value() {
                 return oc;
             };
 
+            // R2: the arguments and the answer come from the fixture
+            // contract, not from literals repeated here. Clang's
+            // -Wunused-const-variable caught the duplication - the constants
+            // were declared for this probe and the probe had its own copies.
             const SQLINTEGER kSentinel = static_cast<SQLINTEGER>(0xDEADBEEFu);
-            const SQLINTEGER kA = 4, kB = 7;
-            const SQLINTEGER kExpected = 47;      // 4*10 + 7
+            const SQLINTEGER kA = kContractFuncA, kB = kContractFuncB;
+            const SQLINTEGER kExpected = kContractFuncResult;
 
             const CallOutcome first = run_call(kSentinel, kA, kB);
             if (!first.ok) {
