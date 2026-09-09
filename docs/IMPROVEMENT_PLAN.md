@@ -3,6 +3,7 @@
 **Created**: 2026-09-07
 **Supersedes**: [old-IMPROVEMENT_PLAN.md](./old-IMPROVEMENT_PLAN.md) (the 2026-04-24 → 2026-04-27 plan, §1–§8; a verbatim copy remains in the gitignored `tmp/old-IMPROVEMENT_PLAN_INITIAL.md`)
 **Baseline commit**: `17d6182`
+**Companion**: [IMPROVEMENT_PLAN_V2.md](./IMPROVEMENT_PLAN_V2.md) — the coverage-gap plan that came out of **H17**–**H19**. It owns everything the Firebird before/after pair exposed about crusher's own probe coverage; this document stays authoritative for everything else. A task belongs there if the Firebird pair is what would prove it done.
 **Scope**: full-codebase review — application (`src/`), mock driver (`mock-driver/`), test architecture (`tests/`), build system, CI/CD, CLI/output contract, documentation.
 
 ---
