@@ -20,10 +20,21 @@ Two rules, both about a file being readable by the tools that read files:
   * decodable as UTF-8, since the tree is UTF-8 throughout and a stray byte
     from a mis-encoded paste is the same class of invisible damage.
 
+And a third of the same family, added by D90: **the driver does not print.**
+`fprintf(stderr, "[T] before=...")` and its twin were committed in b2afc49 on
+the WHERE-marker path and fired on every parameterised SELECT or DELETE, from
+inside a shared library loaded into someone else\'s process. Unconditional
+console output from a driver is a defect in its own right, and it is the same
+shape as the two above: harmless-looking, invisible in review, caught by
+nothing in the build. Checked here rather than in the gtest suite because
+stderr is a process-global a test would have to capture and restore, while the
+property wanted - the call is not in the source - is a property of the text.
+
 Run from the repository root. Exits non-zero and names file, line and column
 on the first offence in each file.
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -34,6 +45,14 @@ SUFFIXES = (
     '.json', '.cmake', '.def', '.in', '.sh', '.ps1',
 )
 BASENAMES = ('CMakeLists.txt', 'Makefile', '.gitignore', '.gitattributes')
+
+# D90: console writes from the driver itself. Only the mock's `src` - its
+# tests print, `tools/` are command-line programs, and the crusher is an
+# application whose whole job is to write a report.
+DRIVER_SRC = os.path.join('mock-driver', 'src')
+PRINT_RE = re.compile(
+    r'^(?!\s*//).*\b(?:fprintf\s*\(\s*std(?:err|out)'
+    r'|printf\s*\(|std::c(?:out|err)\s*<<|puts\s*\()', re.M)
 
 
 def tracked_files():
@@ -77,12 +96,25 @@ def main():
             continue
 
         try:
-            data.decode('utf-8')
+            text = data.decode('utf-8')
         except UnicodeDecodeError as exc:
             line, col = position(data, exc.start)
             problems.append(
                 '%s:%d:%d: not valid UTF-8 (%s). The tree is UTF-8 throughout.'
                 % (path, line, col, exc.reason))
+            continue
+
+        # D90: a driver is loaded into someone else's process and does not
+        # get to write on their console.
+        if os.path.normpath(path).startswith(DRIVER_SRC):
+            m = PRINT_RE.search(text)
+            if m:
+                line = text.count('\n', 0, m.start()) + 1
+                problems.append(
+                    '%s:%d: the driver writes to the console. Two of these '
+                    'were committed on the WHERE-marker path and fired on '
+                    'every parameterised SELECT (D90). Use a diagnostic '
+                    'record, or delete it.' % (path, line))
 
     if problems:
         print('check_source_text: %d file(s) are not clean text\n' % len(problems))

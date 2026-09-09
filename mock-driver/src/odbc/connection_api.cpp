@@ -126,6 +126,10 @@ SQLRETURN SQL_API SQLDriverConnect(
     
     // Parse configuration from connection string
     DriverConfig config = parse_connection_string(conn->connection_string_);
+
+    // D87: set when the connection opens carrying a warning, so the returns
+    // below can report SQL_SUCCESS_WITH_INFO rather than dropping it.
+    bool fail_on_warning = false;
     
     // Check if we should fail
     if (config.should_fail("SQLDriverConnect")) {
@@ -144,6 +148,25 @@ SQLRETURN SQL_API SQLDriverConnect(
         return SQL_ERROR;
     }
     
+    // D87: a `FailOn` name nothing consults injects no faults and used to
+    // say nothing about it, so a run configured with a typo looked like a
+    // clean run of the success path. Warn, and keep the connection: refusing
+    // it would punish a caller who misspelt one name of five, and the
+    // connection is not what is wrong.
+    if (!config.unknown_fail_on.empty()) {
+        std::string names;
+        for (const auto& name : config.unknown_fail_on) {
+            if (!names.empty()) names += ", ";
+            names += name;
+        }
+        conn->add_diagnostic(
+            sqlstate::GENERAL_WARNING, 0,
+            "FailOn names no function this driver can fail on: " + names +
+            ". Nothing will be injected for these. Names are the ODBC "
+            "function they fail, e.g. SQLPrepare or SQLPrepareW.");
+        fail_on_warning = true;
+    }
+
     // Store configuration
     BehaviorController::instance().set_config(config);
     
@@ -179,8 +202,12 @@ SQLRETURN SQL_API SQLDriverConnect(
     } else if (pcbConnStrOut) {
         *pcbConnStrOut = static_cast<SQLSMALLINT>(conn->connection_string_.length());
     }
-    
-    return SQL_SUCCESS;
+
+    // D87: both records are already posted; this only decides which return
+    // code carries them. A truncated output string returns above with its
+    // own SQL_SUCCESS_WITH_INFO and does not lose the FailOn record, since
+    // SQLGetDiagRec walks the whole list.
+    return fail_on_warning ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hdbc)
 

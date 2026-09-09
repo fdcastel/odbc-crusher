@@ -397,7 +397,6 @@ static void substitute_where_markers(
     SQLUSMALLINT& next_param)
 {
     if (clause.find('?') == std::string::npos) return;
-    fprintf(stderr, "[T] before='%s'\n", clause.c_str());
 
     std::string out;
     out.reserve(clause.size() + 16);
@@ -431,7 +430,6 @@ static void substitute_where_markers(
         out += c;
     }
     clause.swap(out);
-    fprintf(stderr, "[T] after='%s'\n", clause.c_str());
 }
 
 // D22: SQL_DIAG_DYNAMIC_FUNCTION / _CODE name the SQL statement the driver

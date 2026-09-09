@@ -31,6 +31,12 @@ struct DriverConfig {
     
     // Functions to fail on
     std::vector<std::string> fail_on;
+
+    // D87: the entries of `fail_on` that name nothing this driver can fail
+    // on. Kept rather than dropped, so the connection can say which ones -
+    // a misspelt name used to open a normal connection and inject no faults,
+    // and the caller's only clue was a run where nothing went wrong.
+    std::vector<std::string> unknown_fail_on;
     
     // SQLSTATE to return on failure
     std::string error_code = "42000";

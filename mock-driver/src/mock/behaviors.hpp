@@ -20,7 +20,12 @@ public:
     void set_config(const DriverConfig& config);
     DriverConfig config() const;
 
-    bool should_fail(const std::string& function_name) const;
+    // D89: `bool should_fail(const std::string&) const` was here and had
+    // zero callers. Every site asks the DriverConfig it already holds -
+    // `BehaviorController::instance().config().should_fail(...)` - because
+    // config() returns a copy under the mutex and the call site needs the
+    // rest of that copy anyway (`error_code`, `apply_latency`). A second way
+    // in that nobody used is a second way to get the locking wrong.
     void apply_latency() const;
 
     // D62: BufferValidation=Lenient, asked cheaply.

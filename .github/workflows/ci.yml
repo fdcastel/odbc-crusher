@@ -64,8 +64,15 @@ jobs:
     # test file as binary, so diff, blame and grep skipped it in silence for
     # eleven commits. A NUL inside a `//` comment is legal C++, so no compiler
     # on the matrix can catch it. This is where it gets caught.
-    - name: Sources are clean text (D84)
+    - name: Sources are clean text (D84, D90)
       run: python3 tools/check_source_text.py
+
+    # D87: FailOn accepts only names it can actually fail on, and the list it
+    # validates against is generated from the should_fail call sites. A new
+    # call site whose name is missing from the header would have its own
+    # FailOn entry rejected - the drift this catches, same role as F11.
+    - name: FailOn name list matches the sources (D87)
+      run: python3 mock-driver/tools/check_fail_on_names.py
 
   build-mock-driver:
     timeout-minutes: 30

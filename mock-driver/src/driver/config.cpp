@@ -1,4 +1,6 @@
 #include "config.hpp"
+
+#include "fail_on_names.hpp"   // D87
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -69,6 +71,18 @@ bool WEntryScope::active(const std::string& lower_name) noexcept {
     return false;
 }
 
+// D87: is this a name `FailOn` can act on?
+//
+// The list is generated from the sources by
+// mock-driver/tools/check_fail_on_names.py, and CI checks it has not drifted,
+// so a new should_fail() call site cannot leave its own name rejected.
+bool is_failable_entry_point(const std::string& lower_name) {
+    for (const char* candidate : kFailOnNames) {
+        if (to_lower(candidate) == lower_name) return true;
+    }
+    return false;
+}
+
 bool DriverConfig::should_fail(const std::string& function_name) const {
     // D26: `FailOn` names specific functions, so it is a per-function
     // override rather than a property of a mode - and it used to be read only
@@ -87,7 +101,7 @@ bool DriverConfig::should_fail(const std::string& function_name) const {
         }
         // A named list that does not name this function means "not this one",
         // which is the whole point of naming it - so Partial says no here
-        // rather than falling through to its own loop.
+        // rather than falling through to the switch.
         if (mode == BehaviorMode::Partial) return false;
     }
 
@@ -115,15 +129,15 @@ bool DriverConfig::should_fail(const std::string& function_name) const {
             return dis(gen) <= failure_probability;
         }
         
-        case BehaviorMode::Partial: {
-            std::string lower_name = to_lower(function_name);
-            for (const auto& f : fail_on) {
-                if (to_lower(f) == lower_name) {
-                    return true;
-                }
-            }
+        case BehaviorMode::Partial:
+            // D88: this used to repeat the `fail_on` scan above. It could
+            // never match. The block at the top of this function returns for
+            // every non-empty `fail_on` - true on a hit, false on a miss when
+            // the mode is Partial - so control only reaches here with
+            // `fail_on` **empty**, and the loop iterated over nothing before
+            // returning false. Partial with no named function fails nothing,
+            // which is what it always did and now says.
             return false;
-        }
     }
     return false;
 }
@@ -301,7 +315,16 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         std::istringstream iss(fail_on_str);
         std::string func;
         while (std::getline(iss, func, ',')) {
-            config.fail_on.push_back(trim(func));
+            const std::string name = trim(func);
+            if (name.empty()) continue;
+            config.fail_on.push_back(name);
+            // D87: a name nothing consults is a silent no-op. Recorded here
+            // and reported by the connection, rather than dropped - the entry
+            // stays in `fail_on` so the behaviour of a partly-misspelt list
+            // is unchanged for the names that are right.
+            if (!is_failable_entry_point(to_lower(name))) {
+                config.unknown_fail_on.push_back(name);
+            }
         }
     }
     

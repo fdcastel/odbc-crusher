@@ -380,3 +380,67 @@ TEST_F(FaultReachTest, NamingAWEntryPointDoesNotFailTheOthers) {
     EXPECT_TRUE(SQL_SUCCEEDED(SQLExecDirectW(hstmt, w.data(), SQL_NTS)))
         << "FailOn=SQLPrepareW broke an unrelated W entry point";
 }
+
+// ── D87: an unknown FailOn name is diagnosed, not swallowed ───────────────
+
+TEST_F(FaultReachTest, AnUnknownFailOnNameWarnsOnTheConnection) {
+    SQLHENV env = SQL_NULL_HENV;
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env), SQL_SUCCESS);
+    ASSERT_EQ(SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0), SQL_SUCCESS);
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc), SQL_SUCCESS);
+
+    std::string conn = "Driver={Mock ODBC Driver};Mode=Success;"
+                       "Catalog=Default;FailOn=SQLPrepareZ;";
+    const SQLRETURN rc = SQLDriverConnect(
+        dbc, NULL, (SQLCHAR*)conn.c_str(), SQL_NTS, NULL, 0, NULL,
+        SQL_DRIVER_NOPROMPT);
+
+    EXPECT_EQ(rc, SQL_SUCCESS_WITH_INFO)
+        << "a FailOn name that injects nothing used to open an ordinary "
+           "connection, so a run configured with a typo looked like a clean "
+           "run of the success path";
+
+    SQLCHAR state[6] = {0};
+    SQLINTEGER native = 0;
+    SQLCHAR msg[512] = {0};
+    SQLSMALLINT len = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetDiagRec(
+        SQL_HANDLE_DBC, dbc, 1, state, &native, msg, sizeof(msg), &len)));
+    EXPECT_STREQ((const char*)state, "01000");
+    EXPECT_NE(std::string((const char*)msg).find("SQLPrepareZ"),
+              std::string::npos)
+        << "the warning has to name the entry that was wrong: " << msg;
+
+    // The connection is open and usable - the name is what is wrong, not the
+    // connection, and refusing it would punish a caller who misspelt one
+    // name of five.
+    SQLHSTMT stmt = SQL_NULL_HSTMT;
+    EXPECT_EQ(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt), SQL_SUCCESS);
+    if (stmt != SQL_NULL_HSTMT) SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    SQLDisconnect(dbc);
+    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    SQLFreeHandle(SQL_HANDLE_ENV, env);
+}
+
+TEST_F(FaultReachTest, AGoodFailOnNameConnectsWithoutAWarning) {
+    SQLHENV env = SQL_NULL_HENV;
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env), SQL_SUCCESS);
+    ASSERT_EQ(SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0), SQL_SUCCESS);
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc), SQL_SUCCESS);
+
+    std::string conn = "Driver={Mock ODBC Driver};Mode=Success;"
+                       "Catalog=Default;FailOn=SQLPrepare;";
+    EXPECT_EQ(SQLDriverConnect(dbc, NULL, (SQLCHAR*)conn.c_str(), SQL_NTS,
+                               NULL, 0, NULL, SQL_DRIVER_NOPROMPT),
+              SQL_SUCCESS)
+        << "the D87 check must not warn about the names it is meant to allow";
+
+    SQLDisconnect(dbc);
+    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    SQLFreeHandle(SQL_HANDLE_ENV, env);
+}

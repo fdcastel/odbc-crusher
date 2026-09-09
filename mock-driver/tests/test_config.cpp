@@ -443,3 +443,81 @@ TEST(ConfigTest, AQuotedValueStillLosesItsBraces) {
     EXPECT_EQ(pairs["driver"], "Mock ODBC Driver");
     EXPECT_EQ(pairs["mode"], "Success");
 }
+
+// ── D87: a FailOn name that cannot fail ───────────────────────────────────
+
+TEST(ConfigTest, AMisspeltFailOnNameIsRecordedAsUnknown) {
+    DriverConfig config = parse_connection_string("FailOn=SQLPrepareZ;");
+    ASSERT_EQ(config.unknown_fail_on.size(), 1u)
+        << "a name nothing consults used to be accepted in silence, and a "
+           "fault-injection run then exercised the success path";
+    EXPECT_EQ(config.unknown_fail_on[0], "SQLPrepareZ")
+        << "the name is reported as written, so the caller can see the typo";
+}
+
+TEST(ConfigTest, AGoodFailOnNameIsNotReportedAsUnknown) {
+    DriverConfig config = parse_connection_string("FailOn=SQLPrepare;");
+    EXPECT_TRUE(config.unknown_fail_on.empty());
+    EXPECT_TRUE(config.should_fail("SQLPrepare"));
+}
+
+// The W names are valid too - D78 made them a lever, and rejecting them here
+// would take it away.
+TEST(ConfigTest, AWEntryPointNameIsAFailableName) {
+    DriverConfig config = parse_connection_string("FailOn=SQLPrepareW;");
+    EXPECT_TRUE(config.unknown_fail_on.empty());
+}
+
+TEST(ConfigTest, TheUnknownNameCheckIsCaseInsensitive) {
+    DriverConfig config = parse_connection_string("FailOn=sqlpreparew;");
+    EXPECT_TRUE(config.unknown_fail_on.empty())
+        << "FailOn matching is case-insensitive, so its validation must be";
+}
+
+// One bad name in a list must not take the good ones with it: the entry stays
+// in `fail_on`, which is where the behaviour of the rest is decided.
+TEST(ConfigTest, AMisspeltNameDoesNotDisarmTheNamesSpeltRight) {
+    DriverConfig config =
+        parse_connection_string("FailOn=SQLTables,SQLPrepareZ,SQLColumns;");
+    EXPECT_EQ(config.unknown_fail_on.size(), 1u);
+    EXPECT_TRUE(config.should_fail("SQLTables"));
+    EXPECT_TRUE(config.should_fail("SQLColumns"));
+    // And the bad one fails nothing, because nothing asks about it. Asking
+    // should_fail("SQLPrepareZ") directly would return true - the name
+    // matches itself - which is exactly why the check has to be against the
+    // set of names the driver *consults*, not against the list as given.
+    EXPECT_FALSE(config.should_fail("SQLPrepare"))
+        << "a misspelt name matched the function it was a misspelling of";
+}
+
+// An entry point the mock never fault-injects is as silent as a typo, so it
+// is rejected the same way. SQLBrowseConnect (the ANSI one) consults nothing;
+// SQLBrowseConnectW is failable, because it reaches SQLDriverConnect.
+TEST(ConfigTest, AnEntryPointThatNeverConsultsShouldFailIsUnknown) {
+    DriverConfig config = parse_connection_string("FailOn=SQLBrowseConnect;");
+    EXPECT_EQ(config.unknown_fail_on.size(), 1u)
+        << "naming an entry point with no should_fail call injects nothing, "
+           "which is the same silence a typo produces";
+
+    DriverConfig w = parse_connection_string("FailOn=SQLBrowseConnectW;");
+    EXPECT_TRUE(w.unknown_fail_on.empty())
+        << "the W wrapper reaches SQLDriverConnect through SQLDriverConnectW";
+}
+
+// ── D88: Mode=Partial with no named function ──────────────────────────────
+//
+// The switch case used to re-scan `fail_on`, which could not match: the block
+// at the top of should_fail returns for every non-empty list, so the case is
+// only reached when the list is empty. Pinning the behaviour it always had.
+TEST(ConfigTest, PartialWithoutAFailOnListFailsNothing) {
+    DriverConfig config = parse_connection_string("Mode=Partial;");
+    EXPECT_FALSE(config.should_fail("SQLTables"));
+    EXPECT_FALSE(config.should_fail("SQLPrepare"));
+}
+
+TEST(ConfigTest, PartialWithAFailOnListStillNarrowsToIt) {
+    DriverConfig config =
+        parse_connection_string("Mode=Partial;FailOn=SQLTables;");
+    EXPECT_TRUE(config.should_fail("SQLTables"));
+    EXPECT_FALSE(config.should_fail("SQLPrepare"));
+}

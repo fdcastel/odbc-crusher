@@ -21,11 +21,6 @@ DriverConfig BehaviorController::config() const {
     return config_;
 }
 
-bool BehaviorController::should_fail(const std::string& function_name) const {
-    std::lock_guard<std::mutex> g(mu_);
-    return config_.should_fail(function_name);
-}
-
 void BehaviorController::apply_latency() const {
     DriverConfig snapshot;
     {
