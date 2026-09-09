@@ -104,6 +104,47 @@ struct RowVerification {
     // for NULL-versus-empty work, which it could not do.
     std::vector<std::optional<std::string>> actual_values;
 
+    // Q1 — the key column, same order, same length as `actual_values`.
+    //
+    // This helper used to select the value column alone, which is why it could
+    // not see #299: `test_column_wise_array_binding` binds `SQL_C_SLONG` with
+    // `BufferLength = 0`, the exact shape that made every parameter set read
+    // element 0, and then checked only the string column — the one column that
+    // bug spares, because for `SQL_C_CHAR` the length *is* the element size.
+    // The keys collapsed to a single value and the probe reported a pass.
+    //
+    // A probe that knows what keys it inserted should assert them. `keys_are()`
+    // is the short form.
+    std::vector<std::optional<std::string>> actual_keys;
+
+    // The i-th key rendered for a message, NULL as `<NULL>` — see display().
+    std::string display_key(size_t i) const {
+        if (i >= actual_keys.size()) return "<missing>";
+        return actual_keys[i] ? *actual_keys[i] : std::string("<NULL>");
+    }
+
+    // Do the keys read back, in order, equal `expected`? Compared as text
+    // because that is how they arrive: a driver may render an INTEGER key as
+    // "1" or "1.0" and both are the key the probe inserted, so callers pass the
+    // spelling they expect this engine to produce.
+    bool keys_are(const std::vector<std::string>& expected) const {
+        if (actual_keys.size() != expected.size()) return false;
+        for (size_t i = 0; i < expected.size(); ++i) {
+            if (!actual_keys[i] || *actual_keys[i] != expected[i]) return false;
+        }
+        return true;
+    }
+
+    // Every key rendered, for a diagnostic that has to show what came back.
+    std::string keys_joined() const {
+        std::string out;
+        for (size_t i = 0; i < actual_keys.size(); ++i) {
+            if (i) out += ", ";
+            out += display_key(i);
+        }
+        return out;
+    }
+
     std::string diagnostic;                  // Empty when ok
 
     // The i-th value rendered for a message. A19: probes print these into

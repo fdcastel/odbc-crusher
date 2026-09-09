@@ -409,7 +409,16 @@ RowVerification TestBase::verify_rows_persisted(
     // Step 2: ORDER BY pk, collect value column
     try {
         core::OdbcStatement fetch_stmt(conn_);
-        fetch_stmt.execute("SELECT " + q_value + " FROM " + q_table +
+        // Q1 (IMPROVEMENT_PLAN_V2): the key column is selected too, and it is
+        // the reason this helper could not see #299. `test_column_wise_array_binding`
+        // binds SQL_C_SLONG with BufferLength = 0 - the exact shape that made
+        // every parameter set read element 0 - and then verified only the value
+        // column. Under that bug the keys all collapse to one value while the
+        // SQL_C_CHAR array steps correctly, so the probe passed over a corrupted
+        // column. Worse, ORDER BY over equal keys returns rows in arbitrary
+        // order, which is the trap the original bug report fell into when a NULL
+        // appeared to move between rows.
+        fetch_stmt.execute("SELECT " + q_pk + ", " + q_value + " FROM " + q_table +
                            " ORDER BY " + q_pk);
         while (true) {
             SQLRETURN rc = SQLFetch(fetch_stmt.get_handle());
@@ -424,10 +433,24 @@ RowVerification TestBase::verify_rows_persisted(
             // short and was then compared against what the probe inserted —
             // reporting a correct driver as having corrupted the data, at
             // CRITICAL. get_data_full keeps calling until the value is whole.
+            // Q1: column 1 is now the key, column 2 the value. Read the key
+            // first - SQLGetData on a forward-only driver must be called in
+            // column order.
+            std::string key;
+            bool key_is_null = false;
+            std::string key_err;
+            if (!get_data_full(fetch_stmt.get_handle(), 1, key, key_is_null,
+                               key_err)) {
+                v.diagnostic = "SELECT key: " + key_err;
+                return v;
+            }
+            v.actual_keys.emplace_back(
+                key_is_null ? std::optional<std::string>{} : std::optional<std::string>{key});
+
             std::string value;
             bool is_null = false;
             std::string err;
-            if (!get_data_full(fetch_stmt.get_handle(), 1, value, is_null,
+            if (!get_data_full(fetch_stmt.get_handle(), 2, value, is_null,
                                err)) {
                 v.diagnostic = "SELECT value: " + err;
                 return v;

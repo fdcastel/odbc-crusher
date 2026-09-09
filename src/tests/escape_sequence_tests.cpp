@@ -12,6 +12,47 @@
 
 namespace odbc_crusher::tests {
 
+namespace {
+
+// R3 — the first procedure the catalog will admit to, or "" when there is none.
+//
+// `test_call_escape_format_variants` used to ask SQLNativeSql to translate
+// `{CALL proc}`, and `proc` exists in no database. A driver that resolves the
+// procedure while translating — Firebird does, because it must choose between
+// `execute procedure p` and `select * from p` — then fails every variant, and
+// the probe read that as a missing CALL translator. Asking the catalog for a
+// name that exists is what makes the question answerable.
+//
+// `find_named_procedure` further down this file does the same walk with a name
+// filter; this is the no-filter form, and it is declared here because the probe
+// that needs it comes first.
+std::string find_any_procedure(core::OdbcConnection& conn) {
+    try {
+        core::OdbcStatement stmt(conn);
+        // Null ProcName means "every procedure", which is the question here.
+        SQLRETURN rc = SQLProcedures(stmt.get_handle(),
+                                     nullptr, 0, nullptr, 0, nullptr, 0);
+        if (!SQL_SUCCEEDED(rc)) return {};
+        while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
+            core::GuardedBuffer<char> buf(128, 0);   // D62
+            SQLLEN ind = 0;
+            if (SQL_SUCCEEDED(SQLGetData(stmt.get_handle(), 3, SQL_C_CHAR,
+                                         buf.data(), buf.declared_bytes(), &ind)) &&
+                ind != SQL_NULL_DATA) {
+                auto name = core::bounded_string(buf.data(),
+                                                 buf.declared_elements(), ind).value;
+                if (!name.empty()) return name;
+            }
+        }
+    } catch (const core::OdbcError&) {
+        // A driver that cannot enumerate procedures is not this probe's
+        // finding; the caller falls back to the placeholder and says so.
+    }
+    return {};
+}
+
+}  // namespace
+
 std::vector<TestResult> EscapeSequenceTests::run() {
     return {
         // Discovery
@@ -1054,37 +1095,100 @@ TestResult EscapeSequenceTests::test_call_escape_format_variants() {
             // severity and assertion - and between them added only the
             // single-parameter forms. Folding those in and deleting both
             // leaves one probe with more coverage than the three had.
-            static const char* variants[] = {
-                "{CALL proc}",
-                "{CALL proc()}",
-                "{CALL proc(?)}",
-                "{CALL proc(?,?)}",
-                "{?=CALL func}",
-                "{?=CALL func(?)}",
-                "{?=CALL func(?,?)}",
+            //
+            // R3 (IMPROVEMENT_PLAN_V2): the identifiers used to be the literal
+            // `proc` and `func`, which exist in no database, and *any*
+            // non-translation counted as a failure - including an error return.
+            // Firebird has two native spellings for a procedure call,
+            // `execute procedure p` for a non-selectable one and
+            // `select * from p` for a selectable one, so its getNativeSql must
+            // look the procedure up before it can choose and throws
+            // `Unknown procedure 'PROC'` when it cannot. A driver with complete
+            // and correct CALL-escape handling therefore scored 0/7, and that
+            // verdict reached a published report. Ask the catalog for a name
+            // that exists, and separate "refused to resolve" from "silently
+            // left the braces in place" - only the second is a translation
+            // defect.
+            const std::string discovered = find_any_procedure(conn_);
+            const std::string proc = discovered.empty() ? "proc" : discovered;
+
+            const std::string variants[] = {
+                "{CALL " + proc + "}",
+                "{CALL " + proc + "()}",
+                "{CALL " + proc + "(?)}",
+                "{CALL " + proc + "(?,?)}",
+                "{?=CALL " + proc + "}",
+                "{?=CALL " + proc + "(?)}",
+                "{?=CALL " + proc + "(?,?)}",
             };
-            constexpr int kVariantCount =
+            const int kVariantCount =
                 static_cast<int>(sizeof(variants) / sizeof(variants[0]));
 
-            int passed_count = 0;
-            std::ostringstream oss;
+            int translated_count = 0;
+            int refused_count = 0;
+            std::ostringstream untranslated;   // success, braces still there
+            std::ostringstream refused;        // SQLNativeSql returned an error
+            std::string first_refusal_state;
 
             for (const auto& v : variants) {
                 auto translated = call_native_sql(v);
-                if (translated && !translated->empty() && translated->find('{') == std::string::npos) {
-                    ++passed_count;
+                if (!translated) {
+                    ++refused_count;
+                    const std::string state = first_sqlstate(
+                        SQL_HANDLE_DBC, conn_.get_handle(), "no SQLSTATE");
+                    if (first_refusal_state.empty()) first_refusal_state = state;
+                    refused << "'" << v << "' (" << state << "); ";
+                } else if (translated->empty() ||
+                           translated->find('{') != std::string::npos) {
+                    untranslated << "'" << v << "' -> '" << *translated << "'; ";
                 } else {
-                    oss << "'" << v << "' not translated; ";
+                    ++translated_count;
                 }
             }
 
-            r.actual = std::to_string(passed_count) + "/" +
-                       std::to_string(kVariantCount) + " CALL variants translated";
-            if (passed_count < kVariantCount) {
-                r.status = TestStatus::FAIL;
-                r.actual += ". Failures: " + oss.str();
-                r.severity = Severity::WARNING;
+            std::ostringstream actual;
+            actual << translated_count << "/" << kVariantCount
+                   << " CALL variants translated";
+            if (discovered.empty()) {
+                actual << " (no procedure found via SQLProcedures, so the "
+                          "placeholder name `proc` was used)";
+            } else {
+                actual << " using the procedure `" << discovered
+                       << "` found via SQLProcedures";
             }
+
+            const int untranslated_count =
+                kVariantCount - translated_count - refused_count;
+
+            if (untranslated_count > 0) {
+                // The driver said yes and handed back an untranslated escape.
+                // That is a translation defect however the name resolves.
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::WARNING;
+                actual << ". Returned success but left the escape in place: "
+                       << untranslated.str();
+                r.suggestion =
+                    "SQLNativeSql must return native SQL with no ODBC escape "
+                    "sequences left in it. Returning the input unchanged, with "
+                    "SQL_SUCCESS, tells the application the translation "
+                    "happened when it did not.";
+            } else if (refused_count > 0) {
+                // Cannot tell "will not translate CALL" from "was asked about a
+                // name or arity this driver resolves at translation time and
+                // could not find". Not a driver finding either way.
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                actual << ". " << refused_count
+                       << " variant(s) returned an error rather than a "
+                          "translation: " << refused.str();
+                r.suggestion =
+                    "This driver resolves the procedure while translating, so "
+                    "SQLNativeSql fails for a name or parameter count it cannot "
+                    "find (" + first_refusal_state + ") and the probe cannot "
+                    "separate that from a missing CALL translator. Register a "
+                    "procedure with one and two parameters, or a selectable "
+                    "function for the {?=CALL} forms, to make this conclusive.";
+            }
+            r.actual = actual.str();
         });
 }
 

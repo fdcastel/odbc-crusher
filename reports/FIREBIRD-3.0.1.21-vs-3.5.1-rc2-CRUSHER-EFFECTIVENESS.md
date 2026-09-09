@@ -156,13 +156,16 @@ because a crash needs no assertion.
 
 ## Part 3 — What crusher found that the thirteen PRs do not fix
 
-Thirteen probes fail on **both** builds. These are live bugs in rc2, and they
-are the return on the exercise that has nothing to do with the fixes under test.
+Thirteen probes fail on **both** builds. Twelve are live bugs in rc2 and are
+the return on the exercise that has nothing to do with the fixes under test. The
+thirteenth turned out to be a defect in the probe, and is struck through below —
+left in place rather than deleted, because it was published as a driver finding
+and a correction is worth more than a quiet edit.
 
 | Cluster | Evidence |
 |---|---|
 | **`{fn …}` translation is incomplete** | `{fn LENGTH}`, `{fn YEAR}`, `{fn MONTH}`, `{fn DAYOFWEEK}`, `{fn DATABASE}` are advertised in `SQLGetInfo(SQL_STRING_FUNCTIONS / SQL_TIMEDATE_FUNCTIONS / SQL_SYSTEM_FUNCTIONS)` and fail with `-104 Token unknown` when executed. `test_scalar_function_claim_vs_execute` is the probe that matters here: it cross-checks the driver's own claim against execution, and reports `STRING:6/7 NUMERIC:4/4 TIMEDATE:3/5 SYSTEM:1/2` |
-| **`{CALL …}` is not translated at all** | 0 of 7 spec-defined CALL escape formats |
+| ~~**`{CALL …}` is not translated at all**~~ — **withdrawn, this was a crusher bug** | The probe hard-coded the identifiers `proc` and `func`, which exist in no database, and counted an error return as "not translated". Firebird resolves the procedure while translating — it must choose between `execute procedure p` and `select * from p` — so it answered `Unknown procedure 'PROC'` seven times. Both triage reports classified this correctly as `BUG_IN_CRUSHER`; this summary did not, and stated it as a driver defect. With a procedure the catalog actually contains, the driver translates **7/7** (`IMPROVEMENT_PLAN_V2` **R3**). The count of live bugs in this section is **12**, not 13. |
 | **`SQL_DIAG_ROW_COUNT` is a 32-bit write into a 64-bit slot** | `SQL_DIAG_ROW_COUNT = -4294967296` — that is `0xFFFFFFFF00000000`: the low half written, the high half left as the caller's `-1`. Sharper than the driver's own note, which records only that the field "stays 0". This is OC-2 from the driver's own crusher-fixes file, still open, and the triage report's first punch-list item |
 | **`SQL_ATTR_ASYNC_ENABLE` accepted then ignored** | set returns success, get reports OFF. OC-4, still open |
 | **Missing spec-mandated error checks** | `SQLCloseCursor` succeeds with no cursor open (should be `24000`); `SQLSetConnectAttr` accepts attribute `99999` (should be `HY092`) |

@@ -23,6 +23,19 @@ private:
     bool create_roundtrip_table(
         const std::string& table_name = "ODBC_TEST_ROUNDTRIP",
         const std::string& val_ddl = "VARCHAR(32)");
+
+    // R4 (IMPROVEMENT_PLAN_V2): the same thing, with fallbacks.
+    //
+    // The WVARCHAR cells hard-coded `NVARCHAR(20)`. Firebird spells that type
+    // `NCHAR VARYING`; there is no `NVARCHAR`, so its parser reads the word as
+    // an identifier and stops at the `(`. Both cells skipped on every run - the
+    // only coverage of numeric C to SQL_WVARCHAR, both rated CRITICAL - while
+    // unicode_tests.cpp tested the same engine over the same connection and got
+    // its table, because it used the helper built for exactly this. The skip is
+    // right only when *every* spelling fails.
+    bool create_roundtrip_table_first_working(
+        const std::string& table_name,
+        const std::vector<std::string>& val_ddl_variants);
     void drop_roundtrip_table(
         const std::string& table_name = "ODBC_TEST_ROUNDTRIP");
 
@@ -80,7 +93,7 @@ private:
         SQLSMALLINT sql_type_id,
         const std::string& sql_type_name,
         const std::string& table_name,
-        const std::string& column_ddl,
+        const std::vector<std::string>& column_ddl_variants,
         SQLULEN col_size,
         bool right_trim_for_compare);
 
@@ -92,7 +105,7 @@ private:
         SQLSMALLINT sql_type_id,
         const std::string& sql_type_name,
         const std::string& table_name,
-        const std::string& column_ddl,
+        const std::vector<std::string>& column_ddl_variants,
         SQLULEN col_size,
         double value_offset = 0.0);  // value_offset!=0 forces fractional values
                                      // so trunc-style driver bugs are detectable.

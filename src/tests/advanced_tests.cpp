@@ -596,8 +596,72 @@ TestResult AdvancedTests::test_cursor_scrollable_attr() {
             );
 
             if (SQL_SUCCEEDED(rc)) {
+                // Q2 (IMPROVEMENT_PLAN_V2): the probe stopped here, one call
+                // short of the defect it is named for. PR #304 fixed
+                // SQLGetStmtAttr answering HYC00 "Optional feature not
+                // implemented" for this attribute — the setter had stored the
+                // value and the driver was using it, and the application simply
+                // could not read it back. Setting without reading cannot see
+                // that, and reported a pass for four years of it.
+                SQLULEN readback = 0;
+                SQLRETURN get_rc = SQLGetStmtAttr(
+                    stmt.get_handle(), SQL_ATTR_CURSOR_SCROLLABLE,
+                    &readback, 0, nullptr);
+
+                if (!SQL_SUCCEEDED(get_rc)) {
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::ERR;
+                    r.actual = "SQLSetStmtAttr(SQL_ATTR_CURSOR_SCROLLABLE, "
+                               "SQL_SCROLLABLE) succeeded but SQLGetStmtAttr "
+                               "could not read it back (SQLSTATE=" +
+                               first_sqlstate(SQL_HANDLE_STMT,
+                                              stmt.get_handle(), "none") + ")";
+                    r.suggestion =
+                        "Every statement attribute SQLSetStmtAttr accepts must "
+                        "come back from SQLGetStmtAttr. Storing a value the "
+                        "application cannot read leaves it unable to save and "
+                        "restore statement state, which generic ODBC consumers "
+                        "do as a matter of course.";
+                    return;
+                }
+                if (readback != SQL_SCROLLABLE) {
+                    r.status = TestStatus::FAIL;
+                    r.severity = Severity::ERR;
+                    r.actual = "SQL_ATTR_CURSOR_SCROLLABLE read back as " +
+                               std::to_string(static_cast<long long>(readback)) +
+                               ", not SQL_SCROLLABLE (" +
+                               std::to_string(
+                                   static_cast<long long>(SQL_SCROLLABLE)) + ")";
+                    r.suggestion =
+                        "An attribute that reads back as something other than "
+                        "what was set is worse than one that refuses the set: "
+                        "the application has no way to know.";
+                    return;
+                }
+
+                // #304's own test makes the same point about the neighbouring
+                // attribute: asking for a scrollable cursor has to move the
+                // cursor type off forward-only, or the two attributes disagree
+                // about the same cursor. Reported, not graded — a driver may
+                // legitimately choose which scrollable type it substitutes, and
+                // 01S02 is how it says so.
+                SQLULEN cursor_type = 0;
+                std::string cursor_note;
+                if (SQL_SUCCEEDED(SQLGetStmtAttr(stmt.get_handle(),
+                                                 SQL_ATTR_CURSOR_TYPE,
+                                                 &cursor_type, 0, nullptr))) {
+                    cursor_note = "; SQL_ATTR_CURSOR_TYPE is now " +
+                                  std::to_string(
+                                      static_cast<long long>(cursor_type)) +
+                                  (cursor_type == SQL_CURSOR_FORWARD_ONLY
+                                       ? " (still forward-only, which "
+                                         "contradicts a scrollable cursor)"
+                                       : "");
+                }
+
                 r.status = TestStatus::PASS;
-                r.actual = "SQL_ATTR_CURSOR_SCROLLABLE set to SQL_SCROLLABLE";
+                r.actual = "SQL_ATTR_CURSOR_SCROLLABLE set to SQL_SCROLLABLE "
+                           "and read back unchanged" + cursor_note;
             } else {
                 // B1: SQL_ATTR_CURSOR_SCROLLABLE is optional, so declining it
                 // is legal - but the driver has to decline it the way the

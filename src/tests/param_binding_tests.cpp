@@ -87,6 +87,35 @@ bool ParameterBindingTests::create_roundtrip_table(
     return true;
 }
 
+// R4. Every spelling the probe tried, for a message that has to explain a skip.
+static std::string join_ddl_variants(const std::vector<std::string>& variants) {
+    std::string out;
+    for (size_t i = 0; i < variants.size(); ++i) {
+        if (i) out += " | ";
+        out += variants[i];
+    }
+    return out;
+}
+
+// R4. create_first_working returns a guard by value; RoundTripTableGuard has a
+// move constructor, so it goes into the map by move. try_emplace cannot be used
+// here because the guard has to be *built* by the helper that knows which
+// spelling worked.
+bool ParameterBindingTests::create_roundtrip_table_first_working(
+    const std::string& table_name,
+    const std::vector<std::string>& val_ddl_variants)
+{
+    tables_.erase(table_name);
+    auto guard = RoundTripTableGuard::create_first_working(
+        conn_, table_name, val_ddl_variants);
+    if (!guard.ok()) {
+        last_ddl_error_ = guard.last_error();
+        return false;
+    }
+    tables_.emplace(table_name, std::move(guard));
+    return true;
+}
+
 void ParameterBindingTests::drop_roundtrip_table(const std::string& table_name) {
     tables_.erase(table_name);   // C4
 }
@@ -186,17 +215,89 @@ TestResult ParameterBindingTests::test_bindparam_null_indicator() {
             nullptr, 0, &null_ind);
         
         std::ostringstream actual;
-        if (SQL_SUCCEEDED(ret)) {
-            actual << "SQLBindParameter with NULL indicator succeeded";
-            
-            SQLRETURN exec_ret = SQLExecute(stmt.get_handle());
-            actual << "; execute returned " << exec_ret;
-        } else {
+        if (!SQL_SUCCEEDED(ret)) {
             actual << "SQLBindParameter with NULL indicator returned " << ret;
             r.status = TestStatus::FAIL;
             r.suggestion = "Drivers must accept SQL_NULL_DATA as parameter indicator";
+            r.actual = actual.str();
+            return;
         }
+
+        actual << "SQLBindParameter with NULL indicator succeeded";
+        SQLRETURN exec_ret = SQLExecute(stmt.get_handle());
+        actual << "; execute returned " << exec_ret;
+
+        // Q3 (IMPROVEMENT_PLAN_V2): the probe stopped here. It bound a NULL,
+        // executed, printed the return code, and never fetched — so it could
+        // not tell a NULL that arrived from one that did not, which is the
+        // entire subject of a probe named for the NULL indicator. `SELECT
+        // CAST(? AS VARCHAR(50))` hands the bound value straight back, so the
+        // check costs one fetch.
+        if (!SQL_SUCCEEDED(exec_ret)) {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::ERR;
+            actual << " (SQLSTATE=" << first_sqlstate(SQL_HANDLE_STMT,
+                                                      stmt.get_handle(), "none")
+                   << ")";
+            r.actual = actual.str();
+            r.suggestion =
+                "A parameter bound with SQL_NULL_DATA is a legal NULL, and "
+                "executing with one must succeed.";
+            return;
+        }
+
+        SQLRETURN fetch_rc = SQLFetch(stmt.get_handle());
+        if (fetch_rc == SQL_NO_DATA) {
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            actual << "; the statement returned no row, so the value bound "
+                      "could not be read back";
+            r.actual = actual.str();
+            return;
+        }
+        if (!SQL_SUCCEEDED(fetch_rc)) {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::ERR;
+            actual << "; SQLFetch returned " << fetch_rc;
+            r.actual = actual.str();
+            return;
+        }
+
+        core::GuardedBuffer<char> buf(128, 0);   // D62
+        SQLLEN ind = 0;
+        SQLRETURN get_rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
+                                      buf.data(), buf.declared_bytes(), &ind);
+        if (!SQL_SUCCEEDED(get_rc)) {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::ERR;
+            actual << "; SQLGetData returned " << get_rc;
+            r.actual = actual.str();
+            return;
+        }
+
+        if (ind == SQL_NULL_DATA) {
+            actual << "; read back as SQL NULL";
+            r.actual = actual.str();
+            return;   // PASS
+        }
+
+        // Anything else means the NULL did not survive the round trip. An
+        // empty string is the interesting case: it is what a driver produces
+        // when it converts the null indicator into a zero-length value, and it
+        // is indistinguishable from a real '' to every application downstream.
+        const std::string got =
+            bounded_string(buf.data(), buf.declared_elements(), ind).value;
+        r.status = TestStatus::FAIL;
+        r.severity = Severity::CRITICAL;
+        actual << "; read back as " << (got.empty() ? "an empty string"
+                                                    : "'" + got + "'")
+               << " (indicator " << static_cast<long long>(ind)
+               << "), not SQL NULL";
         r.actual = actual.str();
+        r.suggestion =
+            "A parameter bound with SQL_NULL_DATA must reach the server as "
+            "NULL. Turning it into an empty string loses the distinction "
+            "silently — the application sees a successful execute and a value "
+            "it never supplied.";
         });
 }
 
@@ -296,7 +397,7 @@ TestResult ParameterBindingTests::run_int_to_string_roundtrip(
     SQLSMALLINT sql_type_id,
     const std::string& sql_type_name,
     const std::string& table_name,
-    const std::string& column_ddl,
+    const std::vector<std::string>& column_ddl_variants,
     SQLULEN col_size,
     bool right_trim_for_compare)
 {
@@ -309,15 +410,20 @@ TestResult ParameterBindingTests::run_int_to_string_roundtrip(
         ConformanceLevel::CORE,
         "ODBC 3.8 SQLBindParameter: numeric C → character SQL conversion, Appendix D",
         [&](TestResult& result) {
-            if (!create_roundtrip_table(table_name, column_ddl)) {
+            if (!create_roundtrip_table_first_working(table_name, column_ddl_variants)) {
                 result.status = TestStatus::SKIP_INCONCLUSIVE;
                 result.actual = "Could not CREATE TABLE " + table_name +
-                                " (ID INTEGER, VAL " + column_ddl + ")";
+                                " (ID INTEGER, VAL <" +
+                                join_ddl_variants(column_ddl_variants) + ">)";
                 result.diagnostic = last_ddl_error_;
                 result.suggestion =
-                    "Driver may not support `" + column_ddl + "` columns (some "
-                    "engines spell WVARCHAR as NVARCHAR or NATIONAL VARCHAR). Skip, "
-                    "don't fail — the test cannot exercise this cell on this driver.";
+                    "None of these column types were accepted: " +
+                    join_ddl_variants(column_ddl_variants) +
+                    ". Engines spell the same type differently - Firebird has "
+                    "NCHAR VARYING where SQL Server has NVARCHAR - so add this "
+                    "engine's spelling to the variant list rather than leaving "
+                    "the cell unmeasured. Skip, don't fail: the test cannot "
+                    "exercise this cell on this driver.";
                 return;
             }
 
@@ -502,7 +608,7 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
     SQLSMALLINT sql_type_id,
     const std::string& sql_type_name,
     const std::string& table_name,
-    const std::string& column_ddl,
+    const std::vector<std::string>& column_ddl_variants,
     SQLULEN col_size,
     double value_offset)
 {
@@ -515,7 +621,7 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
         ConformanceLevel::CORE,
         "ODBC 3.8 SQLBindParameter: numeric C → character SQL conversion, Appendix D",
         [&](TestResult& result) {
-            if (!create_roundtrip_table(table_name, column_ddl)) {
+            if (!create_roundtrip_table_first_working(table_name, column_ddl_variants)) {
                 result.status = TestStatus::SKIP_INCONCLUSIVE;
                 result.actual = "Could not CREATE TABLE " + table_name;
                 result.diagnostic = last_ddl_error_;
@@ -684,7 +790,7 @@ TestResult ParameterBindingTests::test_bindparam_tinyint_to_varchar_roundtrip() 
         "test_bindparam_tinyint_to_varchar_roundtrip",
         SQL_C_STINYINT, "SQL_C_STINYINT",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(32)"}, 32, false);
 }
 
 TestResult ParameterBindingTests::test_bindparam_short_to_varchar_roundtrip() {
@@ -692,7 +798,7 @@ TestResult ParameterBindingTests::test_bindparam_short_to_varchar_roundtrip() {
         "test_bindparam_short_to_varchar_roundtrip",
         SQL_C_SSHORT, "SQL_C_SSHORT",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(32)"}, 32, false);
 }
 
 TestResult ParameterBindingTests::test_bindparam_int_to_varchar_roundtrip() {
@@ -700,7 +806,7 @@ TestResult ParameterBindingTests::test_bindparam_int_to_varchar_roundtrip() {
         "test_bindparam_int_to_varchar_roundtrip",
         SQL_C_SLONG, "SQL_C_SLONG",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(32)"}, 32, false);
 }
 
 TestResult ParameterBindingTests::test_bindparam_bigint_to_varchar_roundtrip() {
@@ -708,7 +814,7 @@ TestResult ParameterBindingTests::test_bindparam_bigint_to_varchar_roundtrip() {
         "test_bindparam_bigint_to_varchar_roundtrip",
         SQL_C_SBIGINT, "SQL_C_SBIGINT",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(32)"}, 32, false);
 }
 
 TestResult ParameterBindingTests::test_bindparam_float_to_varchar_roundtrip() {
@@ -716,7 +822,7 @@ TestResult ParameterBindingTests::test_bindparam_float_to_varchar_roundtrip() {
         "test_bindparam_float_to_varchar_roundtrip",
         SQL_C_FLOAT, "SQL_C_FLOAT",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(40)", 40);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(40)"}, 40);
 }
 
 TestResult ParameterBindingTests::test_bindparam_double_to_varchar_roundtrip() {
@@ -724,7 +830,7 @@ TestResult ParameterBindingTests::test_bindparam_double_to_varchar_roundtrip() {
         "test_bindparam_double_to_varchar_roundtrip",
         SQL_C_DOUBLE, "SQL_C_DOUBLE",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(40)", 40);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(40)"}, 40);
 }
 
 // Fractional variant — inserts 1.5, 2.5, …, 10.5 instead of whole numbers
@@ -738,7 +844,7 @@ TestResult ParameterBindingTests::test_bindparam_double_to_varchar_fractional_ro
         "test_bindparam_double_to_varchar_fractional_roundtrip",
         SQL_C_DOUBLE, "SQL_C_DOUBLE",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP_FRAC", "VARCHAR(40)", 40,
+        "ODBC_TEST_ROUNDTRIP_FRAC", {"VARCHAR(40)"}, 40,
         /*value_offset=*/0.5);
 }
 
@@ -750,7 +856,7 @@ TestResult ParameterBindingTests::test_bindparam_int_to_char_roundtrip() {
         "test_bindparam_int_to_char_roundtrip",
         SQL_C_SLONG, "SQL_C_SLONG",
         SQL_CHAR, "SQL_CHAR",
-        "ODBC_TEST_ROUNDTRIP_CHAR", "CHAR(20)", 20, true);
+        "ODBC_TEST_ROUNDTRIP_CHAR", {"CHAR(20)"}, 20, true);
 }
 
 TestResult ParameterBindingTests::test_bindparam_int_to_wvarchar_roundtrip() {
@@ -760,7 +866,11 @@ TestResult ParameterBindingTests::test_bindparam_int_to_wvarchar_roundtrip() {
         "test_bindparam_int_to_wvarchar_roundtrip",
         SQL_C_SLONG, "SQL_C_SLONG",
         SQL_WVARCHAR, "SQL_WVARCHAR",
-        "ODBC_TEST_ROUNDTRIP_WCHAR", "NVARCHAR(20)", 20, false);
+        "ODBC_TEST_ROUNDTRIP_WCHAR",
+        // R4: Firebird has no NVARCHAR; it spells this NCHAR VARYING.
+        {"NVARCHAR(20)", "NCHAR VARYING(20)", "NATIONAL CHARACTER VARYING(20)",
+         "VARCHAR(20)"},
+        20, false);
 }
 
 // ── A20: the rest of the numeric-C -> character-SQL matrix ────────────────
@@ -777,7 +887,7 @@ TestResult ParameterBindingTests::test_bindparam_utinyint_to_varchar_roundtrip()
         "test_bindparam_utinyint_to_varchar_roundtrip",
         SQL_C_UTINYINT, "SQL_C_UTINYINT",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(32)"}, 32, false);
 }
 
 TestResult ParameterBindingTests::test_bindparam_ushort_to_varchar_roundtrip() {
@@ -785,7 +895,7 @@ TestResult ParameterBindingTests::test_bindparam_ushort_to_varchar_roundtrip() {
         "test_bindparam_ushort_to_varchar_roundtrip",
         SQL_C_USHORT, "SQL_C_USHORT",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(32)"}, 32, false);
 }
 
 TestResult ParameterBindingTests::test_bindparam_ulong_to_varchar_roundtrip() {
@@ -793,7 +903,7 @@ TestResult ParameterBindingTests::test_bindparam_ulong_to_varchar_roundtrip() {
         "test_bindparam_ulong_to_varchar_roundtrip",
         SQL_C_ULONG, "SQL_C_ULONG",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(32)"}, 32, false);
 }
 
 TestResult ParameterBindingTests::test_bindparam_ubigint_to_varchar_roundtrip() {
@@ -801,7 +911,7 @@ TestResult ParameterBindingTests::test_bindparam_ubigint_to_varchar_roundtrip() 
         "test_bindparam_ubigint_to_varchar_roundtrip",
         SQL_C_UBIGINT, "SQL_C_UBIGINT",
         SQL_VARCHAR, "SQL_VARCHAR",
-        "ODBC_TEST_ROUNDTRIP", "VARCHAR(32)", 32, false);
+        "ODBC_TEST_ROUNDTRIP", {"VARCHAR(32)"}, 32, false);
 }
 
 // The CHAR and WVARCHAR axes had only SQL_C_SLONG, so a driver could get
@@ -813,7 +923,7 @@ TestResult ParameterBindingTests::test_bindparam_bigint_to_char_roundtrip() {
         "test_bindparam_bigint_to_char_roundtrip",
         SQL_C_SBIGINT, "SQL_C_SBIGINT",
         SQL_CHAR, "SQL_CHAR",
-        "ODBC_TEST_ROUNDTRIP_CHAR", "CHAR(20)", 20, true);
+        "ODBC_TEST_ROUNDTRIP_CHAR", {"CHAR(20)"}, 20, true);
 }
 
 TestResult ParameterBindingTests::test_bindparam_double_to_char_roundtrip() {
@@ -821,7 +931,7 @@ TestResult ParameterBindingTests::test_bindparam_double_to_char_roundtrip() {
         "test_bindparam_double_to_char_roundtrip",
         SQL_C_DOUBLE, "SQL_C_DOUBLE",
         SQL_CHAR, "SQL_CHAR",
-        "ODBC_TEST_ROUNDTRIP_CHAR", "CHAR(40)", 40,
+        "ODBC_TEST_ROUNDTRIP_CHAR", {"CHAR(40)"}, 40,
         /*value_offset=*/0.5);
 }
 
@@ -830,7 +940,11 @@ TestResult ParameterBindingTests::test_bindparam_bigint_to_wvarchar_roundtrip() 
         "test_bindparam_bigint_to_wvarchar_roundtrip",
         SQL_C_SBIGINT, "SQL_C_SBIGINT",
         SQL_WVARCHAR, "SQL_WVARCHAR",
-        "ODBC_TEST_ROUNDTRIP_WCHAR", "NVARCHAR(20)", 20, false);
+        "ODBC_TEST_ROUNDTRIP_WCHAR",
+        // R4: Firebird has no NVARCHAR; it spells this NCHAR VARYING.
+        {"NVARCHAR(20)", "NCHAR VARYING(20)", "NATIONAL CHARACTER VARYING(20)",
+         "VARCHAR(20)"},
+        20, false);
 }
 
 // ── §1.7: SQLDescribeParam reliability probe (VARCHAR shape) ───────────────

@@ -349,8 +349,31 @@ TestResult ArrayParamTests::test_column_wise_array_binding() {
             return;
         }
 
+        // Q1: the integer axis, which is the one #299 corrupts and the one this
+        // probe could not see. `id_array` is bound as SQL_C_SLONG with
+        // BufferLength 0 — the specification says the length is ignored for a
+        // fixed-length C type and applications pass 0 — and a driver that uses
+        // it as the element stride multiplies the set number by zero and reads
+        // element 0 every time. The strings step correctly through the same
+        // bug, because for SQL_C_CHAR the length *is* the element size, so
+        // checking them alone reports a pass over three identical IDs.
+        if (!v.keys_are({"100", "200", "300"})) {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::CRITICAL;
+            r.actual = actual.str() + "; integer axis wrong: expected IDs " +
+                       "100, 200, 300 but read back " + v.keys_joined();
+            r.suggestion =
+                "Each parameter set must take the next element of the bound "
+                "integer array. SQLBindParameter's BufferLength is ignored for "
+                "a fixed-length C type, so a driver that uses it as the element "
+                "stride reads element 0 for every set: N identical rows, "
+                "SQL_SUCCESS, and a correct processed count. Derive the stride "
+                "from the C type when BufferLength is 0.";
+            return;
+        }
+
         actual << "; all " << ARRAY_SIZE
-               << " rows persisted with the right strings";
+               << " rows persisted with the right strings and IDs";
         r.actual = actual.str();
         // The paramset reset already happened above, before the rows
         // were read back - it has to, or verify_rows_persisted runs with
