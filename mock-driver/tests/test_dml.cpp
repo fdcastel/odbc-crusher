@@ -56,6 +56,26 @@ protected:
         return rc;
     }
 
+    // D83: the V of one row, or "<none>" when the row is not there.
+    //
+    // The fixture had no way to read a value back by key. Nothing needed one:
+    // every UPDATE test asserted a row *count*, which is the gap D83 is about.
+    std::string ValueOf(int id) {
+        const std::string sql =
+            "SELECT V FROM T WHERE ID = " + std::to_string(id);
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+            hstmt, (SQLCHAR*)sql.c_str(), SQL_NTS))) << sql;
+        std::string out = "<none>";
+        if (SQLFetch(hstmt) == SQL_SUCCESS) {
+            char buf[128] = {0};
+            SQLLEN ind = 0;
+            SQLGetData(hstmt, 1, SQL_C_CHAR, buf, sizeof(buf), &ind);
+            out = (ind == SQL_NULL_DATA) ? "<null>" : buf;
+        }
+        SQLCloseCursor(hstmt);
+        return out;
+    }
+
     SQLINTEGER CountRows() {
         EXPECT_EQ(SQLExecDirect(hstmt,
             (SQLCHAR*)"SELECT COUNT(*) FROM T", SQL_NTS), SQL_SUCCESS);
@@ -342,4 +362,111 @@ TEST_F(DmlTest, SelectAndDeleteAgreeOnTheSamePredicate) {
     const SQLLEN deleted = ExecWithRowCount("DELETE FROM T WHERE ID <= 2");
     EXPECT_EQ(static_cast<SQLLEN>(selected), deleted);
     EXPECT_EQ(deleted, 2);
+}
+
+// ── D83: UPDATE applies its SET clause ────────────────────────────────────
+//
+// It did not. `ParsedQuery` had no field for the clause and the executor said
+// why in a comment: "the mock has no SET evaluator, and no probe today reads
+// back UPDATEd values". Both halves were true and each excused the other, so
+// the row count above was the whole of what UPDATE was tested for - and a
+// driver reporting the right count while writing nothing is the exact
+// silent-corruption shape this fixture exists to model.
+
+TEST_F(DmlTest, UpdateChangesTheMatchedRowAndOnlyThatRow) {
+    Seed(3);
+    EXPECT_EQ(ExecWithRowCount("UPDATE T SET V = 'X' WHERE ID = 2"), 1);
+
+    EXPECT_EQ(ValueOf(2), "X");
+    EXPECT_EQ(ValueOf(1), "a") << "the SET reached a row the WHERE excluded";
+    EXPECT_EQ(ValueOf(3), "c") << "the SET reached a row the WHERE excluded";
+}
+
+TEST_F(DmlTest, UpdateWithoutAWhereChangesEveryRow) {
+    Seed(3);
+    EXPECT_EQ(ExecWithRowCount("UPDATE T SET V = 'X'"), 3);
+    EXPECT_EQ(ValueOf(1), "X");
+    EXPECT_EQ(ValueOf(2), "X");
+    EXPECT_EQ(ValueOf(3), "X");
+}
+
+// One statement, two assignments - and the row count still counts rows, not
+// assignments.
+TEST_F(DmlTest, UpdateAppliesEveryAssignmentInOneStatement) {
+    Seed(2);
+    EXPECT_EQ(ExecWithRowCount("UPDATE T SET ID = 9, V = 'z' WHERE ID = 1"), 1);
+
+    EXPECT_EQ(ValueOf(9), "z") << "the row moved and took its new V with it";
+    EXPECT_EQ(ValueOf(1), "<none>");
+    EXPECT_EQ(ValueOf(2), "b");
+}
+
+// The clause splits on top-level commas only. Splitting naively turns this one
+// assignment into two malformed ones, and the second would name no column.
+TEST_F(DmlTest, ACommaInsideAQuotedValueIsNotAnAssignmentSeparator) {
+    Seed(1);
+    EXPECT_EQ(ExecWithRowCount("UPDATE T SET V = 'a,b' WHERE ID = 1"), 1);
+    EXPECT_EQ(ValueOf(1), "a,b");
+}
+
+// D13's doubled-quote rule, which the SET parser gets by sharing
+// parse_sql_literal with the WHERE parser rather than copying it.
+TEST_F(DmlTest, ADoubledQuoteInASetValueIsOneApostrophe) {
+    Seed(1);
+    EXPECT_EQ(ExecWithRowCount("UPDATE T SET V = 'it''s' WHERE ID = 1"), 1);
+    EXPECT_EQ(ValueOf(1), "it's");
+}
+
+// A SET naming a column the table has not got is the same answer a SELECT of
+// an unknown column gives. Silently ignoring the clause - which is what
+// happened before, for every column - is the one answer that is not allowed.
+TEST_F(DmlTest, UpdatingAnUnknownColumnIsAnErrorNotASilentNoOp) {
+    Seed(1);
+    const SQLRETURN rc = SQLExecDirect(
+        hstmt, (SQLCHAR*)"UPDATE T SET NOSUCHCOL = 'X' WHERE ID = 1", SQL_NTS);
+    EXPECT_EQ(rc, SQL_ERROR);
+
+    SQLCHAR state[6] = {0};
+    SQLINTEGER native = 0;
+    SQLCHAR msg[256] = {0};
+    SQLSMALLINT len = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetDiagRec(
+        SQL_HANDLE_STMT, hstmt, 1, state, &native, msg, sizeof(msg), &len)));
+    EXPECT_STREQ((const char*)state, "42S22");
+
+    SQLCloseCursor(hstmt);
+    EXPECT_EQ(ValueOf(1), "a") << "the failed UPDATE wrote something anyway";
+}
+
+// Parameter numbering runs SET first, then WHERE - one sequence across the
+// statement. D10 left UPDATE out of substitute_params on purpose while there
+// was no SET evaluator; with one, leaving it out would write NULL over the
+// cell instead of the bound value.
+TEST_F(DmlTest, UpdateNumbersItsSetMarkersBeforeItsWhereMarkers) {
+    Seed(3);
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
+        hstmt, (SQLCHAR*)"UPDATE T SET V = ? WHERE ID = ?", SQL_NTS)));
+
+    char value[] = "Z";
+    SQLLEN value_ind = SQL_NTS;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindParameter(
+        hstmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR, 16, 0,
+        value, sizeof(value), &value_ind)));
+
+    SQLINTEGER id = 3;
+    SQLLEN id_ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLBindParameter(
+        hstmt, 2, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0,
+        &id, 0, &id_ind)));
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecute(hstmt)));
+    SQLLEN affected = -2;
+    SQLRowCount(hstmt, &affected);
+    SQLCloseCursor(hstmt);
+
+    EXPECT_EQ(affected, 1) << "the WHERE marker was numbered 1, not 2";
+    EXPECT_EQ(ValueOf(3), "Z");
+    EXPECT_EQ(ValueOf(1), "a");
+    EXPECT_EQ(ValueOf(2), "b");
 }

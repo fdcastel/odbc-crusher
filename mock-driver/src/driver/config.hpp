@@ -111,9 +111,16 @@ struct DriverConfig {
         // configuration that could fail them.
         SkewNumeric,      // Every numeric cell comes back +1, on both the
                           // bound-column path and SQLGetData
-        SkewNumericBound  // Only the bound-column path is skewed; SQLGetData
+        SkewNumericBound, // Only the bound-column path is skewed; SQLGetData
                           // returns the true value, so a probe that reads the
                           // same column both ways sees them disagree
+
+        // D83. DropInserts' sibling, one statement over. UPDATE resolves its
+        // SET targets (so a bad column is still 42S22) and reports the true
+        // number of matched rows, then writes none of them. The count stays
+        // honest deliberately - the lie is in the data, which is what makes
+        // it silent, and what a probe asserting only SQLRowCount cannot see.
+        DropUpdates
     };
     SilentCorruptionMode silent_corruption = SilentCorruptionMode::None;
 

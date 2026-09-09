@@ -78,6 +78,28 @@ protected:
             dbc, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_OFF, 0)));
     }
 
+    // D83: how many rows this connection can see matching a predicate.
+    // Count() answers for the whole table; an UPDATE has to be watched moving
+    // rows between predicates, not appearing and disappearing.
+    long CountWhere(SQLHDBC dbc, const std::string& where) {
+        SQLHSTMT stmt = SQL_NULL_HSTMT;
+        EXPECT_EQ(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt), SQL_SUCCESS);
+        const std::string sql =
+            "SELECT COUNT(*) FROM I6_T WHERE " + where;
+        long n = -1;
+        if (SQL_SUCCEEDED(SQLExecDirect(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS))
+            && SQL_SUCCEEDED(SQLFetch(stmt))) {
+            SQLINTEGER v = 0;
+            SQLLEN ind = 0;
+            if (SQL_SUCCEEDED(SQLGetData(stmt, 1, SQL_C_SLONG, &v,
+                                         sizeof(v), &ind))) {
+                n = static_cast<long>(v);
+            }
+        }
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        return n;
+    }
+
     // How many rows this connection can see in I6_T.
     long Count(SQLHDBC dbc) {
         SQLHSTMT stmt = SQL_NULL_HSTMT;
@@ -297,4 +319,71 @@ TEST_F(TxnIsolationTest, DisconnectingRemovesTheBufferFromThePeerView) {
 
     SQLDisconnect(reader);
     SQLFreeHandle(SQL_HANDLE_DBC, reader);
+}
+
+// ── D83: UPDATE is a transactional write like the other two ───────────────
+//
+// Stage A buffered INSERT and DELETE, and D83 recorded the SET clause as an
+// op of the same log rather than writing through the catalog. The claim was
+// that buffering, rollback and merge-at-commit then come for free. These
+// check the claim.
+
+TEST_F(TxnIsolationTest, UpdateInsideATransactionIsUndoneByRollback) {
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "INSERT INTO I6_T VALUES (1)")));
+
+    ManualCommit(a_);
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "UPDATE I6_T SET ID = 99 WHERE ID = 1")));
+    EXPECT_EQ(CountWhere(a_, "ID = 99"), 1) << "a connection sees its own write";
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLEndTran(SQL_HANDLE_DBC, a_, SQL_ROLLBACK)));
+    EXPECT_EQ(CountWhere(a_, "ID = 1"), 1) << "the rollback did not undo the SET";
+    EXPECT_EQ(CountWhere(a_, "ID = 99"), 0);
+}
+
+TEST_F(TxnIsolationTest, AnUncommittedUpdateIsInvisibleToAnotherConnection) {
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "INSERT INTO I6_T VALUES (1)")));
+
+    ManualCommit(a_);
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "UPDATE I6_T SET ID = 99 WHERE ID = 1")));
+
+    EXPECT_EQ(CountWhere(b_, "ID = 1"), 1)
+        << "B saw a change A has not committed";
+    EXPECT_EQ(CountWhere(b_, "ID = 99"), 0);
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLEndTran(SQL_HANDLE_DBC, a_, SQL_COMMIT)));
+    EXPECT_EQ(CountWhere(b_, "ID = 99"), 1) << "and after the commit it must be";
+    EXPECT_EQ(CountWhere(b_, "ID = 1"), 0);
+}
+
+// The merge property, for UPDATE. A commit replays the predicate against
+// whatever is committed *then*, so a row another connection committed after
+// this transaction opened is updated too - which is what a real engine at
+// READ COMMITTED does, and what a snapshot-and-replace design could not.
+TEST_F(TxnIsolationTest, AnUpdateCommitsAgainstTheRowsCommittedByThen) {
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "INSERT INTO I6_T VALUES (1)")));
+
+    ManualCommit(a_);
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "UPDATE I6_T SET ID = 99 WHERE ID < 50")));
+
+    // B commits a second matching row while A's update is still pending.
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(b_, "INSERT INTO I6_T VALUES (2)")));
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLEndTran(SQL_HANDLE_DBC, a_, SQL_COMMIT)));
+    EXPECT_EQ(CountWhere(b_, "ID = 99"), 2)
+        << "the commit replayed against a stale snapshot instead of the "
+           "rows committed by commit time";
+}
+
+// An UPDATE of a row the same transaction inserted has to see it - the ops
+// replay in issue order for exactly this.
+TEST_F(TxnIsolationTest, AnUpdateSeesARowTheSameTransactionInserted) {
+    ManualCommit(a_);
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "INSERT INTO I6_T VALUES (7)")));
+    ASSERT_TRUE(SQL_SUCCEEDED(Exec(a_, "UPDATE I6_T SET ID = 8 WHERE ID = 7")));
+
+    EXPECT_EQ(CountWhere(a_, "ID = 8"), 1);
+    EXPECT_EQ(CountWhere(a_, "ID = 7"), 0);
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLEndTran(SQL_HANDLE_DBC, a_, SQL_COMMIT)));
+    EXPECT_EQ(CountWhere(b_, "ID = 8"), 1);
 }

@@ -44,12 +44,17 @@ namespace mock_odbc {
 // One buffered change. Kept in issue order, because a DELETE after an INSERT in
 // the same transaction has to see that INSERT.
 struct WriteOp {
-    enum class Kind { Insert, Delete };
+    enum class Kind { Insert, Delete, Update };
 
     Kind kind = Kind::Insert;
     std::string table;                          // upper-cased, as the store is
     MockRow row;                                // Kind::Insert
-    std::function<bool(const MockRow&)> match;  // Kind::Delete
+    std::function<bool(const MockRow&)> match;  // Kind::Delete, Kind::Update
+
+    // D83: for Kind::Update - which cell to set, and to what. A vector because
+    // `SET a = 1, b = 2` is one statement and has to be one op, or a rollback
+    // could undo half of it.
+    std::vector<std::pair<size_t, CellValue>> assignments;
 };
 
 // Replay `ops` over `rows`. The one implementation, used both to answer a read

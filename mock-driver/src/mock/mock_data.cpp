@@ -65,6 +65,13 @@ bool apply_silent_corruption(MockRow& row, const MockTable& table,
         case Mode::SkewNumeric:
         case Mode::SkewNumericBound:
             return true;
+
+        // D83: an UPDATE-path mode. This function is the INSERT path, and a
+        // row arriving here is one being stored by an INSERT, so there is
+        // nothing to do - dropping it here would make DropUpdates drop
+        // inserts too, which is a mode we already have.
+        case Mode::DropUpdates:
+            return true;
         case Mode::DropInserts:
             return false;
         case Mode::MangleVarchar: {
@@ -576,6 +583,95 @@ bool is_wrapped(const std::string& s) {
 
 } // namespace
 
+// D83: the literal rules, in one place.
+//
+// This was a lambda inside make_where_filter. The SET parser needs the
+// same two decisions - a doubled quote is an escaped apostrophe (D13),
+// and a number is only a number when it is the *whole* token (D12) - and
+// a second copy of them would drift from this one.
+static CellValue parse_sql_literal(const std::string& v) {
+    std::string s = trim(v);
+    if (s.size() >= 2 && s.front() == '\'' && s.back() == '\'') {
+        // D13: the inner text was taken verbatim, so a doubled quote -
+        // the SQL escape for a literal apostrophe - stayed doubled and
+        // `WHERE V = 'it''s'` never matched the stored value `it's`.
+        const std::string inner = s.substr(1, s.size() - 2);
+        std::string out;
+        out.reserve(inner.size());
+        for (size_t i = 0; i < inner.size(); ++i) {
+            out += inner[i];
+            if (inner[i] == '\'' && i + 1 < inner.size()
+                && inner[i + 1] == '\'') {
+                ++i;   // skip the second of the pair
+            }
+        }
+        return out;
+    }
+    // D12: stoll/stod without checking how much they consumed accepted
+    // `1 AND b = 2` as the number 1 and silently dropped the rest of the
+    // predicate. A literal has to be the *whole* token or it is a string.
+    try {
+        size_t used = 0;
+        const long long n = std::stoll(s, &used);
+        if (used == s.size()) return n;
+    } catch (...) {}
+    try {
+        size_t used = 0;
+        const double d = std::stod(s, &used);
+        if (used == s.size()) return d;
+    } catch (...) {}
+    return s;
+}
+
+// D83: split `SET a = 1, b = 'x,y'` into assignments.
+//
+// Top-level commas only: a comma inside a quoted literal belongs to the value,
+// and treating it as a separator turns one assignment into two malformed ones.
+static std::vector<ParsedQuery::Assignment> parse_set_clause(
+    const std::string& text) {
+    std::vector<ParsedQuery::Assignment> out;
+
+    std::vector<std::string> parts;
+    std::string current;
+    bool in_quote = false;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '\'') {
+            // A doubled quote inside a quoted string is an escaped
+            // apostrophe, not the end of it - the same rule parse_sql_literal
+            // applies to the value itself.
+            if (in_quote && i + 1 < text.size() && text[i + 1] == '\'') {
+                current += c;
+                current += text[++i];
+                continue;
+            }
+            in_quote = !in_quote;
+            current += c;
+            continue;
+        }
+        if (c == ',' && !in_quote) {
+            parts.push_back(current);
+            current.clear();
+            continue;
+        }
+        current += c;
+    }
+    if (!trim(current).empty()) parts.push_back(current);
+
+    for (const auto& part : parts) {
+        const auto eq = part.find('=');
+        if (eq == std::string::npos) continue;
+        ParsedQuery::Assignment a;
+        a.column = unquote_identifier(trim(part.substr(0, eq)));
+        const std::string value_text = trim(part.substr(eq + 1));
+        if (a.column.empty() || value_text.empty()) continue;
+        a.is_parameter_marker = (value_text == "?");
+        if (!a.is_parameter_marker) a.value = parse_sql_literal(value_text);
+        out.push_back(std::move(a));
+    }
+    return out;
+}
+
 static WhereFilter make_where_filter(const MockTable& table,
                                      const std::string& where_clause)
 {
@@ -590,39 +686,7 @@ static WhereFilter make_where_filter(const MockTable& table,
         }
         return -1;
     };
-    auto parse_literal = [](const std::string& v) -> CellValue {
-        std::string s = trim(v);
-        if (s.size() >= 2 && s.front() == '\'' && s.back() == '\'') {
-            // D13: the inner text was taken verbatim, so a doubled quote -
-            // the SQL escape for a literal apostrophe - stayed doubled and
-            // `WHERE V = 'it''s'` never matched the stored value `it's`.
-            const std::string inner = s.substr(1, s.size() - 2);
-            std::string out;
-            out.reserve(inner.size());
-            for (size_t i = 0; i < inner.size(); ++i) {
-                out += inner[i];
-                if (inner[i] == '\'' && i + 1 < inner.size()
-                    && inner[i + 1] == '\'') {
-                    ++i;   // skip the second of the pair
-                }
-            }
-            return out;
-        }
-        // D12: stoll/stod without checking how much they consumed accepted
-        // `1 AND b = 2` as the number 1 and silently dropped the rest of the
-        // predicate. A literal has to be the *whole* token or it is a string.
-        try {
-            size_t used = 0;
-            const long long n = std::stoll(s, &used);
-            if (used == s.size()) return n;
-        } catch (...) {}
-        try {
-            size_t used = 0;
-            const double d = std::stod(s, &used);
-            if (used == s.size()) return d;
-        } catch (...) {}
-        return s;
-    };
+    auto parse_literal = &parse_sql_literal;
     // A bare word that is not a number and not quoted is a column reference,
     // and an unresolved one is 42S22 rather than a string literal.
     auto looks_like_name = [](const std::string& s) {
@@ -1675,6 +1739,15 @@ ParsedQuery parse_sql(const std::string& sql) {
         // — no hard-coded stub here.
         auto where_pos = upper.find("WHERE");
         if (where_pos != std::string::npos) result.where_clause = trimmed.substr(where_pos + 5);
+
+        // D83: the SET clause, which nothing used to look at.
+        const auto set_pos = upper.find(" SET ");
+        if (set_pos != std::string::npos) {
+            const size_t from = set_pos + 5;
+            const size_t to = (where_pos != std::string::npos && where_pos > from)
+                                  ? where_pos : trimmed.size();
+            result.set_clauses = parse_set_clause(trimmed.substr(from, to - from));
+        }
     } else if (upper.find("DELETE") == 0) {
         result.query_type = ParsedQuery::QueryType::Delete;
         auto from_pos = upper.find("FROM");
@@ -1804,6 +1877,38 @@ static size_t write_delete(MockCatalog& catalog, const std::string& table,
     op.table = key;
     op.match = match;
     txn.writes->record(std::move(op));
+    return n;
+}
+
+// D83: apply an UPDATE, buffered or committed.
+//
+// Returns the rows changed, counted over what this connection can see, so an
+// UPDATE inside a transaction counts rows the transaction itself inserted.
+static size_t write_update(
+    MockCatalog& catalog, const std::string& table,
+    const std::function<bool(const MockRow&)>& match,
+    const std::vector<std::pair<size_t, CellValue>>& assignments,
+    const TxnContext& txn) {
+    const std::string key = to_upper(table);
+
+    auto rows = visible_rows(catalog, table, txn);
+    size_t n = 0;
+    for (const auto& row : rows) {
+        if (match(row)) ++n;
+    }
+    if (n == 0 || assignments.empty()) return n;
+
+    WriteOp op;
+    op.kind = WriteOp::Kind::Update;
+    op.table = key;
+    op.match = match;
+    op.assignments = assignments;
+
+    if (txn.buffered && txn.writes) {
+        txn.writes->record(std::move(op));
+    } else {
+        catalog.apply_write_ops({op});
+    }
     return n;
 }
 
@@ -2321,16 +2426,47 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size,
                 catalog.materialize_rows(query.table_name,
                                          generate_mock_data(*table, result_set_size));
             }
-            // I6: counted over what this connection can see, so an UPDATE
-            // inside a transaction counts rows the transaction inserted.
-            {
-                auto rows = visible_rows(catalog, query.table_name, txn);
-                size_t n = 0;
-                for (const auto& row : rows) {
-                    if (filter.match(row)) ++n;
+            // D83: resolve each SET target to a column index once, here,
+            // where the table is in hand. An assignment naming a column the
+            // table does not have is 42S22 - the same answer a SELECT of an
+            // unknown column gives, rather than a silently ignored clause.
+            std::vector<std::pair<size_t, CellValue>> assignments;
+            bool bad_column = false;
+            for (const auto& set : query.set_clauses) {
+                const std::string want = to_upper(set.column);
+                size_t index = table->columns.size();
+                for (size_t ci = 0; ci < table->columns.size(); ++ci) {
+                    if (to_upper(table->columns[ci].name) == want) {
+                        index = ci;
+                        break;
+                    }
                 }
-                result.affected_rows = static_cast<long long>(n);
+                if (index == table->columns.size()) {
+                    result.success = false;
+                    result.error_sqlstate = "42S22";
+                    result.error_message = "Column not found: " + set.column;
+                    bad_column = true;
+                    break;
+                }
+                assignments.emplace_back(index, set.value);
             }
+            if (bad_column) break;
+
+            // D83: SilentCorruption=DropUpdates. Resolving the SET targets
+            // happens first and is not skipped, so an UPDATE naming a column
+            // the table has not got is still 42S22 in this mode - the driver
+            // being modelled loses the write, it does not stop parsing. Then
+            // the assignments are dropped, and write_update counts the
+            // matched rows and writes nothing: the right SQLRowCount over
+            // unchanged data.
+            if (BehaviorController::instance().config().silent_corruption ==
+                DriverConfig::SilentCorruptionMode::DropUpdates) {
+                assignments.clear();
+            }
+
+            result.affected_rows = static_cast<long long>(
+                write_update(catalog, query.table_name, filter.match,
+                             assignments, txn));
             break;
         }
         case ParsedQuery::QueryType::Delete: {

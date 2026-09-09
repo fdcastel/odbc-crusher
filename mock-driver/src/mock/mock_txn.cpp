@@ -13,10 +13,20 @@ void apply_ops(std::vector<MockRow>& rows,
             rows.push_back(op.row);
             continue;
         }
-        // A DELETE inside the transaction removes rows this replay has already
-        // inserted as well as committed ones, which is why the ops are replayed
-        // in issue order rather than partitioned by kind.
         if (!op.match) continue;
+        if (op.kind == WriteOp::Kind::Update) {
+            // D83: applied to rows this replay has already inserted as well as
+            // committed ones, which is why ops are replayed in issue order.
+            for (auto& row : rows) {
+                if (!op.match(row)) continue;
+                for (const auto& [index, value] : op.assignments) {
+                    if (index < row.size()) row[index] = value;
+                }
+            }
+            continue;
+        }
+        // A DELETE inside the transaction removes rows this replay has already
+        // inserted as well as committed ones, for the same reason.
         rows.erase(std::remove_if(rows.begin(), rows.end(), op.match),
                    rows.end());
     }

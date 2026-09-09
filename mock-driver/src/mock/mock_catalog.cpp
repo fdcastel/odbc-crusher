@@ -442,7 +442,16 @@ void MockCatalog::apply_write_ops(const std::vector<WriteOp>& ops) {
         auto& rows = inserted_data_[op.table];   // already upper-cased
         if (op.kind == WriteOp::Kind::Insert) {
             rows.push_back(op.row);
-        } else if (op.match) {
+        } else if (!op.match) {
+            continue;
+        } else if (op.kind == WriteOp::Kind::Update) {
+            for (auto& row : rows) {                    // D83
+                if (!op.match(row)) continue;
+                for (const auto& [index, value] : op.assignments) {
+                    if (index < row.size()) row[index] = value;
+                }
+            }
+        } else {
             rows.erase(std::remove_if(rows.begin(), rows.end(), op.match),
                        rows.end());
         }

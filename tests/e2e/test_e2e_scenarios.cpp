@@ -2037,6 +2037,58 @@ TEST_F(CrusherE2EFixture, AWScopedFailOnAlsoStopsTheAnsiFallback) {
 // The third matters as much as the second. A probe that failed a driver for
 // showing dirty reads at READ UNCOMMITTED would be grading wrongly, and this
 // scenario is what stops that being introduced later.
+// D83: a probe that reads the UPDATEd row back, and the configuration that
+// fails it.
+//
+// The finding was that no probe read one back at all, so a driver reporting
+// the right SQLRowCount while writing nothing passed the suite clean. The
+// second case is the important one and the third is what makes it mean
+// something: under `SilentCorruption=DropUpdates` the new probe FAILs and
+// `test_sqlrowcount_after_update` still PASSes. That is not a gap in the
+// row-count probe - it grades SQLRowCount, and SQLRowCount is right. It is
+// the demonstration that grading the count was never going to catch this.
+TEST_F(CrusherE2EFixture, AnUpdateThatChangesNothingIsCaughtByReadingItBack) {
+    const std::string base =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;";
+
+    auto honest = run_crusher(base);
+    ASSERT_TRUE(honest.report.contains("summary")) << report_outline(honest);
+    SKIP_IF_KILLED(honest);
+    {
+        auto t = find_test(honest.report, "Parameter Binding Tests",
+                           "test_update_applies_its_set_clause");
+        ASSERT_TRUE(t.has_value())
+            << "the read-back probe is missing from the report\n"
+            << report_outline(honest);
+        EXPECT_EQ(t->value("status", std::string{}), "PASS")
+            << "a driver that applies its SET clause must pass\n  actual: "
+            << t->value("actual", std::string{});
+    }
+
+    auto dropped = run_crusher(base + "SilentCorruption=DropUpdates;");
+    ASSERT_TRUE(dropped.report.contains("summary")) << report_outline(dropped);
+    SKIP_IF_KILLED(dropped);
+
+    auto readback = find_test(dropped.report, "Parameter Binding Tests",
+                              "test_update_applies_its_set_clause");
+    ASSERT_TRUE(readback.has_value()) << report_outline(dropped);
+    EXPECT_EQ(readback->value("status", std::string{}), "FAIL")
+        << "an UPDATE that reports 1 row and writes nothing must fail this "
+           "probe - if it does not, the probe has never been shown to detect "
+           "anything\n  actual: "
+        << readback->value("actual", std::string{});
+
+    // And the reason the read-back had to be a probe of its own.
+    auto rowcount = find_test(dropped.report, "Parameter Binding Tests",
+                              "test_sqlrowcount_after_update");
+    ASSERT_TRUE(rowcount.has_value()) << report_outline(dropped);
+    EXPECT_EQ(rowcount->value("status", std::string{}), "PASS")
+        << "the row-count probe should still pass here: the count IS right. "
+           "If it started failing, DropUpdates would be corrupting the count "
+           "as well and would no longer be modelling a silent write loss.";
+}
+
 TEST_F(CrusherE2EFixture, IsolationProbeGradesTheClaimNotTheBehaviour) {
     const std::string base =
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"

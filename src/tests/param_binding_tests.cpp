@@ -44,6 +44,7 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_sqldescribeparam_decimal());
     results.push_back(test_sqlrowcount_after_insert());
     results.push_back(test_sqlrowcount_after_update());
+    results.push_back(test_update_applies_its_set_clause());
     results.push_back(test_sqlrowcount_after_delete());
     results.push_back(test_sqlrowcount_after_execute_procedure());
     results.push_back(test_param_rebind_per_row_row_count());
@@ -1455,6 +1456,122 @@ TestResult ParameterBindingTests::test_sqlrowcount_after_update() {
                 } else {
                     result.actual = "SQLRowCount = 3 after UPDATE matching all 3 rows";
                 }
+            } catch (const core::OdbcError& e) {
+                result.status = TestStatus::ERR;
+                result.actual = e.what();
+                result.diagnostic = e.format_diagnostics();
+            }
+
+            drop_roundtrip_table();
+        });
+}
+
+// D83: does UPDATE actually change the data?
+//
+// Nothing asked. `test_sqlrowcount_after_update` asserts SQLRowCount == 3 and
+// returns; every other UPDATE in the suite is graded the same way. So a driver
+// that reports the right count and writes nothing - the silent-corruption shape
+// this tool exists to find, in the one statement that had no probe for it -
+// passed the suite clean. The mock could not model it either: its executor said
+// so in a comment ("no probe today reads back UPDATEd values"), which is how
+// the two halves of the gap kept each other alive.
+//
+// One row of three is updated on purpose. That grades both halves of what
+// UPDATE promises - the matched row changed, and the unmatched rows did not -
+// and an engine that applies the SET to every row fails the same read.
+TestResult ParameterBindingTests::test_update_applies_its_set_clause() {
+    return run_test(
+        "test_update_applies_its_set_clause",
+        "SQLRowCount",
+        "After UPDATE t SET v='X' WHERE id=2, row 2 reads back 'X' and rows 1 "
+        "and 3 are untouched",
+        Severity::CRITICAL,
+        ConformanceLevel::CORE,
+        "ODBC 3.8 SQLExecDirect - UPDATE",
+        [&](TestResult& result) {
+            if (!create_roundtrip_table()) {
+                result.status = TestStatus::SKIP_INCONCLUSIVE;
+                result.actual = "Could not CREATE TABLE";
+                result.diagnostic = last_ddl_error_;
+                return;
+            }
+
+            try {
+                core::OdbcStatement seed(conn_);
+                seed.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (1, 'a')");
+                core::OdbcStatement seed2(conn_);
+                seed2.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (2, 'b')");
+                core::OdbcStatement seed3(conn_);
+                seed3.execute("INSERT INTO ODBC_TEST_ROUNDTRIP (ID, VAL) VALUES (3, 'c')");
+
+                // A22: the seed is the probe's premise. Without it a read-back
+                // says nothing about the UPDATE.
+                const CommitOutcome seed_commit = commit_now();
+                if (!seed_commit) {
+                    result.status = TestStatus::SKIP_INCONCLUSIVE;
+                    result.actual = "Could not seed 3 rows: " + seed_commit.summary;
+                    drop_roundtrip_table();
+                    return;
+                }
+
+                {
+                    core::OdbcStatement stmt(conn_);
+                    stmt.execute(
+                        "UPDATE ODBC_TEST_ROUNDTRIP SET VAL = 'X' WHERE ID = 2");
+                }
+                const CommitOutcome update_commit = commit_now();
+
+                RowVerification v =
+                    verify_rows_persisted("ODBC_TEST_ROUNDTRIP", "ID", "VAL", 3);
+                if (!v.ok) {
+                    result.status = TestStatus::FAIL;
+                    result.actual = "Could not read the table back after UPDATE: " +
+                                    v.diagnostic + " (count=" +
+                                    std::to_string(v.actual_count) + ", " +
+                                    update_commit.summary + ")";
+                    result.suggestion =
+                        "The UPDATE reported success, but the three seeded rows "
+                        "could not be read back. Check whether UPDATE is "
+                        "destroying rows it should only modify.";
+                    drop_roundtrip_table();
+                    return;
+                }
+
+                // PK-ordered, so index 1 is ID=2 - the row the WHERE matched.
+                const std::vector<std::string> expected{"a", "X", "c"};
+                std::string mismatches;
+                for (size_t i = 0; i < expected.size(); ++i) {
+                    const bool matches = i < v.actual_values.size() &&
+                                         v.actual_values[i] &&
+                                         *v.actual_values[i] == expected[i];
+                    if (matches) continue;
+                    if (!mismatches.empty()) mismatches += ", ";
+                    mismatches += "ID=" + std::to_string(i + 1) + " expected '" +
+                                  expected[i] + "' got '" + v.display(i) + "'";
+                }
+
+                if (mismatches.empty()) {
+                    result.actual =
+                        "UPDATE ... WHERE ID = 2 changed row 2 to 'X' and left "
+                        "rows 1 and 3 alone";
+                    return;
+                }
+
+                result.status = TestStatus::FAIL;
+                result.actual = "After UPDATE: " + mismatches +
+                                " (" + update_commit.summary + ")";
+                result.suggestion =
+                    update_commit
+                        ? "The UPDATE returned SQL_SUCCESS and the row count may "
+                          "even be right, but the stored data disagrees. If the "
+                          "matched row is unchanged the driver is discarding the "
+                          "SET clause; if an unmatched row changed too, the WHERE "
+                          "clause is not reaching the engine. Both are silent - "
+                          "an application only finds out when it reads back."
+                        : "The COMMIT after the UPDATE failed, so the rows are "
+                          "unchanged because the transaction never landed, not "
+                          "because the UPDATE was mis-applied. Fix the commit "
+                          "failure first.";
             } catch (const core::OdbcError& e) {
                 result.status = TestStatus::ERR;
                 result.actual = e.what();

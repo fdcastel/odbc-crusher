@@ -78,6 +78,20 @@ struct ParsedQuery {
     // SQLBindParameter expects (param 1 is the first marker, param 2
     // the second, …), so substitute_params doesn't need to know about
     // tuple boundaries.
+    // For UPDATE: the SET assignments, in order. D83.
+    //
+    // There was no field for this, and the executor's comment said why: "the
+    // mock has no SET evaluator, and no probe today reads back UPDATEd
+    // values". A driver reporting the right row count while changing nothing
+    // therefore passed - the silent-corruption shape this tool exists to
+    // catch, in the one statement that had no lever for it.
+    struct Assignment {
+        std::string column;
+        CellValue value;
+        bool is_parameter_marker = false;
+    };
+    std::vector<Assignment> set_clauses;
+
     std::vector<CellValue> insert_values;
     std::vector<bool> insert_param_markers;  // true for each insert_value that was a '?' marker
     std::vector<std::string> insert_columns;

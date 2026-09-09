@@ -108,6 +108,56 @@ TEST_F(SilentCorruptionTest, DropInsertsAcceptsButStoresNothing) {
         << "DropInserts must keep the row count at zero";
 }
 
+// DropUpdates — the UPDATE reports the rows it matched and writes none of
+// them. DropInserts' sibling, one statement over, and the reason D83 exists:
+// while UPDATE discarded its SET clause the mock could not model this, and
+// while no probe read an UPDATEd value back nothing would have noticed if it
+// had.
+TEST_F(SilentCorruptionTest, DropUpdatesReportsTheCountAndChangesNothing) {
+    Connect("SilentCorruption=DropUpdates;");
+    Exec("CREATE TABLE T_DU (ID INTEGER, V VARCHAR(50))");
+    Exec("INSERT INTO T_DU (ID, V) VALUES (1, 'before')");
+
+    ASSERT_EQ(SQLExecDirect(
+        hstmt, (SQLCHAR*)"UPDATE T_DU SET V = 'after' WHERE ID = 1", SQL_NTS),
+        SQL_SUCCESS) << "the lie is in the data, not in the return code";
+    SQLLEN affected = -2;
+    SQLRowCount(hstmt, &affected);
+    SQLCloseCursor(hstmt);
+
+    EXPECT_EQ(affected, 1)
+        << "the count has to stay honest, or a probe asserting only "
+           "SQLRowCount would catch this and the mode would prove nothing";
+    EXPECT_EQ(FetchFirstString("SELECT V FROM T_DU"), "before")
+        << "DropUpdates must leave the stored value alone";
+}
+
+// The mode loses the write; it does not stop the statement being parsed. An
+// UPDATE naming a column the table has not got is still an error here, or
+// DropUpdates would quietly widen into "UPDATE never fails".
+TEST_F(SilentCorruptionTest, DropUpdatesStillRejectsAnUnknownColumn) {
+    Connect("SilentCorruption=DropUpdates;");
+    Exec("CREATE TABLE T_DU2 (ID INTEGER, V VARCHAR(50))");
+    Exec("INSERT INTO T_DU2 (ID, V) VALUES (1, 'before')");
+
+    EXPECT_EQ(SQLExecDirect(
+        hstmt, (SQLCHAR*)"UPDATE T_DU2 SET NOPE = 'x' WHERE ID = 1", SQL_NTS),
+        SQL_ERROR);
+    SQLCloseCursor(hstmt);
+}
+
+// And it is an UPDATE mode. Sharing the corruption switch with DropInserts
+// makes "it drops inserts too" an easy mistake to make and a silent one to
+// live with.
+TEST_F(SilentCorruptionTest, DropUpdatesDoesNotDropInserts) {
+    Connect("SilentCorruption=DropUpdates;");
+    Exec("CREATE TABLE T_DU3 (ID INTEGER, V VARCHAR(50))");
+    Exec("INSERT INTO T_DU3 (ID, V) VALUES (1, 'a')");
+    Exec("INSERT INTO T_DU3 (ID, V) VALUES (2, 'b')");
+
+    EXPECT_EQ(CountRows("T_DU3"), 2);
+}
+
 // MangleVarchar — the stored string gets a sentinel char appended.
 // Universal corruption (works on numeric-as-string values too — the §1.1
 // roundtrip canaries insert "1","2","3"... which case-swap can't touch).

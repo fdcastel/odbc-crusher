@@ -414,6 +414,8 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::SkewNumericBound;
     } else if (corruption_str == "mangleunicode") {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::MangleUnicode;
+    } else if (corruption_str == "dropupdates") {
+        config.silent_corruption = DriverConfig::SilentCorruptionMode::DropUpdates;
     } else {
         config.silent_corruption = DriverConfig::SilentCorruptionMode::None;
     }

@@ -103,6 +103,9 @@ private:
 
     TestResult test_sqlrowcount_after_insert();
     TestResult test_sqlrowcount_after_update();
+    // D83: SQLRowCount is not the same claim as "the data changed", and only
+    // the first had a probe.
+    TestResult test_update_applies_its_set_clause();
     TestResult test_sqlrowcount_after_delete();
     TestResult test_sqlrowcount_after_execute_procedure();
 

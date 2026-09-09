@@ -457,16 +457,39 @@ void substitute_params(
     // branches below, so its `?` survived into `where_clause` and was
     // compared as the literal two-character string "?" - `DELETE FROM t
     // WHERE id = ?` matched nothing and reported 0 rows affected, with no
-    // error anywhere. The markers in the WHERE are substituted first for
-    // SELECT and DELETE, where they are the only ones; for UPDATE the SET
-    // clause's markers come first in the numbering, and the mock has no SET
-    // evaluator yet, so its WHERE numbering is left alone rather than
-    // guessed at.
+    // error anywhere. For SELECT and DELETE the WHERE holds every marker the
+    // statement has, so its numbering starts at 1.
     if (parsed.query_type == ParsedQuery::QueryType::Select ||
         parsed.query_type == ParsedQuery::QueryType::Delete) {
         SQLUSMALLINT where_param = 0;
         substitute_where_markers(parsed.where_clause, bindings, row,
                                  param_bind_type, where_param);
+    }
+
+    // D83: UPDATE numbers the SET clause's markers first, then continues into
+    // the WHERE - one sequence across the statement.
+    //
+    // D10 left this branch out on purpose ("the mock has no SET evaluator
+    // yet"), and while the SET clause was discarded that was neutral. It is
+    // not neutral now: an unfilled marker in `set_clauses` holds monostate,
+    // and the executor would write NULL over the cell. The deferral ends with
+    // the evaluator that caused it.
+    if (parsed.query_type == ParsedQuery::QueryType::Update) {
+        SQLUSMALLINT param_idx = 0;
+        for (auto& assignment : parsed.set_clauses) {
+            if (!assignment.is_parameter_marker) continue;
+            ++param_idx;
+            auto it = bindings.find(param_idx);
+            if (it != bindings.end()) {
+                // An *unbound* marker keeps its monostate and so writes NULL,
+                // which is what an unbound marker in an INSERT's value list
+                // already does a few lines below. One answer, not two.
+                assignment.value =
+                    read_param_value(it->second, row, param_bind_type);
+            }
+        }
+        substitute_where_markers(parsed.where_clause, bindings, row,
+                                 param_bind_type, param_idx);
     }
 
     // INSERT parameter substitution — only substitute for '?' markers
