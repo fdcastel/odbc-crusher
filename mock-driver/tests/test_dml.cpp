@@ -256,7 +256,7 @@ TEST_F(DmlTest, StringParameterIsQuotedIntoTheWhereClause) {
 //
 // read_param_value seeded the length from buffer_length and replaced it only
 // when the indicator was *not* SQL_NTS, so SQL_NTS took the whole buffer -
-// terminator included. The value went in as `abc ` and no literal ever
+// terminator included. The value went in as `abc\0` and no literal ever
 // matched it, with no diagnostic anywhere.
 TEST_F(DmlTest, NtsCharParameterStopsAtTheTerminator) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(

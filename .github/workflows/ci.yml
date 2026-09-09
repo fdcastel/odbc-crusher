@@ -60,6 +60,13 @@ jobs:
     - name: No sizeof() on a guarded buffer (D62)
       run: python3 tools/check_sizeof.py
 
+    # D84: a NUL byte committed into test_dml.cpp made git classify a 660-line
+    # test file as binary, so diff, blame and grep skipped it in silence for
+    # eleven commits. A NUL inside a `//` comment is legal C++, so no compiler
+    # on the matrix can catch it. This is where it gets caught.
+    - name: Sources are clean text (D84)
+      run: python3 tools/check_source_text.py
+
   build-mock-driver:
     timeout-minutes: 30
     name: Build Mock ODBC Driver on ${{ matrix.os }}
