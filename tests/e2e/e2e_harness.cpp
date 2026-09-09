@@ -222,6 +222,44 @@ int spawn(const std::string& connection_string,
 #endif
 }
 
+// D82: what the parser choked on, not just where.
+//
+// A malformed report is the most serious thing this tool can produce - the
+// report *is* the product - and the harness used to keep only nlohmann's
+// "line N, column M", which is unusable after the temp file has been deleted.
+// This keeps the bytes.
+std::string parse_failure_detail(const fs::path& file,
+                                 const std::exception& e) {
+    std::string out = "\n[harness] JSON parse error: ";
+    out += e.what();
+
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return out + "\n[harness] (and the file could not be reopened)";
+    const std::string text((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    out += "\n[harness] report was " + std::to_string(text.size()) + " bytes";
+
+    // nlohmann puts a byte offset in the message as "at line L, column C" for
+    // streams; find the reported line and show it with its neighbours, which
+    // is what identifies the offending value.
+    const std::string marker = "at line ";
+    const auto pos = std::string(e.what()).find(marker);
+    if (pos == std::string::npos) return out;
+    const long line_no = std::strtol(e.what() + pos + marker.size(), nullptr, 10);
+    if (line_no <= 0) return out;
+
+    std::istringstream lines(text);
+    std::string line;
+    long n = 0;
+    while (std::getline(lines, line)) {
+        ++n;
+        if (n < line_no - 2 || n > line_no + 2) continue;
+        out += "\n[harness] " + std::to_string(n) +
+               (n == line_no ? " >> " : " |  ") + line.substr(0, 300);
+    }
+    return out;
+}
+
 std::string slurp_and_remove(const fs::path& p) {
     std::error_code ec;
     if (!fs::exists(p, ec)) return {};
@@ -265,8 +303,11 @@ CrusherRun run_crusher(const std::string& connection_string) {
         try {
             in >> out.report;
         } catch (const std::exception& e) {
-            out.raw_stderr += "\n[harness] JSON parse error: ";
-            out.raw_stderr += e.what();
+            // D82: the bytes, not just the coordinates. And clear whatever
+            // nlohmann left half-built, so a partial parse cannot read as a
+            // run that got part-way through.
+            out.raw_stderr += parse_failure_detail(tmp, e);
+            out.report = nlohmann::json{};
         }
         in.close();
         fs::remove(tmp, ec);
@@ -297,8 +338,11 @@ CrusherRun run_crusher_with_args(const std::string& connection_string,
         try {
             in >> out.report;
         } catch (const std::exception& e) {
-            out.raw_stderr += "\n[harness] JSON parse error: ";
-            out.raw_stderr += e.what();
+            // D82: the bytes, not just the coordinates. And clear whatever
+            // nlohmann left half-built, so a partial parse cannot read as a
+            // run that got part-way through.
+            out.raw_stderr += parse_failure_detail(tmp, e);
+            out.report = nlohmann::json{};
         }
         in.close();
         fs::remove(tmp, ec);
