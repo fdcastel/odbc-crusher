@@ -729,6 +729,15 @@ jobs:
         conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.FIREBIRD_LIB_DIR }}
         crusher-run-id: ${{ needs.resolve-crusher.outputs.run-id }}
+        # P16: 3.0.1.21 never returns from SQLCancel on an idle statement,
+        # and Cancellation Tests is category 11 of 24 - without this the run
+        # is killed at the 570s cap and categories 12 to 24 never execute,
+        # including Unicode Tests where #288 lives. Skipped on **both** halves
+        # so the two reports stay comparable; the hang itself is the finding,
+        # recorded as IMPROVEMENT_PLAN_V2 P16, and Cancellation Tests remains
+        # covered for both builds on Windows.
+        exclude-categories: |
+          Cancellation Tests
 
   # ── Firebird 3.5.1-rc2 (master + 13 PRs) on Linux ───────────
   # Driver / version / source: see `.github/drivers.json` -> drivers["firebird-patched-linux"]
@@ -812,6 +821,15 @@ jobs:
         conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.FIREBIRD_LIB_DIR }}
         crusher-run-id: ${{ needs.resolve-crusher.outputs.run-id }}
+        # P16: 3.0.1.21 never returns from SQLCancel on an idle statement,
+        # and Cancellation Tests is category 11 of 24 - without this the run
+        # is killed at the 570s cap and categories 12 to 24 never execute,
+        # including Unicode Tests where #288 lives. Skipped on **both** halves
+        # so the two reports stay comparable; the hang itself is the finding,
+        # recorded as IMPROVEMENT_PLAN_V2 P16, and Cancellation Tests remains
+        # covered for both builds on Windows.
+        exclude-categories: |
+          Cancellation Tests
 
   mock-driver:
     if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'mock-driver' }}

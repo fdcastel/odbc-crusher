@@ -27,9 +27,22 @@ odbc-crusher "Driver={...}" -o json -f report.json
 # JSON output to stdout (pipe to jq, etc.)
 odbc-crusher "Driver={...}" -o json | jq '.summary'
 
-# Run one category instead of all 23 — useful when bisecting a hang
+# Both at once, from one run: the readable report on stdout and the JSON
+# in a file. This is what CI uses — a driver that wedges then leaves the
+# same amount of evidence in both, rather than two runs where the second
+# meets whatever the first broke.
+odbc-crusher "Driver={...}" -v -f report.json
+
+# Run one category instead of all 24 — useful when bisecting a hang
 odbc-crusher --list-categories
 odbc-crusher "Driver={...}" -c "Cursor Behavior Tests"
+
+# Or skip one. For a driver that *hangs* inside a category and takes the
+# rest of the run with it: Firebird ODBC 3.0.1.21 on Linux never returns
+# from SQLCancel on an idle statement, so without this its report stops at
+# category 11 of 24. A name it does not recognise is refused rather than
+# silently excluding nothing.
+odbc-crusher "Driver={...}" --exclude-category "Cancellation Tests"
 ```
 
 ### Exit codes

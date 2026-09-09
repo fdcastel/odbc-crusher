@@ -35,6 +35,23 @@ inputs:
     description: 'Optional path prepended to LD_LIBRARY_PATH (drivers shipped as a tarball typically need this)'
     required: false
     default: ''
+  exclude-categories:
+    description: >
+      P16. Category names to skip, **one per line**, each passed as its own
+      --exclude-category. One per line rather than space-separated because
+      every category name contains a space, so splitting on whitespace would
+      turn "Cancellation Tests" into two names that match nothing - and
+      crusher refuses a name it does not know, which is how that mistake gets
+      caught rather than silently excluding nothing.
+      For a driver that *hangs* inside one category and
+      takes the rest of the run with it: Firebird ODBC 3.0.1.21 on Linux never
+      returns from SQLCancel on an idle statement, so without this its report
+      stops at category 11 of 24. Both halves of a pair must pass the same
+      value or their reports stop being comparable. Empty for every other
+      caller. The report records what was filtered (G2), so a smaller total is
+      never mistaken for a regression.
+    required: false
+    default: ''
   crusher-run-id:
     description: >
       T3. A ci.yml run id to take the crusher binary from, instead of resolving
@@ -167,8 +184,19 @@ runs:
         # at the cap and the block-buffered stdout was discarded. Keeping the
         # two apart also stops 200 progress lines landing in the middle of the
         # human-readable report on every healthy run.
+        # P16: one --exclude-category per line of the input. Read line by
+        # line, never word-split: every category name contains a space, so
+        # splitting on whitespace would produce names that match nothing.
+        EXCLUDE_ARGS=()
+        if [[ -n "${{ inputs.exclude-categories }}" ]]; then
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            EXCLUDE_ARGS+=(--exclude-category "$name")
+          done <<< "${{ inputs.exclude-categories }}"
+          echo "Skipping categories: ${{ inputs.exclude-categories }}"
+        fi
         set +e
-        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -v           -f crusher-report.json           2>crusher-progress.txt | tee crusher-report.txt
+        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -v           -f crusher-report.json "${EXCLUDE_ARGS[@]}"           2>crusher-progress.txt | tee crusher-report.txt
         CRUSHER_RC=${PIPESTATUS[0]}
         set -e
         echo "crusher exit code: $CRUSHER_RC"

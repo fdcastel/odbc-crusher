@@ -2407,3 +2407,61 @@ TEST_F(CrusherE2EFixture, OneRunProducesBothTheTextAndTheJson) {
     EXPECT_EQ(run.raw_stdout.find("  -> "), std::string::npos)
         << "progress chatter leaked into the text report";
 }
+
+// ── P16: getting past a category that hangs a driver ─────────────────────
+//
+// Firebird ODBC 3.0.1.21 on Linux never returns from `SQLCancel` on an idle
+// statement. Cancellation Tests is category 11 of 24, so categories 12 to 24
+// have never run against that build — including Unicode Tests, where #288's
+// widechar heap overflow lives. `--category` cannot express "all but this one"
+// without naming the other twenty-three, a list that goes stale the moment a
+// category is added.
+TEST_F(CrusherE2EFixture, ExcludeCategorySkipsItAndRunsTheRest) {
+    auto run = run_crusher_with_args(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;",
+        {"--exclude-category", "Cancellation Tests"});
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+
+    EXPECT_FALSE(find_category(run.report, "Cancellation Tests").has_value())
+        << "the excluded category ran anyway";
+    // The point of excluding one is that everything after it still runs.
+    EXPECT_TRUE(find_category(run.report, "Unicode Tests").has_value())
+        << "a category after the excluded one is missing; the exclusion took "
+           "more than it was asked for";
+    EXPECT_TRUE(find_category(run.report, "Connection Tests").has_value());
+    EXPECT_GT(run.report["categories"].size(), 20u) << report_outline(run);
+}
+
+// The silent-no-op shape this project keeps finding. A misspelt name would
+// exclude nothing, the run would look exactly as intended, and the category
+// meant to be skipped would hang it anyway — so the mistake has to be loud.
+TEST_F(CrusherE2EFixture, ExcludeCategoryRefusesANameItDoesNotKnow) {
+    auto run = run_crusher_with_args(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;",
+        {"--exclude-category", "Cancelation Tests"});   // one 'l'
+    EXPECT_EQ(run.exit_code, 3)
+        << "a misspelt --exclude-category must fail the run, not silently "
+           "exclude nothing; stderr was: "
+        << run.raw_stderr;
+    EXPECT_NE(run.raw_stderr.find("names no category"), std::string::npos)
+        << run.raw_stderr;
+    // And it must say what the valid names are, or the user is left guessing.
+    EXPECT_NE(run.raw_stderr.find("Cancellation Tests"), std::string::npos)
+        << run.raw_stderr;
+}
+
+// --category and --exclude-category compose, exclusion applied second.
+TEST_F(CrusherE2EFixture, ExcludeCategoryAppliesAfterCategory) {
+    auto run = run_crusher_with_args(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;",
+        {"--category", "Connection Tests", "--category", "Unicode Tests",
+         "--exclude-category", "Unicode Tests"});
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    ASSERT_TRUE(run.report.contains("categories"));
+    EXPECT_EQ(run.report["categories"].size(), 1u) << report_outline(run);
+    EXPECT_TRUE(find_category(run.report, "Connection Tests").has_value());
+    EXPECT_FALSE(find_category(run.report, "Unicode Tests").has_value());
+}

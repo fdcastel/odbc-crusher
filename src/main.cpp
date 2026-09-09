@@ -289,6 +289,24 @@ int main(int argc, char** argv) {
                    "Run only these categories (repeatable, "
                    "case-insensitive; see --list-categories)");
 
+    // P16: the other direction. A driver that wedges inside one category
+    // takes the rest of the run with it — Firebird ODBC 3.0.1.21 on Linux
+    // never returns from SQLCancel on an idle statement, so Cancellation
+    // Tests is category 11 of 24 and categories 12 to 24 have never run
+    // against that build. `--category` cannot express "all but this one"
+    // without naming the other twenty-three, which is a list that goes stale
+    // the moment a category is added.
+    //
+    // Excluding is not the same as passing: the excluded names go into the
+    // report's `selected_categories` (G2), so a consumer comparing pass rates
+    // can see that a subset ran rather than reading a smaller total as a
+    // regression.
+    std::vector<std::string> skip_categories;
+    app.add_option("--exclude-category", skip_categories,
+                   "Skip these categories (repeatable, case-insensitive). "
+                   "Applied after --category. Use it to get past a category "
+                   "that hangs a particular driver.");
+
     bool list_categories = false;
     app.add_flag("--list-categories", list_categories,
                  "List the test categories and exit");
@@ -410,7 +428,36 @@ int main(int argc, char** argv) {
                 }
                 if (!wanted) continue;
             }
+            // P16: applied after --category, so the two compose predictably.
+            if (!skip_categories.empty()) {
+                const std::string lowered = to_lower_copy(category->category_name());
+                bool skipped = false;
+                for (const auto& skip : skip_categories) {
+                    if (lowered == to_lower_copy(skip)) { skipped = true; break; }
+                }
+                if (skipped) continue;
+            }
             categories.emplace_back(std::move(category));
+        }
+
+        // P16: an --exclude-category that matches nothing is the silent-no-op
+        // shape this project keeps finding — a misspelt name would exclude
+        // nothing, the run would look exactly as intended, and the category
+        // meant to be skipped would hang it anyway. Fail with the list.
+        for (const auto& skip : skip_categories) {
+            const std::string wanted = to_lower_copy(skip);
+            bool known = false;
+            for (const auto& name : category_names(conn)) {
+                if (to_lower_copy(name) == wanted) { known = true; break; }
+            }
+            if (!known) {
+                std::cerr << "Error: --exclude-category '" << skip
+                          << "' names no category. Known categories:\n";
+                for (const auto& name : category_names(conn)) {
+                    std::cerr << "  " << name << "\n";
+                }
+                return 3;
+            }
         }
 
         // A --category that matches nothing is a mistake worth failing on: it
