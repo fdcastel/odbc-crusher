@@ -149,7 +149,10 @@ TEST_F(JsonReporterFixture, WritesAUsableReportBeforeTheRunFinishes) {
     EXPECT_EQ(j["categories"][0]["tests"][0]["test_name"], "t1");
     // Header fields must be present in a partial too, or a consumer cannot
     // tell what was being tested.
-    EXPECT_EQ(j.value("schema_version", -1), 1);
+    // Against the constant, not a literal: what this case is about is that a
+    // snapshot is versioned like the final report, not which version it is.
+    EXPECT_EQ(j.value("schema_version", -1),
+              reporting::JsonReporter::kSchemaVersion);
     EXPECT_TRUE(j.contains("timestamp"));
 }
 
@@ -379,4 +382,69 @@ TEST_F(JsonReporterFixture, AReportWithABadNodeIsStillReadable) {
     EXPECT_TRUE(doc.contains("categories"));
     EXPECT_FALSE(doc.contains("quarantined_categories"))
         << "a clean run must not claim it quarantined anything";
+}
+
+// ── S4: what produced the report, and what must not be in it ─────────────
+//
+// Two reports of the same driver are only comparable if the same crusher on
+// the same platform produced both, and until schema 2 neither report said so
+// — a rebuilt binary or a different runner image would have read as a driver
+// regression with nothing to contradict it.
+//
+// The redaction is the other half. These reports are published as CI
+// artifacts, and the Firebird pair's carried `PWD=masterkey` in clear. The
+// connection string is the most useful single line in a report when two runs
+// disagree, so the value is masked rather than the key dropped.
+TEST_F(JsonReporterFixture, TheReportSaysWhatProducedIt) {
+    reporting::JsonReporter reporter(path_.string());
+    reporter.report_start("Driver={X};DBNAME=db;");
+    reporter.report_summary(0, 0, 0, 0, 0, 0, std::chrono::microseconds(0));
+    reporter.report_end();
+
+    auto j = read_back();
+    ASSERT_TRUE(j.contains("environment")) << j.dump(1);
+    const auto& env = j["environment"];
+    EXPECT_EQ(j.value("schema_version", 0),
+              reporting::JsonReporter::kSchemaVersion);
+    EXPECT_FALSE(env.value("crusher_version", std::string{}).empty());
+    EXPECT_NE(env.value("platform", std::string{}), "unknown");
+    // Not asserted as a value — the point is that the report carries the two
+    // ABI widths at all, because a driver writing 32 bits of a 64-bit SQLLEN
+    // is what P6 found and neither width is implied by the other.
+    EXPECT_GT(env.value("pointer_bits", 0), 0);
+    EXPECT_GT(env.value("sqllen_bits", 0), 0);
+}
+
+TEST_F(JsonReporterFixture, ThePasswordDoesNotReachThePublishedReport) {
+    reporting::JsonReporter reporter(path_.string());
+    reporter.report_start(
+        "Driver={Firebird ODBC Driver};DBNAME=localhost:/db.fdb;UID=SYSDBA;"
+        "PWD=masterkey;CHARSET=UTF8;");
+    reporter.report_summary(0, 0, 0, 0, 0, 0, std::chrono::microseconds(0));
+    reporter.report_end();
+
+    const auto conn = read_back().value("connection_string", std::string{});
+    EXPECT_EQ(conn.find("masterkey"), std::string::npos) << conn;
+    EXPECT_NE(conn.find("PWD=***"), std::string::npos) << conn;
+    // Everything else is still legible, which is the reason for masking the
+    // value rather than dropping the key.
+    EXPECT_NE(conn.find("DBNAME=localhost:/db.fdb"), std::string::npos) << conn;
+    EXPECT_NE(conn.find("UID=SYSDBA"), std::string::npos) << conn;
+    EXPECT_NE(conn.find("CHARSET=UTF8"), std::string::npos) << conn;
+}
+
+// A keyword that merely ends in a secret name is not one. `NEWPWD` is a real
+// ODBC keyword (SQLDriverConnect uses it to change an expiring password), so
+// the boundary check is load-bearing rather than defensive.
+TEST_F(JsonReporterFixture, RedactionMatchesWholeKeywordsOnly) {
+    reporting::JsonReporter reporter(path_.string());
+    reporter.report_start("Driver={X};UID=u;PWD=old_one;NEWPWD=new_one;DB=keepme;");
+    reporter.report_summary(0, 0, 0, 0, 0, 0, std::chrono::microseconds(0));
+    reporter.report_end();
+
+    const auto conn = read_back().value("connection_string", std::string{});
+    EXPECT_EQ(conn.find("old_one"), std::string::npos) << conn;
+    EXPECT_EQ(conn.find("new_one"), std::string::npos) << conn;
+    EXPECT_NE(conn.find("NEWPWD=***"), std::string::npos) << conn;
+    EXPECT_NE(conn.find("DB=keepme"), std::string::npos) << conn;
 }

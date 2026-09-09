@@ -93,6 +93,12 @@ void DriverInfo::collect() {
     if (auto odbc_ver = get_info_string(SQL_ODBC_VER)) {
         info_map_["ODBC Version"] = *odbc_ver;
     }
+    // S4. Answered by the driver manager itself rather than forwarded to the
+    // driver, so a driver that does not implement it is not a reason for this
+    // to be empty - an absent value means a DM too old to have the info type.
+    if (auto dm_ver = get_info_string(SQL_DM_VER)) {
+        info_map_["Driver Manager Version"] = *dm_ver;
+    }
     if (auto db_name = get_info_string(SQL_DATABASE_NAME)) {
         info_map_["Database Name"] = *db_name;
     }
@@ -181,6 +187,9 @@ DriverInfo::Properties DriverInfo::get_properties() const {
     // Get ODBC version from driver manager
     auto it = info_map_.find("ODBC Version");
     props.odbc_ver = (it != info_map_.end()) ? it->second : "";
+
+    it = info_map_.find("Driver Manager Version");   // S4
+    props.driver_manager_ver = (it != info_map_.end()) ? it->second : "";
     
     // Get additional info from the map
     it = info_map_.find("Database Name");

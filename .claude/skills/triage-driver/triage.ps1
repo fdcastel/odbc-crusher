@@ -553,10 +553,15 @@ $keys   = @($report.PSObject.Properties.Name)
 # G4 asks consumers to reject a version they do not know. Artifacts predating
 # G4 carry no schema_version at all (the archived duckdb report is one), so an
 # absent key warns rather than aborts; an unknown *future* version aborts.
+# S4 raised the ceiling to 2: v2 adds `environment` and
+# `driver_info.driver_manager_version`, and redacts the secrets in
+# `connection_string`. Nothing this script reads changed, which is why the
+# ceiling moves rather than the parsing.
+$KNOWN_SCHEMA = 2
 if ($keys -contains 'schema_version') {
     Set-Fact 'SCHEMA_VERSION' $report.schema_version
-    if ([int]$report.schema_version -gt 1) {
-        Stop-Triage $EXIT_NO_REPORT ("Report schema_version $($report.schema_version) is newer than this skill understands (1). " +
+    if ([int]$report.schema_version -gt $KNOWN_SCHEMA) {
+        Stop-Triage $EXIT_NO_REPORT ("Report schema_version $($report.schema_version) is newer than this skill understands ($KNOWN_SCHEMA). " +
             "Update .claude/skills/triage-driver/ before trusting the field names.")
     }
 } else {

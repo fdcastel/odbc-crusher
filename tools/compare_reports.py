@@ -36,8 +36,8 @@ from typing import Dict, Tuple
 FAILING = {"FAIL", "ERROR"}
 
 
-def load(path: str) -> Tuple[Dict[str, dict], dict]:
-    """Index a report's probes by test_name, and hand back its summary."""
+def load(path: str) -> Tuple[Dict[str, dict], dict, dict]:
+    """Index a report's probes by test_name, and hand back summary + environment."""
     with open(path, encoding="utf-8") as fh:
         report = json.load(fh)
 
@@ -51,7 +51,14 @@ def load(path: str) -> Tuple[Dict[str, dict], dict]:
             # CRASH)" entry. Keep it: its presence in exactly one report is the
             # single most important thing this tool can report.
             probes[name] = dict(test, category=category.get("name", "?"))
-    return probes, report.get("summary", {}) or {}
+
+    # S4. The whole method rests on the two runs differing in the driver and
+    # nothing else, and until schema 2 no report said what "nothing else" was.
+    env = dict(report.get("environment", {}) or {})
+    dm = (report.get("driver_info", {}) or {}).get("driver_manager_version")
+    if dm:
+        env["driver_manager_version"] = dm
+    return probes, report.get("summary", {}) or {}, env
 
 
 def rate(summary: dict) -> str:
@@ -72,11 +79,32 @@ def main() -> int:
                     help="exit 1 if any probe went PASS -> FAIL/ERROR")
     args = ap.parse_args()
 
-    old, old_sum = load(args.old)
-    new, new_sum = load(args.new)
+    old, old_sum, old_env = load(args.old)
+    new, new_sum, new_env = load(args.new)
 
     print(f"OLD  {args.old}\n     {len(old)} probes, pass rate {rate(old_sum)}")
     print(f"NEW  {args.new}\n     {len(new)} probes, pass rate {rate(new_sum)}")
+
+    # S4: say so when the two runs did not happen under the same conditions.
+    # A rebuilt crusher, a different runner image or a different SQLLEN width
+    # reads as a driver regression in every bucket below, and there was no way
+    # to tell before schema 2 carried this. Reported, not enforced - a
+    # deliberate cross-platform comparison is a legitimate thing to want.
+    if not old_env and not new_env:
+        print("     environment: neither report carries one (schema < 2); "
+              "the runs are assumed comparable and nothing checked that")
+    else:
+        differing = sorted(
+            k for k in set(old_env) | set(new_env)
+            if old_env.get(k) != new_env.get(k)
+        )
+        if differing:
+            print("\n!!   THE TWO RUNS DID NOT HAPPEN UNDER THE SAME CONDITIONS")
+            for k in differing:
+                print(f"       {k}: OLD {old_env.get(k, '(absent)')!r} "
+                      f"vs NEW {new_env.get(k, '(absent)')!r}")
+            print("     Every difference below may be this rather than the "
+                  "driver.")
 
     fixed, regressed, still, other = [], [], [], []
     for name, o in old.items():

@@ -834,7 +834,11 @@ TEST_F(CrusherE2EFixture, ReportCarriesSchemaVersionAndIso8601Timestamp) {
         << "The report must be self-describing (G4).";
     ASSERT_TRUE(run.report["schema_version"].is_number_integer())
         << "schema_version must be an integer, matching .github/drivers.json.";
-    EXPECT_EQ(run.report["schema_version"].get<int>(), 1);
+    // S4: 2. The bump is for `connection_string`, whose secrets are now
+    // masked - a consumer that reconnected with it can no longer, which is the
+    // meaning change the number exists to announce. `environment` and
+    // `driver_info.driver_manager_version` came with it and are additive.
+    EXPECT_EQ(run.report["schema_version"].get<int>(), 2);
 
     ASSERT_TRUE(run.report.contains("timestamp"));
     ASSERT_TRUE(run.report["timestamp"].is_string())

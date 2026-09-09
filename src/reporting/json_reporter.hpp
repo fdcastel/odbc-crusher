@@ -20,7 +20,16 @@ public:
     //   1 — initial versioned schema. Same shape as the unversioned reports
     //       that preceded it, except "timestamp" is now an ISO-8601 UTC
     //       string rather than a raw epoch integer.
-    static constexpr int kSchemaVersion = 1;
+    //   2 — S4. Adds "environment" (crusher version, platform, architecture,
+    //       pointer and SQLLEN width, build type) and
+    //       "driver_info.driver_manager_version", both additive. The bump is
+    //       for the third change, which is not: "connection_string" now has
+    //       the value of every secret-looking keyword replaced with `***`.
+    //       The reports are published as CI artifacts and were carrying
+    //       `PWD=masterkey` in clear. A consumer that reconnected with this
+    //       string will no longer be able to, which is precisely the kind of
+    //       meaning change this number exists to announce.
+    static constexpr int kSchemaVersion = 2;
 
     explicit JsonReporter(const std::string& output_file = "")
         : output_file_(output_file) {}

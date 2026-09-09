@@ -1,5 +1,7 @@
 #include "json_reporter.hpp"
+#include "odbc_crusher/version.hpp"
 #include "utf8_sanitize.hpp"
+#include <cctype>
 #include <ctime>
 #include <filesystem>
 #include <iostream>
@@ -24,6 +26,76 @@ std::string iso8601_utc(std::time_t t) {
     return buf;
 }
 
+// S4: the report is published as a CI artifact, and it carried
+// `PWD=masterkey` in clear. Replace the value of every keyword that names a
+// secret and leave the rest of the string legible - the connection string is
+// the single most useful line in the report when two runs disagree, so
+// dropping it outright would cost more than it saves.
+std::string redact_secrets(const std::string& connection_string) {
+    static const char* kSecretKeys[] = {"PWD", "PASSWORD", "NEWPWD", "SECRET",
+                                        "TOKEN", "APIKEY", "API_KEY"};
+    std::string upper;
+    upper.reserve(connection_string.size());
+    for (char c : connection_string) {
+        upper += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+
+    std::string out = connection_string;
+    for (const char* key : kSecretKeys) {
+        const std::string needle = std::string(key) + "=";
+        size_t at = 0;
+        while ((at = upper.find(needle, at)) != std::string::npos) {
+            // Only at a keyword boundary, or PWD matches NEWPWD and TOKEN
+            // matches REFRESHTOKEN.
+            const bool at_boundary =
+                at == 0 || upper[at - 1] == ';' ||
+                std::isspace(static_cast<unsigned char>(upper[at - 1]));
+            if (!at_boundary) {
+                at += needle.size();
+                continue;
+            }
+            const size_t value_start = at + needle.size();
+            size_t value_end = out.find(';', value_start);
+            if (value_end == std::string::npos) value_end = out.size();
+            out.replace(value_start, value_end - value_start, "***");
+            upper = out;
+            for (auto& c : upper) {
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            }
+            at = value_start + 3;
+        }
+    }
+    return out;
+}
+
+// S4: what produced this report, beyond the driver. Two reports of the same
+// driver are only comparable if these agree, and nothing in either report used
+// to say so - a changed runner image or a rebuilt crusher would have read as a
+// driver regression.
+std::string platform_name() {
+#if defined(_WIN32)
+    return "Windows";
+#elif defined(__APPLE__)
+    return "macOS";
+#elif defined(__linux__)
+    return "Linux";
+#else
+    return "unknown";
+#endif
+}
+
+std::string architecture_name() {
+#if defined(_M_X64) || defined(__x86_64__)
+    return "x86_64";
+#elif defined(_M_ARM64) || defined(__aarch64__)
+    return "arm64";
+#elif defined(_M_IX86) || defined(__i386__)
+    return "x86";
+#else
+    return "unknown";
+#endif
+}
+
 }  // namespace
 
 void JsonReporter::report_start(const std::string& connection_string) {
@@ -33,8 +105,26 @@ void JsonReporter::report_start(const std::string& connection_string) {
     // changes meaning, is renamed or is removed; purely additive changes keep
     // the number. Consumers should reject a version they do not know.
     root_["schema_version"] = kSchemaVersion;
-    root_["connection_string"] = connection_string;
+    root_["connection_string"] = redact_secrets(connection_string);   // S4
     root_["timestamp"] = iso8601_utc(std::time(nullptr));
+
+    // S4
+    nlohmann::json environment;
+    environment["crusher_version"] = ODBC_CRUSHER_VERSION;
+    environment["platform"] = platform_name();
+    environment["architecture"] = architecture_name();
+    environment["pointer_bits"] = static_cast<int>(sizeof(void*) * 8);
+    // The width of SQLLEN is the single most load-bearing ABI fact about an
+    // ODBC build - P6's `SQL_DESC_LENGTH=9187201948296675328` is a driver
+    // writing 32 bits of one - and it is not implied by the pointer size.
+    environment["sqllen_bits"] = static_cast<int>(sizeof(SQLLEN) * 8);
+#ifdef NDEBUG
+    environment["build_type"] = "Release";
+#else
+    environment["build_type"] = "Debug";
+#endif
+    root_["environment"] = environment;
+
     categories_ = nlohmann::json::array();
 }
 
@@ -318,6 +408,7 @@ void JsonReporter::report_driver_info(const discovery::DriverInfo::Properties& p
     driver_info["driver_version"] = props.driver_ver;
     driver_info["driver_odbc_version"] = props.driver_odbc_ver;
     driver_info["odbc_version"] = props.odbc_ver;
+    driver_info["driver_manager_version"] = props.driver_manager_ver;   // S4
     driver_info["dbms_name"] = props.dbms_name;
     driver_info["dbms_version"] = props.dbms_ver;
     driver_info["database_name"] = props.database_name;

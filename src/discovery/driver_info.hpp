@@ -17,6 +17,11 @@ public:
         std::string driver_ver;
         std::string driver_odbc_ver;
         std::string odbc_ver;
+        // S4: SQL_DM_VER, the *driver manager's* own version - unixODBC or
+        // the Windows DM, not the driver. Two reports are only comparable if
+        // the same DM produced them, and P10 found out the hard way that a DM
+        // rewrites what the driver said on its way past.
+        std::string driver_manager_ver;
         std::string dbms_name;
         std::string dbms_ver;
         std::string database_name;
