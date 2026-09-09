@@ -14,6 +14,18 @@
 
 namespace odbc_crusher::tests {
 
+bool cursor_cycle_time_looks_degraded(long long first_10_us,
+                                      long long last_10_us) {
+    // 100 us per cycle to be a baseline worth dividing by, 500 us per cycle
+    // to be a degradation worth naming. See the header for why a bare ratio
+    // is not enough.
+    constexpr long long kMinBaselineUs = 1000;
+    constexpr long long kMinDegradedUs = 5000;
+    return first_10_us >= kMinBaselineUs
+        && last_10_us  >= kMinDegradedUs
+        && last_10_us  >  first_10_us * 10;
+}
+
 std::vector<TestResult> CursorStressTests::run() {
     return {
         test_rapid_cursor_lifecycle(),
@@ -113,8 +125,9 @@ TestResult CursorStressTests::test_rapid_cursor_lifecycle() {
             // carries the verdict-relevant fact.
             oss << successful << "/" << iterations << " cycles completed";
 
-            // Check for performance degradation (last 10 shouldn't be >10x first 10)
-            if (first_10_duration.count() > 0 && last_10_duration.count() > first_10_duration.count() * 10) {
+            // Check for performance degradation — H19, see the header.
+            if (cursor_cycle_time_looks_degraded(first_10_duration.count(),
+                                                 last_10_duration.count())) {
                 oss << " [WARNING: last 10 iterations " << last_10_duration.count()
                     << " us vs first 10: " << first_10_duration.count() << " us — possible leak]";
                 r.severity = Severity::WARNING;

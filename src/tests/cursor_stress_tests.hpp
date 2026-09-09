@@ -4,6 +4,24 @@
 
 namespace odbc_crusher::tests {
 
+// H19: the leak heuristic of test_rapid_cursor_lifecycle, as a free
+// function so `tests/unit` can pin its thresholds without a driver.
+//
+// It compares ten iterations at the end of a 100-cycle loop against ten
+// at the start. A bare ratio there is noise: on a macOS CI runner the
+// baseline was 25 us for all ten cycles — 2.5 us each, less than one
+// scheduling slice — so a hiccup tripped a "possible leak" warning and
+// two identical runs disagreed on `severity`, `suggestion` and `actual`.
+// That is the one thing the determinism e2e check exists to forbid, and a
+// verdict that moves between runs is a defect however it was derived.
+//
+// Both floors are deliberately generous. Against a driver fast enough
+// that a cycle costs microseconds this now says nothing about leaks,
+// which is the honest answer: a real leak over 100 cycles moves absolute
+// time by far more than this.
+bool cursor_cycle_time_looks_degraded(long long first_10_us,
+                                      long long last_10_us);
+
 /**
  * @brief Cursor Stress Tests (Phase 26)
  *
