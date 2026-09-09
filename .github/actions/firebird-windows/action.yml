@@ -79,6 +79,56 @@ runs:
         "CREATE OR ALTER USER SYSDBA PASSWORD 'masterkey';" |
           Invoke-FirebirdIsql -Database $db -Environment $fb
 
+        # R1 (IMPROVEMENT_PLAN_V2): seed a permanent fixture.
+        #
+        # The database used to be created empty, and every probe that makes a
+        # table drops it again in the same probe — so by the time the catalog
+        # categories run there is no user table, and `SQLTables` returning zero
+        # rows is the *correct* answer to the question asked. Four probes
+        # reported SKIP_INCONCLUSIVE as their result:
+        # test_count_star_result_metadata, test_statistics_result,
+        # test_privileges_result and test_outer_join_escape. What was missing
+        # was a fixture, not a diagnosis.
+        #
+        # The shape is chosen for what those probes need: a primary key and a
+        # secondary index for SQLStatistics, a foreign key so the index list is
+        # not trivial, two tables so the outer-join escape has something to
+        # join, and rows in both so a COUNT(*) is not zero. Names are prefixed
+        # so nothing collides with the ODBC_TEST_* / ODBC_CRUSHER_* tables the
+        # probes create and drop.
+        # An array joined with newlines, not a here-string: PowerShell requires
+        # the closing `'@` at column 0, and a column-0 line ends the YAML block
+        # scalar this script lives in.
+        $fixture = @(
+          "CREATE TABLE CRUSHER_FIXTURE_PARENT ("
+          "    ID    INTEGER NOT NULL PRIMARY KEY,"
+          "    LABEL VARCHAR(50));"
+          "CREATE TABLE CRUSHER_FIXTURE ("
+          "    ID        INTEGER NOT NULL PRIMARY KEY,"
+          "    PARENT_ID INTEGER,"
+          "    NAME      VARCHAR(50),"
+          "    CONSTRAINT FK_CRUSHER_FIXTURE_PARENT"
+          "        FOREIGN KEY (PARENT_ID) REFERENCES CRUSHER_FIXTURE_PARENT (ID));"
+          "CREATE INDEX IDX_CRUSHER_FIXTURE_NAME ON CRUSHER_FIXTURE (NAME);"
+          "COMMIT;"
+          "INSERT INTO CRUSHER_FIXTURE_PARENT (ID, LABEL) VALUES (1, 'parent one');"
+          "INSERT INTO CRUSHER_FIXTURE_PARENT (ID, LABEL) VALUES (2, 'parent two');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (1, 1, 'row one');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (2, 1, 'row two');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (3, NULL, 'orphan');"
+          "COMMIT;"
+        ) -join "`n"
+        $fixture | Invoke-FirebirdIsql -Database $db -Environment $fb
+
+        # Fail loudly rather than let four probes go on skipping for a reason
+        # nobody reads.
+        $seeded = 'SELECT COUNT(*) FROM CRUSHER_FIXTURE;' |
+          Invoke-FirebirdIsql -Database $db -Environment $fb
+        Write-Host "Fixture rows: $seeded"
+        if ("$seeded" -notmatch '3') {
+          throw "CRUSHER_FIXTURE was not seeded; the catalog probes would skip"
+        }
+
         $instance = Start-FirebirdInstance -Port ([int]$env:FB_PORT) -Environment $fb
         Write-Host "Firebird PID: $($instance.Process.Id)  Port: $($instance.Port)"
 

@@ -422,6 +422,42 @@ jobs:
         "CREATE OR ALTER USER SYSDBA PASSWORD 'masterkey';" |
           Invoke-FirebirdIsql -Database $db -Environment $fb
 
+        # R1 (IMPROVEMENT_PLAN_V2): the same permanent fixture the Windows
+        # composite seeds — see .github/actions/firebird-windows/action.yml for
+        # why it exists and why it has an index and a foreign key. Kept in step
+        # with that copy by hand; the two jobs must agree or the linux and
+        # windows reports stop being comparable.
+        #
+        # An array joined with newlines, not a here-string: PowerShell wants the
+        # closing `'@` at column 0, and that would end this YAML block scalar.
+        $fixture = @(
+          "CREATE TABLE CRUSHER_FIXTURE_PARENT ("
+          "    ID    INTEGER NOT NULL PRIMARY KEY,"
+          "    LABEL VARCHAR(50));"
+          "CREATE TABLE CRUSHER_FIXTURE ("
+          "    ID        INTEGER NOT NULL PRIMARY KEY,"
+          "    PARENT_ID INTEGER,"
+          "    NAME      VARCHAR(50),"
+          "    CONSTRAINT FK_CRUSHER_FIXTURE_PARENT"
+          "        FOREIGN KEY (PARENT_ID) REFERENCES CRUSHER_FIXTURE_PARENT (ID));"
+          "CREATE INDEX IDX_CRUSHER_FIXTURE_NAME ON CRUSHER_FIXTURE (NAME);"
+          "COMMIT;"
+          "INSERT INTO CRUSHER_FIXTURE_PARENT (ID, LABEL) VALUES (1, 'parent one');"
+          "INSERT INTO CRUSHER_FIXTURE_PARENT (ID, LABEL) VALUES (2, 'parent two');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (1, 1, 'row one');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (2, 1, 'row two');"
+          "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (3, NULL, 'orphan');"
+          "COMMIT;"
+        ) -join "`n"
+        $fixture | Invoke-FirebirdIsql -Database $db -Environment $fb
+
+        $seeded = 'SELECT COUNT(*) FROM CRUSHER_FIXTURE;' |
+          Invoke-FirebirdIsql -Database $db -Environment $fb
+        Write-Host "Fixture rows: $seeded"
+        if ("$seeded" -notmatch '3') {
+          throw "CRUSHER_FIXTURE was not seeded; the catalog probes would skip"
+        }
+
         $instance = Start-FirebirdInstance -Port 3050 -Environment $fb
         Write-Host "Firebird PID: $($instance.Process.Id)  Port: $($instance.Port)"
 
