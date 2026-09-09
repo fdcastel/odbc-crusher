@@ -1,0 +1,128 @@
+# Reproduce the duckdb-odbc discovery-phase SIGSEGV, on demand.
+#
+# H16. odbc-crusher's stress test reports only "the driver crashed during the
+# discovery phase" - its crash guard trades the stack for the ability to finish
+# the run, so there is no address and no backtrace, which is exactly what an
+# upstream issue needs. This workflow builds repro/duckdb-discovery-sigsegv,
+# a plain-C program with no crusher code in it, and runs it under gdb against
+# the same pinned driver the stress test uses.
+#
+# Manual dispatch only: it exists to produce evidence for a bug report, not to
+# gate anything. Nothing here fails the build - a segfault is the expected
+# result and the artifact is the deliverable.
+name: Repro — DuckDB discovery SIGSEGV
+
+on:
+  workflow_dispatch:
+    inputs:
+      conn_string:
+        description: 'Connection string (blank = run both the :memory: default and a file-backed one)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    name: duckdb-odbc discovery (Linux)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      run: |
+        DRIVER_VERSION=$(jq -er '.drivers.duckdb.version' .github/drivers.json)
+        DRIVER_URL=$(jq -er '.drivers.duckdb.install.url' .github/drivers.json)
+        DRIVER_LIB=$(jq -er '.drivers.duckdb.install.library_name' .github/drivers.json)
+        DRIVER_SECTION=$(jq -er '.drivers.duckdb.install.driver_section' .github/drivers.json)
+        {
+          echo "DRIVER_VERSION=$DRIVER_VERSION"
+          echo "DRIVER_URL=$DRIVER_URL"
+          echo "DRIVER_LIB_NAME=$DRIVER_LIB"
+          echo "DRIVER_SECTION=$DRIVER_SECTION"
+        } >> "$GITHUB_ENV"
+
+    - name: Install unixODBC, gdb and the pinned DuckDB driver
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q unixodbc unixodbc-dev odbcinst gdb
+        mkdir duckdb_odbc && cd duckdb_odbc
+        curl --no-progress-meter -LO "${DRIVER_URL}"
+        unzip -q duckdb_odbc-linux-amd64.zip
+        DRIVER_PATH=$(readlink -f "${DRIVER_LIB_NAME}")
+        cd ..
+        {
+          echo "[${DRIVER_SECTION}]"
+          echo "Description = DuckDB ODBC Driver"
+          echo "Driver = ${DRIVER_PATH}"
+        } | sudo tee -a /etc/odbcinst.ini
+        echo "DUCKDB_DRIVER_LIB=$(readlink -f duckdb_odbc)" >> "$GITHUB_ENV"
+        echo "Driver ${DRIVER_VERSION} at ${DRIVER_PATH}"
+
+    - name: Build the reproducer
+      run: |
+        cd repro/duckdb-discovery-sigsegv
+        cc -Wall -Wextra -O0 -g repro.c -lodbc -o repro
+        echo "built:"; ls -la repro
+
+    - name: Run
+      env:
+        LD_LIBRARY_PATH: ${{ env.DUCKDB_DRIVER_LIB }}
+        # Through the environment, not `${{ }}` inside the script: a dispatch
+        # input expanded directly into a run block is a shell-injection
+        # surface, and the value here is a connection string full of the very
+        # punctuation that makes that dangerous.
+        CONN_INPUT: ${{ inputs.conn_string }}
+      run: |
+        cd repro/duckdb-discovery-sigsegv
+        mkdir -p out
+
+        run_one() {
+          local label="$1" conn="$2"
+          echo "############ $label ############"
+          echo "connection string: $conn"
+          set +e
+          # ulimit -c 0: the backtrace comes from gdb, a core file would only
+          # slow the runner down.
+          ulimit -c 0
+          gdb -batch -nx \
+              -ex 'set confirm off' \
+              -ex run \
+              -ex 'echo \n===== BACKTRACE =====\n' \
+              -ex bt \
+              -ex 'echo \n===== REGISTERS =====\n' \
+              -ex 'info registers rip rsp rbp' \
+              -ex 'echo \n===== SHARED LIBS =====\n' \
+              -ex 'info sharedlibrary' \
+              --args ./repro "$conn" > "out/$label.log" 2>&1
+          local rc=$?
+          set -e
+          echo "gdb exit: $rc"
+          # The last '  -> ' line is the call that was in flight.
+          echo "--- last call announced before the end ---"
+          grep -- '  -> ' "out/$label.log" | tail -1 || true
+          echo "--- crash summary ---"
+          grep -iE 'SIGSEGV|Program received signal|Segmentation fault' "out/$label.log" | head -5 || echo "(no signal seen)"
+          echo "--- tail ---"
+          tail -40 "out/$label.log"
+          echo
+        }
+
+        if [ -n "${CONN_INPUT:-}" ]; then
+          run_one custom "$CONN_INPUT"
+        else
+          # The two configurations differ inside the driver: with no Database=
+          # it opens :memory: and declines to cache the instance
+          # (connect.cpp:187), so they are worth comparing.
+          run_one memory "Driver={DuckDB Driver};"
+          run_one file   "Driver={DuckDB Driver};Database=/tmp/repro.duckdb;"
+        fi
+
+    - name: Upload logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: repro-duckdb-discovery
+        if-no-files-found: warn
+        path: repro/duckdb-discovery-sigsegv/out/
