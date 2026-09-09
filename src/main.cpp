@@ -42,6 +42,7 @@
 #include "discovery/function_info.hpp"
 #include "reporting/console_reporter.hpp"
 #include "reporting/json_reporter.hpp"
+#include "reporting/tee_reporter.hpp"
 
 using namespace odbc_crusher;
 
@@ -265,8 +266,15 @@ int main(int argc, char** argv) {
         ->check(CLI::IsMember({"console", "json"}));
     
     std::string json_file;
+    // S5: with `-o json` this is where the JSON goes instead of stdout, as
+    // before. With `-o console` it used to be silently ignored; it now means
+    // "and also write the JSON here", so one run produces both reports. That
+    // is what CI wants — see TeeReporter for why running crusher twice was
+    // costing the JSON report its contents on a driver that wedges.
     app.add_option("-f,--file", json_file,
-                   "Write JSON output to FILE instead of stdout");
+                   "Write JSON output to FILE. With -o console, the text "
+                   "report still goes to stdout and the JSON is written here "
+                   "as well, so one run produces both.");
 
     // G2: run a subset. The e2e harness worked around the absence of this
     // with a comment ("just ConnectionTests category isn't filterable from
@@ -322,6 +330,13 @@ int main(int argc, char** argv) {
         
         if (output_format == "json") {
             reporter = std::make_unique<reporting::JsonReporter>(json_file);
+        } else if (!json_file.empty()) {
+            // S5: text to stdout and JSON to the file, from one run. The JSON
+            // child goes first so a SIGKILL arriving mid-report has already
+            // updated the file on disk.
+            reporter = std::make_unique<reporting::TeeReporter>(
+                std::make_unique<reporting::JsonReporter>(json_file),
+                std::make_unique<reporting::ConsoleReporter>(std::cout, verbose));
         } else {
             reporter = std::make_unique<reporting::ConsoleReporter>(std::cout, verbose);
         }

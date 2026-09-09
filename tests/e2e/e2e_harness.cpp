@@ -92,11 +92,17 @@ int spawn(const std::string& connection_string,
           const fs::path& stdout_log,        // empty => stdout to null device
           const fs::path& stderr_log,
           bool& timed_out,
-          const std::vector<std::string>& extra_args = {}) {
+          const std::vector<std::string>& extra_args = {},
+          // S5: crusher can now write the console text to stdout and the JSON
+          // to `report_file` in one run, which is what CI does. Every existing
+          // caller wants "json", so that stays the default and only the tee
+          // scenario passes anything else.
+          const std::string& output_format = "json") {
     std::string cmd = quote_arg(CRUSHER_BIN_PATH);
     cmd += ' ';
     cmd += quote_arg(connection_string);
-    cmd += " -o json";
+    cmd += " -o ";
+    cmd += output_format;
     for (const auto& arg : extra_args) {      // G2/G3
         cmd += ' ';
         cmd += quote_arg(arg);
@@ -380,6 +386,42 @@ CrusherRun run_crusher_with_args(const std::string& connection_string,
         in.close();
         remove_with_retry(tmp);        // D93
     }
+    return out;
+}
+
+CrusherRun run_crusher_tee(const std::string& connection_string) {
+    // S5: `-o console -v -f FILE` — the text to stdout and the JSON to the
+    // file, from one run. This is exactly the invocation `run-crusher` makes,
+    // so a scenario asserting on it is asserting on what CI does rather than
+    // on an approximation of it.
+    CrusherRun out;
+
+    auto json_path = unique_tmp_json();
+    auto stdout_log = json_path;
+    stdout_log.replace_extension(".stdout.log");
+    auto stderr_log = json_path;
+    stderr_log.replace_extension(".stderr.log");
+
+    remove_with_retry(json_path);      // D93
+    remove_with_retry(stdout_log);
+    remove_with_retry(stderr_log);
+
+    out.exit_code = spawn(connection_string, json_path, stdout_log, stderr_log,
+                          out.timed_out, {"-v"}, "console");
+    out.launched = true;
+    out.raw_stderr = slurp_and_remove(stderr_log);
+    out.raw_stdout = slurp_and_remove(stdout_log);
+
+    std::ifstream in(json_path);
+    if (in.is_open()) {
+        try {
+            in >> out.report;
+        } catch (const std::exception&) {
+            out.report = nlohmann::json::object();
+        }
+    }
+    in.close();
+    remove_with_retry(json_path);
     return out;
 }
 

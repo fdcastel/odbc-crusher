@@ -19,10 +19,10 @@
 name: Run odbc-crusher against a driver
 description: >
   Resolves the latest successful master CI run, downloads the matching
-  OS-specific odbc-crusher artifact, runs it twice (verbose text and
-  JSON), and uploads both reports plus the caller's actual_version.txt
-  as a single artifact. Caller supplies the connection string and the
-  report artifact suffix.
+  OS-specific odbc-crusher artifact, runs it once - the verbose text to
+  stdout and the JSON to a file together (S5) - and uploads both reports
+  plus the caller's actual_version.txt as a single artifact. Caller
+  supplies the connection string and the report artifact suffix.
 
 inputs:
   artifact-name:
@@ -104,7 +104,7 @@ runs:
         ls -laR crusher-bin/
         echo "CRUSHER_BIN=$BIN" >> "$GITHUB_ENV"
 
-    - name: Run odbc-crusher (verbose text)
+    - name: Run odbc-crusher (text to stdout, JSON to file, one run)
       shell: bash
       # continue-on-error preserved per stress-test workflow's intent —
       # the deliverable is the artifact, not the workflow status; real
@@ -114,11 +114,24 @@ runs:
       # leaves crusher's cleanup path stuck) so the workflow doesn't
       # hold a runner for the 6h job-default. 10m hard cap is enough
       # for a real run (typical: <2m) but short enough to surface hangs
-      # as a deliberate signal in the partial text report. SIGTERM at
-      # 9:30 gives crusher a chance to flush; SIGKILL at 10:00 is
-      # uncatchable so a wedged signal handler can't keep the runner
-      # alive past the cap. Composite action steps don't support
-      # `timeout-minutes`, hence the shell-level wrap.
+      # as a deliberate signal in the partial report. SIGTERM at 9:30
+      # gives crusher a chance to flush; SIGKILL at 10:00 is uncatchable
+      # so a wedged signal handler can't keep the runner alive past the
+      # cap. Composite action steps don't support `timeout-minutes`,
+      # hence the shell-level wrap.
+      #
+      # S5: this used to be two steps — one run for the text, a second for
+      # the JSON. Two runs of identical work, and the second one meeting a
+      # server the first had already wedged. On the U2 Linux run against
+      # Firebird 3.0.1.21 that cost the JSON report almost everything: the
+      # text captured ten categories including a SIGSEGV, the JSON captured
+      # one. The JSON is the half that matters — every triage, every report
+      # diff and every number in IMPROVEMENT_PLAN_V2 is read from it.
+      #
+      # `-f` alongside the default `-o console` now means "and also write the
+      # JSON here", so one run produces both and the JSON is as complete as
+      # the text by construction. It also halves this job's wall clock for
+      # every driver in the manifest.
       continue-on-error: true
       run: |
         if [[ -n "${{ inputs.ld-library-path }}" ]]; then
@@ -148,15 +161,14 @@ runs:
         # run. `set +e` and PIPESTATUS because the pipe into tee would
         # otherwise report tee's status, which is always 0.
         # S2: stderr goes to its own file rather than being folded into the
-        # report. crusher now names each probe on stderr before running it, so
+        # report. crusher names each probe on stderr before running it, so
         # this file is the answer to "which probe wedged" — the question the
         # H17 pair's first two runs could not answer, because both were killed
         # at the cap and the block-buffered stdout was discarded. Keeping the
         # two apart also stops 200 progress lines landing in the middle of the
         # human-readable report on every healthy run.
         set +e
-        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -v \
-          2>crusher-progress.txt | tee crusher-report.txt
+        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -v           -f crusher-report.json           2>crusher-progress.txt | tee crusher-report.txt
         CRUSHER_RC=${PIPESTATUS[0]}
         set -e
         echo "crusher exit code: $CRUSHER_RC"
@@ -165,53 +177,12 @@ runs:
         case "$CRUSHER_RC" in
           0) ;;
           124|137)
-            echo "::warning::crusher was KILLED at the 570s timeout (exit $CRUSHER_RC) — the driver wedged. The report below is partial." ;;
+            echo "::warning::crusher was KILLED at the 570s timeout (exit $CRUSHER_RC) — the driver wedged. Both reports are partial, and crusher-progress.txt names the last probe it started." ;;
           2)
             echo "::warning::crusher could not connect (exit 2) — see the report for the ODBC diagnostics." ;;
           *)
             echo "::warning::crusher exited $CRUSHER_RC, which is not a probe result — the run did not complete normally." ;;
         esac
-
-    - name: Run odbc-crusher (JSON)
-      shell: bash
-      continue-on-error: true
-      run: |
-        if [[ -n "${{ inputs.ld-library-path }}" ]]; then
-          export LD_LIBRARY_PATH="${{ inputs.ld-library-path }}:${LD_LIBRARY_PATH:-}"
-        fi
-        # F10: this action has a macOS branch for artifact selection and
-        # then called GNU `timeout` unconditionally, which a macOS runner
-        # does not have — so it advertised support it did not have. Latent
-        # today (there is no macOS stress-test job) and cheaper to fix than
-        # to rediscover when someone adds one. `gtimeout` is coreutils via
-        # Homebrew; falling through to no timeout at all is wrong, because
-        # the 570s bound is what stops a wedged driver holding the runner.
-        run_with_timeout() {
-          if command -v timeout >/dev/null 2>&1; then
-            timeout --kill-after=30 570 "$@"
-          elif command -v gtimeout >/dev/null 2>&1; then
-            gtimeout --kill-after=30 570 "$@"
-          else
-            echo "::error::Neither timeout nor gtimeout is available; refusing to run a driver unbounded"
-            return 1
-          fi
-        }
-        # F12: see the text run above. Same reasoning, no pipe to work around.
-        # S2: append this run's progress to the same file, after a separator —
-        # the JSON run is the one whose report vanishes entirely when it is
-        # killed, so it is the run that most needs a breadcrumb.
-        set +e
-        { echo; echo "===== JSON run ====="; } >>crusher-progress.txt
-        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -o json -f crusher-report.json \
-          2>>crusher-progress.txt
-        CRUSHER_RC=$?
-        set -e
-        echo "crusher exit code: $CRUSHER_RC"
-        echo "--- last 15 lines of stderr (progress + diagnostics) ---"
-        tail -15 crusher-progress.txt || true
-        if [ "$CRUSHER_RC" -ne 0 ]; then
-          echo "::warning::crusher exited $CRUSHER_RC on the JSON run; the report may be partial or missing. crusher-progress.txt names the last probe it started."
-        fi
 
     - name: Upload report
       uses: actions/upload-artifact@v4

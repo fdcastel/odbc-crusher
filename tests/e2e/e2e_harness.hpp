@@ -53,6 +53,13 @@ CrusherRun run_crusher_with_args(const std::string& connection_string,
 CrusherRun run_crusher_stdout(const std::string& connection_string,
                               const std::vector<std::string>& extra_args = {});
 
+// S5: `-o console -v -f <tmp>` — the verbose text to stdout and the JSON to a
+// file, from a single run. This is the invocation `run-crusher` makes, so a
+// scenario using this is asserting on what CI does rather than on something
+// shaped like it. `report` is read from the file and `raw_stdout` carries the
+// text, so a scenario can check the two halves against each other.
+CrusherRun run_crusher_tee(const std::string& connection_string);
+
 // Probe whether the mock driver is loadable on this host. Skips
 // scenarios with GTEST_SKIP() when false. Caches the result.
 bool has_runnable_mock();

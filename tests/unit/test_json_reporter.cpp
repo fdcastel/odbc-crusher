@@ -13,12 +13,16 @@
 
 #include <nlohmann/json.hpp>
 
+#include "reporting/console_reporter.hpp"
 #include "reporting/json_reporter.hpp"
+#include "reporting/tee_reporter.hpp"
 #include "tests/test_base.hpp"
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -447,4 +451,80 @@ TEST_F(JsonReporterFixture, RedactionMatchesWholeKeywordsOnly) {
     EXPECT_EQ(conn.find("new_one"), std::string::npos) << conn;
     EXPECT_NE(conn.find("NEWPWD=***"), std::string::npos) << conn;
     EXPECT_NE(conn.find("DB=keepme"), std::string::npos) << conn;
+}
+
+// ── S5: one run, both reports ────────────────────────────────────────────
+//
+// run-crusher used to invoke crusher twice, once per format. On the U2 Linux
+// run against Firebird 3.0.1.21 the first invocation wedged the server and the
+// second one — the JSON one, the machine-readable one every triage reads —
+// stopped after a single category where the text had captured ten.
+//
+// TeeReporter removes the second invocation. What has to hold is that neither
+// child loses anything by sharing a run: the JSON file is byte-for-byte what a
+// JSON-only run would have written, and the console child still writes its
+// text. Asserted by driving the tee and a lone JsonReporter through the same
+// calls and comparing the documents.
+TEST_F(JsonReporterFixture, TeeWritesTheSameJsonAsAJsonOnlyRun) {
+    auto solo_path = path_;
+    solo_path += ".solo";
+
+    const auto drive = [](reporting::Reporter& r) {
+        r.report_start("Driver={X};PWD=secret;");
+        r.report_category("Cat A", {make("t1", tests::TestStatus::PASS),
+                                    make("t2", tests::TestStatus::FAIL)});
+        r.report_category("Cat B", {make("t3", tests::TestStatus::PASS)});
+        r.report_summary(3, 2, 1, 0, 0, 0, std::chrono::microseconds(7));
+        r.report_end();
+    };
+
+    {
+        reporting::JsonReporter solo(solo_path.string());
+        drive(solo);
+    }
+    {
+        std::ostringstream swallowed;
+        reporting::TeeReporter tee(
+            std::make_unique<reporting::JsonReporter>(path_.string()),
+            std::make_unique<reporting::ConsoleReporter>(swallowed, false));
+        drive(tee);
+        EXPECT_FALSE(swallowed.str().empty())
+            << "the console child wrote nothing, so the tee is not forwarding "
+               "to both";
+    }
+
+    nlohmann::json solo_json;
+    { std::ifstream in(solo_path); ASSERT_TRUE(in.is_open()); in >> solo_json; }
+    auto teed_json = read_back();
+
+    // The timestamp is wall-clock and may differ by a second between the two
+    // runs; nothing else may.
+    solo_json.erase("timestamp");
+    teed_json.erase("timestamp");
+    EXPECT_EQ(solo_json, teed_json)
+        << "teed:\n" << teed_json.dump(1) << "\nsolo:\n" << solo_json.dump(1);
+
+    std::error_code ec;
+    fs::remove(solo_path, ec);
+}
+
+// The console child must not be able to take the JSON down with it, and the
+// JSON is written first for exactly that reason — a run killed mid-report has
+// already updated the file on disk.
+TEST_F(JsonReporterFixture, TeeWritesTheJsonBeforeTheConsole) {
+    std::ostringstream text;
+    reporting::TeeReporter tee(
+        std::make_unique<reporting::JsonReporter>(path_.string()),
+        std::make_unique<reporting::ConsoleReporter>(text, false));
+    tee.report_start("Driver={X};");
+    tee.report_category("Cat A", {make("t1", tests::TestStatus::PASS)});
+
+    // No report_end() — this is the state a SIGKILL leaves. The snapshot is
+    // already on disk, and it carries the category.
+    auto j = read_back();
+    ASSERT_TRUE(j.contains("categories")) << j.dump(1);
+    ASSERT_EQ(j["categories"].size(), 1u) << j.dump(1);
+    EXPECT_EQ(j["categories"][0].value("name", std::string{}), "Cat A");
+    EXPECT_FALSE(j.value("complete", true))
+        << "a snapshot must not claim to be a finished report";
 }

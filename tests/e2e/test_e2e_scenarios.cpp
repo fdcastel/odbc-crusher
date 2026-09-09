@@ -2356,3 +2356,54 @@ TEST_F(CrusherE2EFixture, ColumnWiseBindingPassesWhenTheStrideIsRight) {
     EXPECT_EQ(t->value("status", std::string{}), "PASS")
         << t->value("actual", std::string{});
 }
+
+// ── S5: one run, both reports ────────────────────────────────────────────
+//
+// `run-crusher` used to invoke crusher twice, once per format. On the U2 Linux
+// run against Firebird 3.0.1.21 the first invocation left the server wedged
+// and the second — the JSON one, which every triage and every
+// `compare_reports.py` diff reads — stopped after a single category where the
+// text had captured ten. The half that survived worst was the half that
+// mattered.
+//
+// What has to hold now: `-f` alongside the default `-o console` produces both,
+// and they agree. A tee that quietly dropped one child, or wrote a JSON
+// covering fewer categories than the text, would reintroduce the whole defect
+// while looking fine.
+TEST_F(CrusherE2EFixture, OneRunProducesBothTheTextAndTheJson) {
+    auto run = run_crusher_tee(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;");
+    ASSERT_TRUE(run.launched);
+
+    // The text half.
+    EXPECT_NE(run.raw_stdout.find("SUMMARY"), std::string::npos)
+        << "stdout carried no console report; the tee dropped its text child";
+    EXPECT_NE(run.raw_stdout.find("Connection Tests"), std::string::npos)
+        << run.raw_stdout.substr(0, 400);
+
+    // The JSON half, from the same run.
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    EXPECT_TRUE(run.report.value("complete", false))
+        << "the JSON was left marked incomplete by a run that finished";
+
+    // And they describe the same run. Every category named in the JSON has to
+    // appear in the text: the failure this guards against is a JSON that
+    // stopped early while the text went on, which is exactly what the two-run
+    // design produced.
+    ASSERT_TRUE(run.report.contains("categories"));
+    ASSERT_GT(run.report["categories"].size(), 20u)
+        << "the JSON covers far fewer categories than a healthy run has";
+    for (const auto& category : run.report["categories"]) {
+        const auto name = category.value("name", std::string{});
+        EXPECT_NE(run.raw_stdout.find(name), std::string::npos)
+            << "category '" << name << "' is in the JSON but not the text";
+    }
+
+    // G1 still holds: progress chatter goes to stderr, and the text report to
+    // stdout. The tee must not have crossed them.
+    EXPECT_NE(run.raw_stderr.find("->"), std::string::npos)
+        << "no per-probe progress on stderr (S2)";
+    EXPECT_EQ(run.raw_stdout.find("  -> "), std::string::npos)
+        << "progress chatter leaked into the text report";
+}
