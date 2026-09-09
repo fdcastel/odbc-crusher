@@ -729,15 +729,30 @@ jobs:
         conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.FIREBIRD_LIB_DIR }}
         crusher-run-id: ${{ needs.resolve-crusher.outputs.run-id }}
-        # P16: 3.0.1.21 never returns from SQLCancel on an idle statement,
-        # and Cancellation Tests is category 11 of 24 - without this the run
-        # is killed at the 570s cap and categories 12 to 24 never execute,
-        # including Unicode Tests where #288 lives. Skipped on **both** halves
-        # so the two reports stay comparable; the hang itself is the finding,
-        # recorded as IMPROVEMENT_PLAN_V2 P16, and Cancellation Tests remains
-        # covered for both builds on Windows.
+        # P16: Descriptor Tests SIGSEGVs 3.0.1.21 on Linux inside
+        # test_copy_desc, and on Linux the connection does not survive it -
+        # the *next* ODBC call on that connection never returns, so the run is
+        # killed at the 570s cap and everything after category 10 is lost.
+        #
+        # The first attempt excluded Cancellation Tests, because that is where
+        # the first run hung. That was reading the symptom: with Cancellation
+        # skipped the run hung on the first probe of the next category
+        # instead - `SQLSTATE Validation / test_execute_without_prepare` - and
+        # both hangs are immediately preceded in the progress log by
+        # `Descriptor Tests / test_copy_desc`. The hang follows the crash, so
+        # the category that has to go is the one that crashes.
+        #
+        # Skipped on **both** halves so the two reports stay comparable.
+        # Nothing is lost by it: P6 and P7's evidence is already recorded from
+        # the Windows pair *and* from the earlier Linux run that reached
+        # Descriptor Tests, and the crash itself is recorded as a finding.
+        # Both categories remain covered for both builds on Windows.
+        #
+        # The real fix is S7 - re-establish the connection after a category
+        # crashes, so one crashed category costs one category. Until that
+        # lands this is what makes categories 11 to 24 observable on Linux.
         exclude-categories: |
-          Cancellation Tests
+          Descriptor Tests
 
   # ── Firebird 3.5.1-rc2 (master + 13 PRs) on Linux ───────────
   # Driver / version / source: see `.github/drivers.json` -> drivers["firebird-patched-linux"]
@@ -821,15 +836,30 @@ jobs:
         conn-string: ${{ env.CONN_STRING }}
         ld-library-path: ${{ env.FIREBIRD_LIB_DIR }}
         crusher-run-id: ${{ needs.resolve-crusher.outputs.run-id }}
-        # P16: 3.0.1.21 never returns from SQLCancel on an idle statement,
-        # and Cancellation Tests is category 11 of 24 - without this the run
-        # is killed at the 570s cap and categories 12 to 24 never execute,
-        # including Unicode Tests where #288 lives. Skipped on **both** halves
-        # so the two reports stay comparable; the hang itself is the finding,
-        # recorded as IMPROVEMENT_PLAN_V2 P16, and Cancellation Tests remains
-        # covered for both builds on Windows.
+        # P16: Descriptor Tests SIGSEGVs 3.0.1.21 on Linux inside
+        # test_copy_desc, and on Linux the connection does not survive it -
+        # the *next* ODBC call on that connection never returns, so the run is
+        # killed at the 570s cap and everything after category 10 is lost.
+        #
+        # The first attempt excluded Cancellation Tests, because that is where
+        # the first run hung. That was reading the symptom: with Cancellation
+        # skipped the run hung on the first probe of the next category
+        # instead - `SQLSTATE Validation / test_execute_without_prepare` - and
+        # both hangs are immediately preceded in the progress log by
+        # `Descriptor Tests / test_copy_desc`. The hang follows the crash, so
+        # the category that has to go is the one that crashes.
+        #
+        # Skipped on **both** halves so the two reports stay comparable.
+        # Nothing is lost by it: P6 and P7's evidence is already recorded from
+        # the Windows pair *and* from the earlier Linux run that reached
+        # Descriptor Tests, and the crash itself is recorded as a finding.
+        # Both categories remain covered for both builds on Windows.
+        #
+        # The real fix is S7 - re-establish the connection after a category
+        # crashes, so one crashed category costs one category. Until that
+        # lands this is what makes categories 11 to 24 observable on Linux.
         exclude-categories: |
-          Cancellation Tests
+          Descriptor Tests
 
   mock-driver:
     if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'mock-driver' }}

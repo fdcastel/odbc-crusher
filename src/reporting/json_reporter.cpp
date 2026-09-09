@@ -2,6 +2,7 @@
 #include "odbc_crusher/version.hpp"
 #include "utf8_sanitize.hpp"
 #include <cctype>
+#include <algorithm>
 #include <ctime>
 #include <filesystem>
 #include <iostream>
@@ -169,7 +170,32 @@ void JsonReporter::report_category(const std::string& category_name,
     categories_.push_back(category);
 
     // F2: persist what we have, so a killed run still leaves a usable report.
-    maybe_write_snapshot();
+    //
+    // S6: a category carrying an ERROR bypasses the rate limiter. The limiter
+    // exists so that 23 categories completing in quick succession do not
+    // rewrite the whole document 23 times, and on a healthy run that costs
+    // nothing because report_end() writes everything at the end. On a run that
+    // is *killed* there is no report_end(), and everything since the last
+    // snapshot is lost — which is how the U2 Linux run against Firebird
+    // 3.0.1.21 produced a JSON holding one category when the text held ten.
+    // Nine categories had completed inside a second of each other, so the
+    // limiter skipped every one of their writes, and then the driver wedged
+    // and nothing else was ever written.
+    //
+    // An ERROR means a category crashed the driver, which is both the evidence
+    // most worth keeping and a good predictor that the run is about to end
+    // badly. One extra write there is free by comparison.
+    const bool category_had_error =
+        std::any_of(results.begin(), results.end(), [](const tests::TestResult& r) {
+            return r.status == tests::TestStatus::ERR;
+        });
+    if (category_had_error) {
+        write_snapshot(false);
+        wrote_snapshot_ = true;
+        last_snapshot_ = std::chrono::steady_clock::now();
+    } else {
+        maybe_write_snapshot();
+    }
 }
 
 void JsonReporter::report_summary(size_t total_tests, size_t passed, size_t failed,

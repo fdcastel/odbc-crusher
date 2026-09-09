@@ -528,3 +528,46 @@ TEST_F(JsonReporterFixture, TeeWritesTheJsonBeforeTheConsole) {
     EXPECT_FALSE(j.value("complete", true))
         << "a snapshot must not claim to be a finished report";
 }
+
+// ── S6: a crashed category is written immediately ────────────────────────
+//
+// The rate limiter keeps 23 fast categories from rewriting the whole document
+// 23 times, and on a healthy run that costs nothing because report_end()
+// writes everything. On a run that is *killed* there is no report_end(), and
+// everything since the last snapshot is gone.
+//
+// That is not hypothetical. The U2 Linux run against Firebird 3.0.1.21
+// produced a JSON holding one category where the text held ten: nine
+// categories completed inside a second of each other, the limiter skipped
+// every one of their writes, and then the driver wedged for the remaining
+// 570 seconds and nothing else was ever written. The crash that explained the
+// whole run was among the nine that were lost.
+TEST_F(JsonReporterFixture, ACrashedCategoryIsSnapshottedEvenInsideTheRateLimit) {
+    reporting::JsonReporter rep(path_.string());
+    rep.report_start("Driver={X}");
+
+    // First category always writes, and starts the limiter's clock.
+    rep.report_category("First", {make("t1", tests::TestStatus::PASS)});
+    // Second, well inside the one-second window, is skipped as designed.
+    rep.report_category("Second", {make("t2", tests::TestStatus::PASS)});
+    {
+        const auto j = read_back();
+        ASSERT_EQ(j["categories"].size(), 1u)
+            << "the rate limiter is not limiting; this case would prove "
+               "nothing about the bypass below";
+    }
+
+    // Third carries a crash — and must reach disk despite the limiter, along
+    // with the category the limiter had skipped.
+    auto crash = make("Third (DRIVER CRASH)", tests::TestStatus::ERR);
+    crash.severity = tests::Severity::CRITICAL;
+    rep.report_category("Third", {make("t3", tests::TestStatus::PASS), crash});
+
+    const auto j = read_back();
+    ASSERT_EQ(j["categories"].size(), 3u)
+        << "a crashed category did not force a snapshot: " << j.dump(1);
+    EXPECT_EQ(j["categories"][1].value("name", std::string{}), "Second")
+        << "the skipped category was not carried along by the forced write";
+    EXPECT_EQ(j["categories"][2].value("name", std::string{}), "Third");
+    EXPECT_FALSE(j.value("complete", true));
+}
