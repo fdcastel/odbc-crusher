@@ -260,6 +260,33 @@ std::string parse_failure_detail(const fs::path& file,
     return out;
 }
 
+
+// D93: delete a temp file, allowing for a handle that is closing.
+//
+// `fs::remove(p, ec)` with `ec` discarded was the whole of this, and on
+// Windows that is a silent leak: a delete is refused while any handle to the
+// file is open, and TerminateProcess returns *before* the kernel has finished
+// closing the handles of the process it killed. The refusal was dropped, the
+// file stayed, and AWedgedCrusherIsKilledRatherThanWaitedOn reported it as an
+// orphan - correctly, 3 runs in 6.
+//
+// A second of retries is generous for a handle already being torn down and
+// far short of a live orphan: the bug that assertion exists for is a crusher
+// left running with `Latency=30s`, still holding its stderr file thirty
+// seconds later. Returns false when the file is still there at the end, so
+// the caller can say so instead of leaking in silence.
+bool remove_with_retry(const fs::path& p) {
+    using namespace std::chrono;
+    const auto give_up_at = steady_clock::now() + seconds(1);
+    for (;;) {
+        std::error_code ec;
+        fs::remove(p, ec);
+        if (!fs::exists(p, ec)) return true;
+        if (steady_clock::now() >= give_up_at) return false;
+        std::this_thread::sleep_for(milliseconds(20));
+    }
+}
+
 std::string slurp_and_remove(const fs::path& p) {
     std::error_code ec;
     if (!fs::exists(p, ec)) return {};
@@ -267,7 +294,13 @@ std::string slurp_and_remove(const fs::path& p) {
     std::stringstream ss;
     ss << in.rdbuf();
     in.close();
-    fs::remove(p, ec);
+    if (!remove_with_retry(p)) {                        // D93
+        // Reported into the stderr the caller is about to read, because a
+        // harness that cannot delete its own temp file is describing a child
+        // that outlived its kill - which is a finding, not housekeeping.
+        ss << "\n[harness] could not delete " << p.string()
+           << " - something still holds it open.";
+    }
     return ss.str();
 }
 
@@ -281,8 +314,8 @@ CrusherRun run_crusher(const std::string& connection_string) {
     stderr_log.replace_extension(".stderr.log");
 
     std::error_code ec;
-    fs::remove(tmp, ec);
-    fs::remove(stderr_log, ec);
+    remove_with_retry(tmp);            // D93
+    remove_with_retry(stderr_log);
 
     out.exit_code = spawn(connection_string, tmp, fs::path{}, stderr_log,
                           out.timed_out);
@@ -310,7 +343,7 @@ CrusherRun run_crusher(const std::string& connection_string) {
             out.report = nlohmann::json{};
         }
         in.close();
-        fs::remove(tmp, ec);
+        remove_with_retry(tmp);        // D93
     }
 
     return out;
@@ -325,8 +358,8 @@ CrusherRun run_crusher_with_args(const std::string& connection_string,
     stderr_log.replace_extension(".stderr.log");
 
     std::error_code ec;
-    fs::remove(tmp, ec);
-    fs::remove(stderr_log, ec);
+    remove_with_retry(tmp);            // D93
+    remove_with_retry(stderr_log);
 
     out.exit_code = spawn(connection_string, tmp, fs::path{}, stderr_log,
                           out.timed_out, extra_args);
@@ -345,7 +378,7 @@ CrusherRun run_crusher_with_args(const std::string& connection_string,
             out.report = nlohmann::json{};
         }
         in.close();
-        fs::remove(tmp, ec);
+        remove_with_retry(tmp);        // D93
     }
     return out;
 }
@@ -361,8 +394,8 @@ CrusherRun run_crusher_stdout(const std::string& connection_string,
     stderr_log.replace_extension(".stderr.log");
 
     std::error_code ec;
-    fs::remove(stdout_log, ec);
-    fs::remove(stderr_log, ec);
+    remove_with_retry(stdout_log);     // D93
+    remove_with_retry(stderr_log);
 
     out.exit_code = spawn(connection_string, fs::path{}, stdout_log, stderr_log,
                           out.timed_out, extra_args);
