@@ -59,9 +59,26 @@ CellValue read_param_value(
 
     if (param_bind_type == SQL_PARAM_BIND_BY_COLUMN) {
         // Column-wise: stride by element size for data, by sizeof(SQLLEN) for indicator
-        SQLLEN elem_size = c_type_element_size(pb.value_type, pb.buffer_length);
-        if (elem_size <= 0) return std::monostate{};
+        //
+        // U1(a) / #299: `ColumnWiseStride=BufferLength` uses the application's
+        // BufferLength for every C type, including the fixed-length ones where
+        // the specification says it is ignored. An application binding
+        // SQL_C_SLONG with BufferLength=0 - which the spec invites - then gets
+        // a stride of zero and every set reads element 0. Zero is the whole
+        // point here, so this branch admits it where the correct one cannot.
+        SQLLEN elem_size;
+        if (BehaviorController::instance().config().column_wise_stride ==
+            DriverConfig::ColumnWiseStride::BufferLength) {
+            elem_size = pb.buffer_length;
+            if (elem_size < 0) return std::monostate{};
+        } else {
+            elem_size = c_type_element_size(pb.value_type, pb.buffer_length);
+            if (elem_size <= 0) return std::monostate{};
+        }
         data_ptr = base_data + row * static_cast<SQLULEN>(elem_size);
+        // The indicator still steps correctly, deliberately - that is the
+        // reported symptom. Values collapse onto one while NULLs keep moving,
+        // which is why the bug report read as a NULL wandering between rows.
         ind_ptr  = base_ind ? (base_ind + row) : nullptr;
     } else {
         // Row-wise: stride by the struct size (param_bind_type) for both.

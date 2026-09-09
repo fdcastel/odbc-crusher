@@ -2281,3 +2281,59 @@ TEST_F(CrusherE2EFixture, IsolationProbeGradesTheClaimNotTheBehaviour) {
             << "\n  actual: " << t->value("actual", std::string{});
     }
 }
+
+// ── U1(a)/Q1: the stride defect the Firebird pair cannot show ─────────────
+//
+// #299 is a driver that uses the application's `BufferLength` as the
+// column-wise element stride for every C type, including the fixed-length ones
+// where the specification says it is ignored. An application binding
+// `SQL_C_SLONG` with `BufferLength = 0` — which the spec invites, and which
+// applications therefore write — gets a stride of zero, and every parameter
+// set reads element 0.
+//
+// The pair cannot demonstrate it. On 3.0.1.21 #308's executor defect runs only
+// one set at all, so there is no stride to get wrong, and the probe fails
+// earlier for a different reason. Q1's key assertion was therefore correct and
+// untested — the shape AGENTS.md step 6 exists to forbid — until the mock grew
+// a lever for it.
+//
+// What makes this the interesting failure rather than an ordinary one: the
+// execute returns SQL_SUCCESS, `SQL_ATTR_PARAMS_PROCESSED_PTR` says 3, and
+// three rows are in the table. Only their contents are wrong. Before Q1 taught
+// `verify_rows_persisted` to return the key column, the probe checked the
+// `NAME` axis — which strides correctly, because for `SQL_C_CHAR` the
+// BufferLength *is* the element size — and passed.
+TEST_F(CrusherE2EFixture, ColumnWiseBindingCatchesAZeroStride) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;ColumnWiseStride=BufferLength;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Array Parameter Tests",
+                       "test_column_wise_array_binding");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+
+    const auto actual = t->value("actual", std::string{});
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL") << actual;
+    // The keys, named individually. A probe that only counted rows, or only
+    // checked the NAME axis, reports nothing here.
+    EXPECT_NE(actual.find("100, 100, 100"), std::string::npos)
+        << "the collapsed key column was not reported; actual was: " << actual;
+    EXPECT_NE(actual.find("succeeded"), std::string::npos)
+        << "the report has to say the execute succeeded — silent corruption is "
+           "the whole point of this defect; actual was: "
+        << actual;
+}
+
+// The same probe against the same mock with the stride correct. Without this,
+// the case above proves only that *something* makes it fail.
+TEST_F(CrusherE2EFixture, ColumnWiseBindingPassesWhenTheStrideIsRight) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Array Parameter Tests",
+                       "test_column_wise_array_binding");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+    EXPECT_EQ(t->value("status", std::string{}), "PASS")
+        << t->value("actual", std::string{});
+}

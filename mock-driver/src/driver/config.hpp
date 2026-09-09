@@ -37,6 +37,30 @@ struct DriverConfig {
     // identical attempts.
     enum class ConnectDiagnostics { Wellformed, Garbled };
     ConnectDiagnostics connect_diagnostics = ConnectDiagnostics::Wellformed;
+
+    // U1(a) / #299, fixed by Firebird ODBC PR #308. How a column-wise
+    // parameter array is stepped.
+    //
+    // `Correct` strides by the C type's own width for a fixed-length type and
+    // by the application's BufferLength only for the variable-length ones,
+    // which is what the specification says. `BufferLength` uses the
+    // application's value for *every* type - so an application binding
+    // SQL_C_SLONG with BufferLength=0, which the spec says is ignored and
+    // which applications therefore pass, gets a stride of zero and every
+    // parameter set reads element 0.
+    //
+    // This mode exists because the Firebird pair cannot demonstrate the
+    // defect: 3.0.1.21 masks it behind #308's executor defect, where only one
+    // set runs at all, so there is no stride to get wrong. Without a lever
+    // here, Q1's key assertion had no configuration anywhere that could fail
+    // it - the shape AGENTS.md step 6 exists to forbid.
+    //
+    // The indicator array still strides correctly, on purpose: that is the
+    // reported symptom. The values collapse onto one while the NULLs keep
+    // moving, which is why the original bug report read as a NULL wandering
+    // between rows.
+    enum class ColumnWiseStride { Correct, BufferLength };
+    ColumnWiseStride column_wise_stride = ColumnWiseStride::Correct;
     
     // Data types
     std::string types = "AllTypes";

@@ -313,6 +313,12 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         config.connect_diagnostics = DriverConfig::ConnectDiagnostics::Garbled;
     }
 
+    // U1(a): how a column-wise parameter array is stepped.
+    if (to_lower(get_string_value(pairs, "columnwisestride", "correct")) ==
+        "bufferlength") {
+        config.column_wise_stride = DriverConfig::ColumnWiseStride::BufferLength;
+    }
+
 
     // Types
     config.types = get_string_value(pairs, "types", "AllTypes");
