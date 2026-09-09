@@ -328,6 +328,17 @@ TestResult ParameterBindingTests::run_int_to_string_roundtrip(
             const std::string insert_sql = "INSERT INTO " + table_name +
                                            " (ID, VAL) VALUES (?, ?)";
 
+            // D92: the COMMIT below has to be a real one. In autocommit ON
+            // every row was already committed by the INSERT that made it, so
+            // SQLEndTran was a no-op the driver could ignore and `commit`
+            // reported success whatever it would have done - which is why
+            // every probe in this matrix passed under `FailOn=SQLEndTran`.
+            //
+            // Declared outside the try so it covers the commit as well, and
+            // released before the DROP at the end: DDL inside an open
+            // transaction is what A14 exists to avoid.
+            ScopedAutocommitOff txn(conn_.get_handle());
+
             try {
                 core::OdbcStatement stmt(conn_);
                 SQLRETURN rc = SQLPrepare(
@@ -406,6 +417,16 @@ TestResult ParameterBindingTests::run_int_to_string_roundtrip(
             // and the missing rows were then blamed on the bind path.
             const CommitOutcome commit = commit_now();
 
+            // D92: and say when there was no commit to grade. A driver
+            // entitled to decline SQL_AUTOCOMMIT_OFF is not failing this
+            // probe - it tests the bind path - but a reader must be able to
+            // tell "the commit succeeded" from "there was no commit".
+            const std::string txn_note =
+                txn.engaged() ? std::string{}
+                              : std::string(" [driver declined "
+                                            "SQL_AUTOCOMMIT_OFF: the COMMIT "
+                                            "was a no-op and is not graded]");
+
             RowVerification v = verify_rows_persisted(
                 table_name, "ID", "VAL", kRowCount);
 
@@ -413,7 +434,7 @@ TestResult ParameterBindingTests::run_int_to_string_roundtrip(
                 result.status = TestStatus::FAIL;
                 result.actual = "verify_rows_persisted failed: " + v.diagnostic +
                                 " (count=" + std::to_string(v.actual_count) +
-                                ", " + commit.summary + ")";
+                                ", " + commit.summary + ")" + txn_note;
                 result.suggestion = commit
                     ? "Rows did not persist after SQL_SUCCESS INSERTs — this is the "
                       "Firebird #161 silent-corruption shape. Check the driver's "
@@ -507,6 +528,17 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
             const std::string insert_sql = "INSERT INTO " + table_name +
                                            " (ID, VAL) VALUES (?, ?)";
 
+            // D92: the COMMIT below has to be a real one. In autocommit ON
+            // every row was already committed by the INSERT that made it, so
+            // SQLEndTran was a no-op the driver could ignore and `commit`
+            // reported success whatever it would have done - which is why
+            // every probe in this matrix passed under `FailOn=SQLEndTran`.
+            //
+            // Declared outside the try so it covers the commit as well, and
+            // released before the DROP at the end: DDL inside an open
+            // transaction is what A14 exists to avoid.
+            ScopedAutocommitOff txn(conn_.get_handle());
+
             try {
                 core::OdbcStatement stmt(conn_);
                 SQLRETURN rc = SQLPrepare(
@@ -581,13 +613,23 @@ TestResult ParameterBindingTests::run_float_to_string_roundtrip(
             // and the missing rows were then blamed on the bind path.
             const CommitOutcome commit = commit_now();
 
+            // D92: and say when there was no commit to grade. A driver
+            // entitled to decline SQL_AUTOCOMMIT_OFF is not failing this
+            // probe - it tests the bind path - but a reader must be able to
+            // tell "the commit succeeded" from "there was no commit".
+            const std::string txn_note =
+                txn.engaged() ? std::string{}
+                              : std::string(" [driver declined "
+                                            "SQL_AUTOCOMMIT_OFF: the COMMIT "
+                                            "was a no-op and is not graded]");
+
             RowVerification v = verify_rows_persisted(
                 table_name, "ID", "VAL", kRowCount);
 
             if (!v.ok) {
                 result.status = TestStatus::FAIL;
                 result.actual = "verify_rows_persisted failed: " + v.diagnostic +
-                                " (" + commit.summary + ")";
+                                " (" + commit.summary + ")" + txn_note;
                 result.suggestion = commit
                     ? "Rows did not persist — Firebird #161 silent-corruption shape. "
                       "Check driver's " + c_type_name + " → " + sql_type_name + " path."
@@ -1779,6 +1821,11 @@ TestResult ParameterBindingTests::test_param_rebind_per_row_row_count() {
             int execute_errors = 0;
             std::string first_error;
 
+            // D92: without this the COMMIT below is a no-op in autocommit ON,
+            // and the probe cannot tell a driver that committed from one that
+            // refused to.
+            ScopedAutocommitOff txn(conn_.get_handle());
+
             try {
                 core::OdbcStatement stmt(conn_);
                 SQLRETURN rc = SQLPrepare(
@@ -1838,6 +1885,14 @@ TestResult ParameterBindingTests::test_param_rebind_per_row_row_count() {
             // and the missing rows were then blamed on the bind path.
             const CommitOutcome commit = commit_now();
 
+            // D92: and say when there was no commit to grade - see the
+            // round-trip helpers above.
+            const std::string txn_note =
+                txn.engaged() ? std::string{}
+                              : std::string(" [driver declined "
+                                            "SQL_AUTOCOMMIT_OFF: the COMMIT "
+                                            "was a no-op and is not graded]");
+
             RowVerification v = verify_rows_persisted(
                 "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kRowCount);
 
@@ -1848,7 +1903,7 @@ TestResult ParameterBindingTests::test_param_rebind_per_row_row_count() {
                        << " (count=" << v.actual_count
                        << ", fetched_rows=" << v.actual_values.size()
                        << ", execute_errors=" << execute_errors
-                       << ", " << commit.summary << ")";
+                       << ", " << commit.summary << ")" << txn_note;
                 result.actual = actual.str();
                 if (!first_error.empty()) result.diagnostic = first_error;
                 result.suggestion = commit
@@ -2035,6 +2090,9 @@ TestResult ParameterBindingTests::test_param_batch_then_single_row_tail() {
             bool tail_executed = false;
             std::string failure_diag;
 
+            // D92 - see test_param_rebind_per_row_row_count.
+            ScopedAutocommitOff txn(conn_.get_handle());
+
             try {
                 core::OdbcStatement stmt(conn_);
 
@@ -2141,6 +2199,15 @@ TestResult ParameterBindingTests::test_param_batch_then_single_row_tail() {
             // and the missing rows were then blamed on the bind path.
             const CommitOutcome commit = commit_now();
 
+
+            // D92: and say when there was no commit to grade - see the
+            // round-trip helpers above.
+            const std::string txn_note =
+                txn.engaged() ? std::string{}
+                              : std::string(" [driver declined "
+                                            "SQL_AUTOCOMMIT_OFF: the COMMIT "
+                                            "was a no-op and is not graded]");
+
             RowVerification v = verify_rows_persisted(
                 "ODBC_TEST_ROUNDTRIP", "ID", "VAL", kTotalRows);
 
@@ -2151,7 +2218,7 @@ TestResult ParameterBindingTests::test_param_batch_then_single_row_tail() {
                        << " tail_executed=" << tail_executed
                        << " count=" << v.actual_count
                        << " expected=" << kTotalRows
-                       << " " << commit.summary
+                       << " " << commit.summary << txn_note
                        << " verify_diag=" << v.diagnostic;
                 result.actual = actual.str();
                 if (!failure_diag.empty()) result.diagnostic = failure_diag;

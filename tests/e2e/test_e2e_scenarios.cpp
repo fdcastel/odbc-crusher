@@ -1326,7 +1326,6 @@ TEST_F(CrusherE2EFixture, FailedCommitIsBlamedOnTheCommitNotTheBindPath) {
     ASSERT_TRUE(run.launched);
     ASSERT_TRUE(run.report.contains("categories"));
 
-    int reached = 0;
     for (const char* probe : {"test_bindparam_int_to_varchar_roundtrip",
                               "test_param_rebind_per_row_row_count",
                               "test_param_batch_then_single_row_tail"}) {
@@ -1337,13 +1336,19 @@ TEST_F(CrusherE2EFixture, FailedCommitIsBlamedOnTheCommitNotTheBindPath) {
         const auto actual = t->value("actual", std::string{});
         const auto suggestion = t->value("suggestion", std::string{});
 
-        if (status == "PASS") {
-            // The driver manager did not forward the commit, so there was no
-            // failure to attribute. Nothing to assert here.
-            continue;
-        }
-        ++reached;
-        EXPECT_EQ(status, "FAIL") << probe << ": " << actual;
+        // D92: this used to `continue` on a PASS, on the reading that the
+        // driver manager had not forwarded the commit and there was nothing
+        // to attribute. The real reason was that all three probes ran in
+        // autocommit ON, where SQLEndTran is a no-op - so all three always
+        // passed, the `reached` counter this loop kept was **0 of 3**, and
+        // every assertion below was dead code on every platform.
+        //
+        // They open a transaction now, so the manager has to forward the
+        // commit and a PASS is a genuine disagreement.
+        EXPECT_EQ(status, "FAIL")
+            << probe << " passed under FailOn=SQLEndTran, which means its "
+                        "COMMIT was not forwarded or not graded: " << actual;
+        if (status != "FAIL") continue;
 
         // The commit's outcome must be in the report at all - A22.
         EXPECT_NE(actual.find("SQLEndTran(SQL_COMMIT) rc=-1"), std::string::npos)
@@ -1359,9 +1364,6 @@ TEST_F(CrusherE2EFixture, FailedCommitIsBlamedOnTheCommitNotTheBindPath) {
                         "commit failure: " << suggestion;
     }
 
-    std::cout << "[ info ] " << reached
-              << " of 3 persistence probes had their commit forwarded to the "
-                 "driver on this platform" << std::endl;
 }
 
 // ── A27: a discarded SQLGetData return code produced a false PASS ─────────

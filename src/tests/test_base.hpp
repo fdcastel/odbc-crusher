@@ -177,6 +177,66 @@ private:
     bool have_saved_ = false;
 };
 
+// D92: hold a transaction open for the duration of a persistence probe.
+//
+// The mirror of ScopedAutocommitOn above, and the reason it was needed:
+// probes that INSERT, COMMIT and then verify persistence were running in
+// autocommit ON, where SQLEndTran(SQL_COMMIT) is a no-op - every row was
+// already committed by the INSERT that made it. `commit_now()` therefore
+// reported success whatever the driver would have done with a real commit,
+// and A22's attribution machinery had nothing to attribute. Under
+// `FailOn=SQLEndTran` all three probes the e2e scenario watches passed.
+//
+// `engaged()` says whether the transaction was actually opened. A driver
+// entitled to decline SQL_AUTOCOMMIT_OFF is not failing this probe, which
+// tests the bind path; the probe carries on and reports that the commit could
+// not be exercised, rather than grading a driver on something else.
+class ScopedAutocommitOff {
+public:
+    explicit ScopedAutocommitOff(SQLHDBC hdbc) : hdbc_(hdbc) {
+        // A14's lesson, applied the other way round: a failed read must not
+        // be mistaken for a value. Default to ON - the state a connection is
+        // in unless someone changed it - and only restore what was read.
+        saved_ = SQL_AUTOCOMMIT_ON;
+        SQLUINTEGER value = 0;
+        if (SQL_SUCCEEDED(SQLGetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
+                                            &value, 0, nullptr))) {
+            saved_ = value;
+            have_saved_ = true;
+        }
+        if (saved_ == SQL_AUTOCOMMIT_OFF) {
+            // Already in a transaction: nothing to open and nothing to undo.
+            engaged_ = true;
+            return;
+        }
+        engaged_ = SQL_SUCCEEDED(SQLSetConnectAttr(
+            hdbc_, SQL_ATTR_AUTOCOMMIT,
+            reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0)) != 0;
+        changed_ = engaged_;
+    }
+
+    ~ScopedAutocommitOff() {
+        if (!changed_) return;
+        SQLSetConnectAttr(hdbc_, SQL_ATTR_AUTOCOMMIT,
+                          reinterpret_cast<SQLPOINTER>(
+                              static_cast<intptr_t>(
+                                  have_saved_ ? saved_ : SQL_AUTOCOMMIT_ON)), 0);
+    }
+
+    // True when a transaction is open, so a COMMIT means something.
+    bool engaged() const { return engaged_; }
+
+    ScopedAutocommitOff(const ScopedAutocommitOff&) = delete;
+    ScopedAutocommitOff& operator=(const ScopedAutocommitOff&) = delete;
+
+private:
+    SQLHDBC hdbc_;
+    SQLUINTEGER saved_ = SQL_AUTOCOMMIT_ON;
+    bool have_saved_ = false;
+    bool engaged_ = false;
+    bool changed_ = false;
+};
+
 // Result of turning a driver-filled character buffer into a std::string
 // without trusting the driver's reported length — A3.
 // D60: the definition moved to core/guarded_buffer.hpp so the discovery layer
