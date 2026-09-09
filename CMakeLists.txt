@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(odbc-crusher VERSION 0.1.0 LANGUAGES CXX)
+# The version used when there is no git tag to read - a source tarball, which
+# is what every GitHub release attaches. It had been 0.1.0 since the first
+# commit, so anyone building the published archive got a binary claiming a
+# version two years stale. Keep it equal to the version being released; the
+# release workflow refuses to publish if it drifts.
+project(odbc-crusher VERSION 0.7.0 LANGUAGES CXX)
 
 # Set C++17 standard
 set(CMAKE_CXX_STANDARD 17)

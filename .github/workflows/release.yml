@@ -98,6 +98,21 @@ jobs:
           *) echo "::error::Binary version '$VERSION_OUTPUT' doesn't contain tag '$EXPECTED'"; exit 1 ;;
         esac
 
+        # The check above reads the version git describe produced, which is
+        # right exactly when the project() fallback is *not* consulted. A
+        # source tarball has no .git and does consult it - and this release
+        # attaches one. So the fallback has to be checked separately, or a
+        # release ships an archive whose binary reports a stale version and
+        # nothing anywhere notices.
+        FALLBACK=$(sed -n 's/^project(odbc-crusher VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+        echo "project() fallback: $FALLBACK"
+        if [ "$FALLBACK" != "$EXPECTED" ]; then
+          echo "::error::CMakeLists.txt project() version is $FALLBACK but this"
+          echo "::error::release is $EXPECTED. A build from the source tarball"
+          echo "::error::attached to this release would report $FALLBACK."
+          exit 1
+        fi
+
     - name: Package
       run: ${{ matrix.package_cmd }}
 

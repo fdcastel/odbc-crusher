@@ -33,6 +33,17 @@ if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
         message(WARNING "Git tag '${GIT_TAG}' does not match vMAJOR.MINOR.PATCH; "
                         "falling back to project() version ${PROJECT_VERSION}.")
     endif()
+else()
+    # No git, or no .git directory - a source tarball, which is what a GitHub
+    # release attaches. This branch used to be silent, so a build from the
+    # published archive reported the project() fallback as though it had been
+    # read from a tag. Both warnings above cover cases inside the repository;
+    # this is the one that reaches people who never cloned it.
+    message(WARNING "No git tag available (no .git directory or git not "
+                    "found), so the version is the project() fallback "
+                    "${PROJECT_VERSION} rather than a tag. This is expected "
+                    "for a source-tarball build; the binary will report "
+                    "${PROJECT_VERSION}.")
 endif()
 
 set(ODBC_CRUSHER_VERSION "${ODBC_CRUSHER_VERSION_MAJOR}.${ODBC_CRUSHER_VERSION_MINOR}.${ODBC_CRUSHER_VERSION_PATCH}")
