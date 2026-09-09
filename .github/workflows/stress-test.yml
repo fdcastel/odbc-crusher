@@ -17,6 +17,18 @@
 name: Stress Test
 
 on:
+  # §7.1: the manifest pins an exact apt version per driver, and the install
+  # step fails when Ubuntu drops it. That check is only worth having if it
+  # runs, and until now nothing ran it - the row this closes was opened
+  # because pins had changed and never once been exercised. Monthly, on the
+  # 1st: often enough to catch a dropped package while it is still recent
+  # news, cheap enough that seven driver jobs a month is not a burden.
+  #
+  # A scheduled run supplies no `inputs`, which is why every job's `if` below
+  # spells out the default rather than comparing `inputs.driver` directly.
+  schedule:
+    - cron: '0 6 1 * *'
+
   workflow_dispatch:
     inputs:
       driver:
@@ -47,7 +59,7 @@ jobs:
   # Driver / version / source: see `.github/drivers.json` → drivers.postgresql
   # (manifest is authoritative; the inline values below are pulled from it).
   postgresql:
-    if: ${{ inputs.driver == 'all' || inputs.driver == 'postgresql' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'postgresql' }}
     name: PostgreSQL (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -93,7 +105,7 @@ jobs:
   # ── MariaDB on Linux ────────────────────────────────────────
   # Driver / version / source: see `.github/drivers.json` → drivers.mariadb
   mariadb:
-    if: ${{ inputs.driver == 'all' || inputs.driver == 'mariadb' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'mariadb' }}
     name: MariaDB (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -137,7 +149,7 @@ jobs:
   # ── MySQL on Linux ──────────────────────────────────────────
   # Driver / version / source: see `.github/drivers.json` → drivers.mysql
   mysql:
-    if: ${{ inputs.driver == 'all' || inputs.driver == 'mysql' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'mysql' }}
     name: MySQL (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -208,7 +220,7 @@ jobs:
   # ── DuckDB on Linux ─────────────────────────────────────────
   # Driver / version / source: see `.github/drivers.json` → drivers.duckdb
   duckdb:
-    if: ${{ inputs.driver == 'all' || inputs.driver == 'duckdb' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'duckdb' }}
     name: DuckDB (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -268,7 +280,7 @@ jobs:
   # (Server brought up via ClickHouse's deb repo; only the driver version is
   # part of the triage provenance contract.)
   clickhouse:
-    if: ${{ inputs.driver == 'all' || inputs.driver == 'clickhouse' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'clickhouse' }}
     name: ClickHouse (Linux)
     runs-on: ubuntu-latest
     steps:
@@ -331,7 +343,7 @@ jobs:
   # Server brought up via PSFirebird (PowerShell module that vendors
   # Firebird binaries) on port 3050 with SYSDBA/masterkey.
   firebird:
-    if: ${{ inputs.driver == 'all' || inputs.driver == 'firebird' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird' }}
     name: Firebird (Linux)
     # Pinned to ubuntu-22.04 (jammy) to match PSFirebird's own example
     # workflow + the parent firebird-odbc-driver-v4 CI. ubuntu-24.04
@@ -476,7 +488,7 @@ jobs:
   # The mock's "source" is this repo's mock-driver/ directory — the triage
   # skill special-cases it (no clone step).
   mock-driver:
-    if: ${{ inputs.driver == 'all' || inputs.driver == 'mock-driver' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'mock-driver' }}
     name: Mock Driver (Windows)
     runs-on: windows-latest
     steps:
