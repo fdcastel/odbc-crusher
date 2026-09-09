@@ -395,43 +395,44 @@ Every driver job:
 2. Installs the driver — apt jobs use `apt-get install pkg=$APT_VERSION`
    so any drift in Ubuntu's repo fails loudly. Binary-download jobs pin
    the exact GitHub release URL.
-3. Records `actual_version.txt` next to the report so triage can verify
-   provenance.
+3. Records `actual_version.txt` next to the report. For apt and tarball
+   jobs this is a genuine observation of what got installed; for jobs with
+   no extractable version it is an echo of the manifest. Each driver's
+   `provenance` block in `.github/drivers.json` says which, so triage can
+   tell a verified version from an assumed one.
 4. Downloads the `odbc-crusher` binary from the **latest successful
    master CI run** (not the latest tag) — every stress-test exercises
    the probes that are in master right now.
 5. Runs crusher twice (verbose text + JSON) and uploads both reports
    plus `actual_version.txt` as `report-<DRIVER>`.
 
-## `/triage-driver` Skill
+## Triage
 
-Once a stress-test run completes, the `/triage-driver` skill closes the
-loop: it dispatches a single-driver run, clones the matching driver
-source tree at the exact tag the binary was built from, and produces a
-markdown report classifying every FAIL/ERROR with one of four labels:
-
-| Label | Meaning |
-|---|---|
-| `BUG_IN_DRIVER` | Driver source has spec-violating behavior. Cite `file:line` + spec ref. |
-| `BUG_IN_CRUSHER` | Probe is wrong — false positive. Cite `src/tests/*.cpp:line`. |
-| `DRIVER_LIMITATION` | Driver knowingly doesn't implement an optional ODBC feature (spec-legal). |
-| `INCONCLUSIVE` | Couldn't tell from source alone — needs runtime trace or upstream issue search. |
+A stress-test report says *what* failed. Triage says *whose fault it is*:
+it pairs each FAIL/ERROR with the driver's own source at the exact tag the
+tested binary was built from, and classifies it as `BUG_IN_DRIVER`,
+`BUG_IN_CRUSHER`, `DRIVER_LIMITATION` or `INCONCLUSIVE` — with a citation.
+Reports worth keeping are promoted to [reports/](./reports/).
 
 ```
-# From inside Claude Code, in this repo:
+# One driver, from inside Claude Code:
 /triage-driver duckdb
+/triage-driver duckdb 24943061694     # re-analyse an existing run, no CI spend
+
+# The whole matrix, from any shell:
+pwsh ./fetch-stress-test.ps1
 ```
 
-The skill orchestrates seven steps: read the manifest → dispatch CI →
-clone source in parallel → wait + download artifact → cross-check three
-version values (manifest vs `actual_version.txt` vs JSON's
-`driver_info.driver_version`) → spawn an analysis sub-agent → write
-`./tmp/triage/<DRIVER>/<DRIVER_UPPER>-v<VERSION>-ODBC-CRUSHER-REPORT.md`.
+Both paths run the same preflight —
+[.claude/skills/triage-driver/](./.claude/skills/triage-driver/) holds the
+orchestration, the sub-agent prompt and `triage.ps1`, and is the source of
+truth for how triage behaves. Read `triage.ps1`'s `-?` help for the switches.
 
-If any of the three version values disagree the skill aborts before
-producing a misleading report. The skill itself lives in
-[.claude/skills/triage-driver/](./.claude/skills/triage-driver/) (both
-the orchestration body and the analysis sub-agent prompt).
+One thing worth knowing before you trust a triage report: for drivers whose
+CI job cannot observe an installed version, `actual_version.txt` is an echo of
+`.github/drivers.json` rather than evidence. Each driver's `provenance` block
+in the manifest says which case it is, and the report states
+`PROVENANCE=UNVERIFIABLE` rather than claiming a match it did not make.
 
 ## Contributing
 

@@ -1,210 +1,173 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Fetches the latest stress-test workflow results and clones driver source repositories.
+    Prepares every driver in the manifest for triage from one stress-test run.
 
 .DESCRIPTION
-    - Identifies the last run of .github/workflows/stress-test.yml
-    - For each analyzed ODBC driver (excluding mock driver):
-      - Clones (or pulls) the official GitHub repository into ./tmp/external/<REPO_NAME>
-      - Checks out the exact tag matching the tested binary version
-      - Downloads the workflow artifacts (crusher-report.txt / .json)
-      - Writes an LLM analysis prompt into ./recommendations/prompts/<DRIVER>-ODBC-CRUSHER-PROMPT.md
+    The all-drivers counterpart to `/triage-driver`, for use outside Claude Code
+    or when you want the whole matrix at once. It resolves a stress-test run,
+    then calls .claude/skills/triage-driver/triage.ps1 once per driver to clone
+    the matching source, download that driver's report, and gate it.
 
-    The script is idempotent: safe to run multiple times.
-    Must be run from the project root directory.
+    Afterwards each driver has a ./tmp/triage/<driver>/ directory holding
+    preflight.txt, findings.json and the raw artifacts - ready to hand to an
+    analysis agent, or to read yourself.
+
+    H11: this script used to carry its own copy of the clone / download / prompt
+    logic, which had drifted from the skill in every direction that mattered: a
+    different directory layout (tmp/external/<repo>), a two-label taxonomy
+    instead of four, output written to a `recommendations/` directory that no
+    longer exists, and instructions to file crusher bugs in PROJECT_PLAN.md when
+    the live work queue has been docs/IMPROVEMENT_PLAN.md since H8. Two of its
+    behaviours were better than the skill's and survive in triage.ps1: reusing
+    an existing clone instead of failing on it, and deleting stale reports
+    before downloading.
+
+    The script is idempotent: safe to run repeatedly.
+
+.PARAMETER RunId
+    Stress-test run to pull artifacts from. Defaults to the most recent
+    completed run.
+
+.PARAMETER Dispatch
+    Trigger a fresh `driver=all` stress-test run and wait for it first.
+
+.PARAMETER Driver
+    Limit to these drivers instead of the whole manifest.
+
+.EXAMPLE
+    ./fetch-stress-test.ps1
+    Prepare every driver from the latest completed stress-test run.
+
+.EXAMPLE
+    ./fetch-stress-test.ps1 -Dispatch
+    Run the full matrix in CI first, then prepare everything from it.
 
 .NOTES
-    Binary versions tested in CI must match exactly the source tags checked out here.
-    See .github/workflows/stress-test.yml for the pinned versions.
+    Requires an authenticated `gh` and `git`. Does not require `jq`.
 #>
+
+[CmdletBinding()]
+param(
+    [long]$RunId = 0,
+    [switch]$Dispatch,
+    [string[]]$Driver,
+    [switch]$AllowPartial
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# ── Configuration ──────────────────────────────────────────────
-# F5: this used to be a hand-maintained $Drivers hashtable carrying each
-# driver's repo and tag - the same data as `.github/drivers.json`, which is
-# the declared single source of truth and which stress-test.yml reads at
-# runtime. The two had already drifted: the manifest has seven drivers, the
-# hashtable had five, and firebird was missing entirely, so this script would
-# silently skip the driver the project cares most about.
-#
-# It reads the manifest now. A driver added there appears here with no edit.
-$ProjectRoot   = $PSScriptRoot
-$ManifestPath  = Join-Path $ProjectRoot '.github' 'drivers.json'
+$ProjectRoot  = $PSScriptRoot
+$ManifestPath = Join-Path $ProjectRoot '.github' 'drivers.json'
+$TriageScript = Join-Path $ProjectRoot '.claude' 'skills' 'triage-driver' 'triage.ps1'
 
-if (-not (Test-Path $ManifestPath)) {
-    throw "Driver manifest not found at $ManifestPath - run this from the project root."
+foreach ($required in @($ManifestPath, $TriageScript)) {
+    if (-not (Test-Path $required)) {
+        throw "Not found: $required - run this from the project root."
+    }
 }
 
 $Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+$AllNames = @($Manifest.drivers.PSObject.Properties.Name)
 
-$Drivers = [ordered]@{}
-foreach ($entry in $Manifest.drivers.PSObject.Properties) {
-    $name   = $entry.Name
-    $source = $entry.Value.source
+# @() around the whole expression: a single-element [string[]] unrolls to a bare
+# String on the way out of an `if`, and under StrictMode a String has no .Count -
+# so `-Driver mock-driver` crashed while `-Driver a,b` worked.
+$Targets = @(if ($Driver) {
+    $unknown = @($Driver | Where-Object { $AllNames -notcontains $_ })
+    if ($unknown) { throw "Unknown driver(s): $($unknown -join ', '). Available: $($AllNames -join ', ')" }
+    $Driver
+} else {
+    $AllNames
+})
 
-    # mock-driver's "repo" is this repository; there is nothing to clone, and
-    # the triage skill special-cases it for the same reason.
-    if (-not $source -or $source.repo -eq 'self') { continue }
+Write-Host ""
+Write-Host "fetch-stress-test — preparing $($Targets.Count) driver(s) for triage" -ForegroundColor Green
+Write-Host "  $($Targets -join ', ')" -ForegroundColor DarkGray
 
-    $Drivers[$name] = @{
-        RepoUrl  = "$($source.repo).git"
-        RepoName = ($source.repo -split '/')[-1]
-        Tag      = $source.tag
-        Artifact = "report-$name"
+# ── Resolve one run for the whole matrix ───────────────────────
+# One run, not one per driver: a `driver=all` run carries every report-<driver>
+# artifact, so seven separate dispatches would be six wasted CI runs.
+if ($Dispatch) {
+    $defaultBranch = gh repo view --json defaultBranchRef -q '.defaultBranchRef.name'
+    $before = 0
+    # @() likewise: ConvertFrom-Json unrolls a one-element JSON array to a bare
+    # object, and `--limit 1` always returns exactly one.
+    $prev = @(gh run list --workflow stress-test.yml --limit 1 --json databaseId | ConvertFrom-Json)
+    if ($prev.Count -gt 0) { $before = [long]$prev[0].databaseId }
+
+    Write-Host "`nDispatching stress-test.yml (driver=all) on '$defaultBranch'..." -ForegroundColor Cyan
+    gh workflow run stress-test.yml --ref $defaultBranch -f driver=all
+    if ($LASTEXITCODE -ne 0) { throw "gh workflow run failed (exit $LASTEXITCODE)" }
+
+    $deadline = (Get-Date).AddSeconds(120)
+    while ((Get-Date) -lt $deadline -and $RunId -eq 0) {
+        Start-Sleep -Seconds 3
+        $found = gh run list --workflow stress-test.yml --event workflow_dispatch --limit 5 --json databaseId |
+                 ConvertFrom-Json | Where-Object { [long]$_.databaseId -gt $before }
+        if ($found) { $RunId = [long]($found | Sort-Object { [long]$_.databaseId } | Select-Object -First 1).databaseId }
+    }
+    if ($RunId -eq 0) { throw "Dispatched, but no new run appeared within 120s." }
+    Write-Host "Run $RunId started — waiting for the full matrix (this takes a while)..." -ForegroundColor Cyan
+    gh run watch "$RunId" --interval 15 --compact
+}
+elseif ($RunId -eq 0) {
+    $runs = gh run list --workflow stress-test.yml --limit 20 --json databaseId,status,conclusion,createdAt | ConvertFrom-Json
+    $pick = @($runs | Where-Object { $_.status -eq 'completed' }) | Select-Object -First 1
+    if (-not $pick) { throw "No completed stress-test run found. Use -Dispatch to trigger one." }
+    $RunId = [long]$pick.databaseId
+    Write-Host "`nUsing run $RunId ($($pick.conclusion), $($pick.createdAt))" -ForegroundColor Cyan
+}
+
+# ── Prepare each driver ────────────────────────────────────────
+# triage.ps1's exit codes are contractual; a driver that fails its gate is
+# recorded and the loop continues, because one bad job should not cost you the
+# other six.
+$Reasons = @{
+    0 = 'ready'; 2 = 'unknown driver'; 3 = 'CI failure'
+    4 = 'no usable report'; 5 = 'version mismatch'; 6 = 'partial report'
+}
+
+$results = @()
+foreach ($name in $Targets) {
+    Write-Host "`n─── $($name.ToUpper()) ───────────────────────────────" -ForegroundColor Yellow
+
+    $argv = @('-NoProfile', '-File', $TriageScript, '-Driver', $name, '-RunId', "$RunId")
+    if ($AllowPartial) { $argv += '-AllowPartial' }
+    & pwsh @argv
+    $code = $LASTEXITCODE
+
+    $outDir = Join-Path $ProjectRoot 'tmp' 'triage' $name
+    $findings = ''
+    $preflight = Join-Path $outDir 'preflight.txt'
+    if (Test-Path $preflight) {
+        $line = Select-String -Path $preflight -Pattern '^FINDINGS_COUNT=' | Select-Object -First 1
+        if ($line) { $findings = ($line.Line -split '=', 2)[1] }
+    }
+
+    $results += [pscustomobject]@{
+        Driver   = $name
+        Status   = $(if ($Reasons.ContainsKey($code)) { $Reasons[$code] } else { "exit $code" })
+        Findings = $findings
+        OutDir   = $outDir
     }
 }
 
-if ($Drivers.Count -eq 0) {
-    throw "No clonable drivers in $ManifestPath - the manifest format may have changed."
+# ── Summary ────────────────────────────────────────────────────
+Write-Host "`n"
+$results | Format-Table -AutoSize Driver, Status, Findings
+
+$ready = @($results | Where-Object { $_.Status -eq 'ready' })
+Write-Host "$($ready.Count)/$($results.Count) driver(s) ready for analysis." -ForegroundColor Green
+if ($ready.Count -gt 0) {
+    Write-Host "Each has preflight.txt + findings.json under ./tmp/triage/<driver>/." -ForegroundColor DarkGray
+    Write-Host "To analyse one: /triage-driver <driver> $RunId  (or point an agent at" -ForegroundColor DarkGray
+    Write-Host ".claude/skills/triage-driver/analyze.md with OUT_DIR set)." -ForegroundColor DarkGray
 }
-
-Write-Host "Drivers from manifest: $($Drivers.Keys -join ', ')"
-
-$ExternalDir   = Join-Path $ProjectRoot 'tmp' 'external'
-$RecommDir     = Join-Path $ProjectRoot 'recommendations'
-$PromptsDir    = Join-Path $RecommDir   'prompts'
-$WorkflowFile  = '.github/workflows/stress-test.yml'
-
-# ── Helpers ────────────────────────────────────────────────────
-
-function Ensure-Directory([string]$Path) {
-    if (-not (Test-Path $Path)) {
-        New-Item -ItemType Directory -Path $Path -Force | Out-Null
-        Write-Host "  Created directory: $Path"
-    }
+$stuck = @($results | Where-Object { $_.Status -ne 'ready' })
+if ($stuck.Count -gt 0) {
+    Write-Host "`nNot ready — see each driver's preflight.txt for ABORT_REASON:" -ForegroundColor Yellow
+    foreach ($r in $stuck) { Write-Host "  $($r.Driver): $($r.Status)" -ForegroundColor Yellow }
 }
-
-function Get-LastWorkflowRunId {
-    Write-Host "`n=== Finding last stress-test workflow run ===" -ForegroundColor Cyan
-    $json = gh run list --workflow $WorkflowFile --repo fdcastel/odbc-crusher --limit 1 --json databaseId,status,conclusion,createdAt 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to list workflow runs: $json"
-    }
-    $runs = $json | ConvertFrom-Json
-    if ($runs.Count -eq 0) {
-        throw "No runs found for workflow $WorkflowFile"
-    }
-    $run = $runs[0]
-    Write-Host "  Run ID    : $($run.databaseId)"
-    Write-Host "  Status    : $($run.status)"
-    Write-Host "  Conclusion: $($run.conclusion)"
-    Write-Host "  Created   : $($run.createdAt)"
-    return $run.databaseId
-}
-
-function Clone-OrFetch([string]$RepoUrl, [string]$DestPath) {
-    if (Test-Path (Join-Path $DestPath '.git')) {
-        Write-Host "  Repository exists – fetching..."
-        git -C $DestPath fetch --all --tags 2>&1 | ForEach-Object { Write-Host "    $_" }
-    } else {
-        Write-Host "  Cloning $RepoUrl ..."
-        Ensure-Directory $DestPath
-        git clone $RepoUrl $DestPath 2>&1 | ForEach-Object { Write-Host "    $_" }
-    }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Git operation returned exit code $LASTEXITCODE for $RepoUrl"
-    }
-}
-
-function Checkout-Tag([string]$DestPath, [string]$Tag) {
-    Write-Host "  Checking out tag: $Tag"
-    git -C $DestPath checkout $Tag 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to checkout tag '$Tag' (exit code $LASTEXITCODE)"
-    }
-}
-
-function Download-Artifact([string]$RunId, [string]$ArtifactName, [string]$DestDir) {
-    Write-Host "  Downloading artifact '$ArtifactName' ..."
-    Ensure-Directory $DestDir
-
-    # Remove existing report files so gh run download won't fail on overwrite
-    foreach ($f in @('crusher-report.txt', 'crusher-report.json')) {
-        $existing = Join-Path $DestDir $f
-        if (Test-Path $existing) { Remove-Item $existing -Force }
-    }
-
-    # gh run download extracts into the destination directory
-    gh run download $RunId --repo fdcastel/odbc-crusher --name $ArtifactName --dir $DestDir 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to download artifact '$ArtifactName' (exit code $LASTEXITCODE). The job may not have produced artifacts."
-    }
-}
-
-function Write-AnalysisPrompt([string]$DriverName, [string]$RepoName, [string]$Tag, [string]$PromptPath) {
-    $repoRelPath   = "tmp/external/$RepoName"
-    $reportTxt     = "$repoRelPath/crusher-report.txt"
-    $reportJson    = "$repoRelPath/crusher-report.json"
-
-    $prompt = @"
-# ODBC Crusher Analysis Prompt – $DriverName
-
-**Driver version**: ``$Tag``
-**Source code**: ``$repoRelPath`` (checked out at tag ``$Tag``)
-**Reports**:
-- ``$reportTxt``
-- ``$reportJson``
-
-## Instructions
-
-Do a critical analysis of what ``odbc-crusher`` says about the ``$DriverName`` driver and review its source code (at exactly this version) to see what the driver actually implements.
-
-**GOAL:** For each **failed** or **skipped** test, investigate its result against the real ``$DriverName`` sources:
-
-1. **If the odbc-crusher report is CORRECT** (the driver really has the deficiency):
-    - Write a recommendation in ``recommendations/${DriverName}_ODBC_RECOMMENDATIONS.md`` explaining what the ``$DriverName`` developers should do to fix it.
-    - Finish the recommendation with the following line: 
-      ``````
-      ---
-      Generated by ODBC Crusher -- https://github.com/fdcastel/odbc-crusher/
-      ``````
-
-2. **If the odbc-crusher report is WRONG** (the driver is fine, odbc-crusher misjudged it):
-    - Record it as a bug in ``PROJECT_PLAN.md`` for future fix.
-"@
-
-    Set-Content -Path $PromptPath -Value $prompt -Encoding UTF8 -Force
-    Write-Host "  Wrote prompt: $PromptPath"
-}
-
-# ── Main ───────────────────────────────────────────────────────
-
-Write-Host "`n╔══════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host   "║   fetch-stress-test.ps1 – ODBC Crusher       ║" -ForegroundColor Green
-Write-Host   "╚══════════════════════════════════════════════╝`n" -ForegroundColor Green
-
-# Ensure output directories exist
-Ensure-Directory $ExternalDir
-Ensure-Directory $PromptsDir
-
-# Step 1 – Find the last workflow run
-$runId = Get-LastWorkflowRunId
-
-# Step 2 – Process each driver
-foreach ($driverName in $Drivers.Keys) {
-    $info     = $Drivers[$driverName]
-    $repoDir  = Join-Path $ExternalDir $info.RepoName
-
-    Write-Host "`n--- $($driverName.ToUpper()) ---" -ForegroundColor Yellow
-
-    # 2a – Clone or fetch the driver source
-    Clone-OrFetch -RepoUrl $info.RepoUrl -DestPath $repoDir
-
-    # 2b – Checkout the exact tag matching the tested binary
-    Checkout-Tag -DestPath $repoDir -Tag $info.Tag
-
-    # 2c – Download artifacts into the repo directory
-    Download-Artifact -RunId $runId -ArtifactName $info.Artifact -DestDir $repoDir
-
-    # 2d – Write analysis prompt
-    $promptFile = Join-Path $PromptsDir "$driverName-ODBC-CRUSHER-PROMPT.md"
-    Write-AnalysisPrompt -DriverName $driverName -RepoName $info.RepoName -Tag $info.Tag -PromptPath $promptFile
-}
-
-Write-Host "`n✅ Done." -ForegroundColor Green
-Write-Host "   Driver sources : $ExternalDir" -ForegroundColor Green
-Write-Host "   Prompts        : $PromptsDir" -ForegroundColor Green
-Write-Host "   Recommendations: $RecommDir`n" -ForegroundColor Green
+Write-Host ""

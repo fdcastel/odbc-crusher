@@ -287,7 +287,10 @@ else {
     $before = 0
     $prev = (Invoke-Gh @('run', 'list', '--workflow', 'stress-test.yml', '--limit', '1', '--json', 'databaseId') -AllowFail) -join ''
     if ($LASTEXITCODE -eq 0 -and $prev) {
-        $parsed = $prev | ConvertFrom-Json
+        # @() matters: `--limit 1` yields a one-element JSON array, which
+        # ConvertFrom-Json unrolls to a bare object, and under StrictMode a bare
+        # PSCustomObject has no .Count.
+        $parsed = @($prev | ConvertFrom-Json)
         if ($parsed.Count -gt 0) { $before = [long]$parsed[0].databaseId }
     }
     Write-Note "Newest existing run before dispatch: $before"
