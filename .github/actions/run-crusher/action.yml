@@ -35,6 +35,16 @@ inputs:
     description: 'Optional path prepended to LD_LIBRARY_PATH (drivers shipped as a tarball typically need this)'
     required: false
     default: ''
+  crusher-run-id:
+    description: >
+      T3. A ci.yml run id to take the crusher binary from, instead of resolving
+      the latest successful master run here. The H17 Firebird pair passes one
+      resolved once for both halves: two jobs resolving independently can land
+      either side of a merge, and then the diff between their reports is
+      measuring a driver change and a probe-suite change at the same time.
+      Empty for every other caller, which keeps the existing behaviour.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -53,9 +63,16 @@ runs:
         # fixed in e35a8a7; the noise stayed. The error branch below still
         # says what to do when resolution fails, which is the part that was
         # ever useful.
+        # T3: a caller that has already resolved one wins. The pair does this
+        # so both halves are provably the same binary.
+        RUN_ID='${{ inputs.crusher-run-id }}'
+        if [ -n "$RUN_ID" ]; then
+          echo "Crusher build was resolved by the caller (T3): run $RUN_ID"
+        else
         RUN_ID=$(gh run list --workflow ci.yml --branch master --limit 10 \
           --json databaseId,conclusion \
           -q '[.[] | select(.conclusion == "success")] | .[0].databaseId')
+        fi
         if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
           echo "::error::No successful master CI run found — cannot fetch latest crusher binary. Wait for a green ci.yml on master, then re-run stress-test."
           exit 1

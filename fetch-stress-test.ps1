@@ -82,6 +82,23 @@ $Targets = @(if ($Driver) {
     $AllNames
 })
 
+# T3/T4: an entry that declares `pair_with` brings its sibling along. Asking
+# for half a pair is almost always a slip - the report of one half on its own
+# answers nothing the pair was set up to answer - and triaging the other half
+# from an existing run costs nothing, since both artifacts came out of the same
+# stress-test run.
+$PairOf = @{}
+foreach ($n in $AllNames) {
+    $e = $Manifest.drivers.$n
+    if ($e.PSObject.Properties.Name -contains 'pair_with') { $PairOf[$n] = [string]$e.pair_with }
+}
+$added = @($Targets | ForEach-Object { if ($PairOf.ContainsKey($_)) { $PairOf[$_] } } |
+          Where-Object { $_ -and $Targets -notcontains $_ } | Sort-Object -Unique)
+if ($added.Count -gt 0) {
+    Write-Host "Pulling in the other half of the pair: $($added -join ', ')" -ForegroundColor DarkGray
+    $Targets = @($Targets) + $added
+}
+
 Write-Host ""
 Write-Host "fetch-stress-test — preparing $($Targets.Count) driver(s) for triage" -ForegroundColor Green
 Write-Host "  $($Targets -join ', ')" -ForegroundColor DarkGray
@@ -169,5 +186,38 @@ $stuck = @($results | Where-Object { $_.Status -ne 'ready' })
 if ($stuck.Count -gt 0) {
     Write-Host "`nNot ready — see each driver's preflight.txt for ABORT_REASON:" -ForegroundColor Yellow
     foreach ($r in $stuck) { Write-Host "  $($r.Driver): $($r.Status)" -ForegroundColor Yellow }
+}
+
+# ── T3: the diff, out of the same command ──────────────────────
+# A pair's two reports are not the deliverable; the diff between them is. It
+# was being produced by hand every time, which is how a pair gets compared
+# against the wrong run. Emitted here for every pair where both halves came
+# back ready, printed in the order the manifest declares (the entry naming a
+# sibling is the OLD side - `firebird-official` names `firebird-patched`, and
+# official is the baseline).
+$Compare = Join-Path $ProjectRoot 'tools' 'compare_reports.py'
+$readyNames = @($ready | ForEach-Object { $_.Driver })
+$done = @()
+foreach ($name in $readyNames) {
+    if (-not $PairOf.ContainsKey($name)) { continue }
+    $sib = $PairOf[$name]
+    if ($readyNames -notcontains $sib) { continue }
+    $key = (@($name, $sib) | Sort-Object) -join '|'
+    if ($done -contains $key) { continue }
+    $done += $key
+
+    $oldJson = Join-Path $ProjectRoot 'tmp' 'triage' $name 'artifacts/crusher-report.json'
+    $newJson = Join-Path $ProjectRoot 'tmp' 'triage' $sib  'artifacts/crusher-report.json'
+    if (-not (Test-Path $oldJson) -or -not (Test-Path $newJson)) { continue }
+    if (-not (Test-Path $Compare)) {
+        Write-Host "`n$Compare is missing; skipping the pair diff." -ForegroundColor Yellow
+        continue
+    }
+
+    Write-Host "`n─── $($name.ToUpper()) vs $($sib.ToUpper()) ──────────────" -ForegroundColor Yellow
+    & python $Compare $oldJson $newJson
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "compare_reports.py exited $LASTEXITCODE" -ForegroundColor Yellow
+    }
 }
 Write-Host ""

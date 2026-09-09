@@ -80,6 +80,11 @@ $EXIT_NO_REPORT    = 4
 $EXIT_PROVENANCE   = 5
 $EXIT_INCOMPLETE   = 6
 
+# T4. Declared here rather than at first assignment: StrictMode makes reading
+# an unset variable a terminating error, and the read below is on the path
+# taken by every driver that declares no pair - which is all but two.
+$script:PairSiblingEnv = $null
+
 # ── Output accumulator ─────────────────────────────────────────
 # Everything the agent needs ends up here. One flat namespace, no nesting:
 # the consumer is a language model reading a text file, not a program.
@@ -243,6 +248,73 @@ Set-Fact 'VERSION_SOURCE'      $VersionSource
 Set-Fact 'DRIVER_VER_RELIABLE' $DriverVerReliable
 if ($Provenance -and $Provenance.PSObject.Properties.Name -contains '_note') {
     Set-Fact 'PROVENANCE_NOTE' ($Provenance._note -replace '\r?\n', ' ')
+}
+
+# ── T4: an entry that declares a pair ───────────────────────────────────────
+#
+# `pair_with` names another driver in this manifest that this one is meant to
+# be compared against. The comparison's whole method is "two runs differing in
+# the driver and nothing else", and the two conditions that rests on were true
+# only by convention: an identical connection string, and the same crusher
+# binary. A one-character drift in either turns the report diff into a
+# measurement of two things at once, and nothing said so.
+#
+# Checked here rather than at diff time because this is where the manifest is
+# already open, and because the useful moment to refuse is before a CI run is
+# spent.
+if ($d.PSObject.Properties.Name -contains 'pair_with') {
+    $sibName = [string]$d.pair_with
+    Set-Fact 'PAIR_WITH' $sibName
+
+    $sibEntry = $Manifest.drivers.PSObject.Properties | Where-Object { $_.Name -eq $sibName }
+    if (-not $sibEntry) {
+        Stop-Triage $EXIT_BAD_DRIVER ("Driver '$Driver' declares pair_with='$sibName', which is not in the manifest. " +
+            "Fix .github/drivers.json before running either half.")
+    }
+    $sib = $sibEntry.Value
+
+    # The pairing has to be mutual, or one half can be repointed without the
+    # other noticing.
+    $back = if ($sib.PSObject.Properties.Name -contains 'pair_with') { [string]$sib.pair_with } else { '' }
+    if ($back -ne $Driver) {
+        Stop-Triage $EXIT_BAD_DRIVER ("Pairing is not mutual: '$Driver' declares pair_with='$sibName', " +
+            "but '$sibName' declares pair_with='$back'. One half was repointed and the other was not.")
+    }
+
+    # Condition one. Byte-for-byte: the whole point is that the two runs speak
+    # to the same server, the same database, as the same user.
+    if ([string]$d.conn_string -ne [string]$sib.conn_string) {
+        Stop-Triage $EXIT_BAD_DRIVER ("'$Driver' and '$sibName' are declared a pair but their conn_string differs. " +
+            "A report diff between them would measure the connection string as well as the driver. " +
+            "$Driver : $($d.conn_string) | $sibName : $($sib.conn_string)")
+    }
+    Set-Fact 'PAIR_CONN_STRING_MATCH' 'true'
+
+    # Condition two, as far as it can be checked from here: if the sibling has
+    # already been triaged, its report is on disk and carries (schema >= 2) the
+    # environment that produced it. Compare, and *warn* rather than abort - the
+    # sibling's report may be older on purpose, and whether that is acceptable
+    # is the caller's call, not this script's.
+    $sibJson = Join-Path (Join-Path $ProjectRoot 'tmp' 'triage' $sibName) 'artifacts/crusher-report.json'
+    if (Test-Path $sibJson) {
+        try {
+            $sibReport = Get-Content $sibJson -Raw | ConvertFrom-Json
+            $sibKeys = @($sibReport.PSObject.Properties.Name)
+            if ($sibKeys -contains 'environment') {
+                $script:PairSiblingEnv = @{}
+                foreach ($prop in $sibReport.environment.PSObject.Properties) {
+                    $script:PairSiblingEnv[$prop.Name] = [string]$prop.Value
+                }
+                Set-Fact 'PAIR_SIBLING_ENVIRONMENT' (
+                    ($sibReport.environment.PSObject.Properties |
+                        ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' ')
+            } else {
+                Write-Warn "The sibling report for '$sibName' predates schema 2 and carries no environment block, so nothing can confirm the two runs were comparable."
+            }
+        } catch {
+            Write-Warn "Could not read the sibling report at ${sibJson}: $($_.Exception.Message)"
+        }
+    }
 }
 
 Write-Note "$($d.display_name) — manifest version $($d.version), tag $($d.source.tag)"
@@ -567,6 +639,36 @@ if ($keys -contains 'schema_version') {
 } else {
     Set-Fact 'SCHEMA_VERSION' 'pre-v1'
     Write-Warn "No schema_version — artifact predates G4. Field names assumed to be the v1 set."
+}
+
+# --- T4/S4: was this run comparable to its pair's? ------------------------
+# The manifest check above proved the two entries *intend* the same connection
+# string. This proves the two runs actually happened the same way. Reported,
+# not enforced: the sibling report may be deliberately older, and whether that
+# is acceptable belongs to whoever is reading the diff.
+if ($keys -contains 'environment') {
+    Set-Fact 'ENVIRONMENT' (
+        ($report.environment.PSObject.Properties |
+            ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' ')
+}
+if ($script:PairSiblingEnv -and ($keys -contains 'environment')) {
+    $mine = @{}
+    foreach ($prop in $report.environment.PSObject.Properties) { $mine[$prop.Name] = [string]$prop.Value }
+    $allKeys = @($mine.Keys) + @($script:PairSiblingEnv.Keys) | Sort-Object -Unique
+    $diffs = @()
+    foreach ($k in $allKeys) {
+        $a = if ($mine.ContainsKey($k)) { $mine[$k] } else { '(absent)' }
+        $b = if ($script:PairSiblingEnv.ContainsKey($k)) { $script:PairSiblingEnv[$k] } else { '(absent)' }
+        if ($a -ne $b) { $diffs += "${k}: this run '$a' vs pair '$b'" }
+    }
+    if ($diffs.Count -eq 0) {
+        Set-Fact 'PAIR_COMPARABLE' 'true'
+    } else {
+        Set-Fact 'PAIR_COMPARABLE' 'false'
+        Set-Fact 'PAIR_ENVIRONMENT_DETAIL' ($diffs -join '; ')
+        Write-Warn ("This run and its pair did not happen under the same conditions: " +
+            ($diffs -join '; ') + ". A diff between the two reports may be measuring this rather than the driver.")
+    }
 }
 
 # --- completeness ---------------------------------------------------------

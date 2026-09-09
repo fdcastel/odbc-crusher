@@ -41,7 +41,7 @@ version verdict and the summary counts.
 | Code | Meaning | What to do |
 |---|---|---|
 | 0 | Ready | Go to step 2. |
-| 2 | Unknown driver, or not run from the repo | The script printed the valid names — relay them and ask which one. |
+| 2 | Unknown driver, not run from the repo, **or a broken pair** | The script printed the valid names — relay them and ask which one. A pair abort (T4) is different and says so: two manifest entries declared a pair whose `conn_string` differs, or whose `pair_with` keys do not name each other. That is a manifest bug, not a user mistake — relay `ABORT_REASON` and fix `.github/drivers.json`; do not work around it by triaging one half. |
 | 3 | Dispatch or CI failure | Relay `ABORT_REASON`. Usually `gh auth status`, no push permission, or no runner. |
 | 4 | Report missing or unusable | Relay `NO_JSON_REASON` verbatim — it says *why*, from the text report. Do not substitute a guess. |
 | 5 | Version mismatch | Stop. The binary is not the source. Relay `PROVENANCE_DETAIL` and suggest fixing `.github/drivers.json` or the CI pin, then re-running. |
@@ -123,3 +123,21 @@ message is the receipt.
   delete driver subdirectories you are done with.
 - To triage every driver at once, `fetch-stress-test.ps1` loops this same script
   over the whole manifest.
+- **Pairs (T3/T4).** An entry with a `pair_with` key exists to be compared
+  against the entry it names — today `firebird-official` and
+  `firebird-patched`, the same server and connection string against two builds
+  of one driver. Three things follow, and none of them need remembering
+  because the tooling does them:
+  - Dispatch both halves as **one** run: `gh workflow run stress-test.yml -f
+    driver=firebird-pair`. Two separate dispatches each resolve their own
+    crusher binary, so a merge landing between them makes the diff measure a
+    driver change and a probe-suite change at once.
+  - `fetch-stress-test.ps1 -Driver firebird-official` pulls the sibling in by
+    itself and prints the `compare_reports.py` diff at the end. Asking for one
+    half is almost always a slip — half a pair answers nothing the pair was
+    set up to answer.
+  - The preflight block carries `PAIR_WITH`, `PAIR_CONN_STRING_MATCH` and,
+    once both halves have run, `PAIR_COMPARABLE`. **`PAIR_COMPARABLE=false` is
+    worth relaying**: it means the two reports were produced under different
+    conditions (a different crusher build, platform or SQLLEN width), so the
+    diff may be measuring that rather than the driver.

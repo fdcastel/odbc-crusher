@@ -46,6 +46,14 @@ on:
           - firebird
           - firebird-official
           - firebird-patched
+          # T3. Both halves of the H17 pair in one workflow run. Dispatching
+          # them separately worked, but nothing tied the two runs together:
+          # `run-crusher` resolves "latest successful master CI run" for
+          # itself, so a merge landing between the two dispatches gave each
+          # half a different crusher binary and the comparison was silently
+          # measuring two things at once. One run, one resolved binary — see
+          # `resolve-crusher` below.
+          - firebird-pair
           - mock-driver
 
 # F6: least privilege. This workflow hands github.token to
@@ -56,6 +64,46 @@ permissions:
   actions: read
 
 jobs:
+
+  # ── Resolve one crusher binary for the whole Firebird pair ──
+  #
+  # T3. The pair's entire method is "two runs differing in the driver and
+  # nothing else". `run-crusher` resolves the latest successful master CI run
+  # by itself, which is right for an ordinary driver job and wrong here: two
+  # jobs resolving independently can land either side of a merge, and then the
+  # diff between their reports is measuring a driver change *and* a probe-suite
+  # change with no way to separate them. Nothing warned; the two reports looked
+  # exactly as comparable as a good pair.
+  #
+  # This job resolves once and both halves take the answer, so the guarantee is
+  # structural rather than a matter of dispatching them close together. It runs
+  # for `all` and for any `firebird-*` selection, and costs one ubuntu job.
+  resolve-crusher:
+    if: ${{ (inputs.driver || 'all') == 'all' || startsWith(inputs.driver, 'firebird-') }}
+    name: Resolve crusher build for the pair
+    runs-on: ubuntu-latest
+    outputs:
+      run-id: ${{ steps.resolve.outputs.run-id }}
+    steps:
+    - name: Resolve latest successful master CI run
+      id: resolve
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Same query as the composite's, deliberately: this is that step
+        # hoisted, not a second opinion. Recent gh CLI versions silently drop
+        # `--status success` here (they filter on `status`, not `conclusion`),
+        # so the selection is done in jq.
+        RUN_ID=$(gh run list --workflow ci.yml --branch master --limit 10 \
+          --repo "${{ github.repository }}" \
+          --json databaseId,conclusion \
+          -q '[.[] | select(.conclusion == "success")] | .[0].databaseId')
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "::error::No successful master CI run found — cannot fetch a crusher binary. Wait for a green ci.yml on master, then re-run stress-test."
+          exit 1
+        fi
+        echo "Both halves of the pair will use crusher from CI run $RUN_ID"
+        echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
   # ── PostgreSQL on Linux ─────────────────────────────────────
   # Driver / version / source: see `.github/drivers.json` → drivers.postgresql
@@ -545,7 +593,10 @@ jobs:
   # name ("Firebird ODBC Driver"), so the two builds cannot coexist on one
   # machine — hence two jobs rather than a matrix.
   firebird-official:
-    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird-official' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird-official' || inputs.driver == 'firebird-pair' }}
+    # T3: both halves take their crusher binary from one resolution,
+    # so the two reports are provably built by the same probe suite.
+    needs: resolve-crusher
     name: Firebird 3.0.1.21 official (Windows)
     # Pinned to windows-2022 to match the driver project's own CI matrix, which
     # is where this Firebird-on-Windows recipe is already exercised daily.
@@ -623,13 +674,17 @@ jobs:
       with:
         artifact-name: firebird-official
         conn-string: ${{ env.CONN_STRING }}
+        crusher-run-id: ${{ needs.resolve-crusher.outputs.run-id }}
 
   # ── Firebird 3.5.1-rc2 (master + 13 PRs) on Windows ─────────
   # Driver / version / source: see `.github/drivers.json` → drivers["firebird-patched"]
   # The other half of the H17 pair; see firebird-official above for why the two
   # exist and why they are kept identical apart from this job's install step.
   firebird-patched:
-    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird-patched' }}
+    if: ${{ (inputs.driver || 'all') == 'all' || inputs.driver == 'firebird-patched' || inputs.driver == 'firebird-pair' }}
+    # T3: both halves take their crusher binary from one resolution,
+    # so the two reports are provably built by the same probe suite.
+    needs: resolve-crusher
     name: Firebird 3.5.1-rc2 patched (Windows)
     runs-on: windows-2022
     steps:
@@ -699,6 +754,7 @@ jobs:
       with:
         artifact-name: firebird-patched
         conn-string: ${{ env.CONN_STRING }}
+        crusher-run-id: ${{ needs.resolve-crusher.outputs.run-id }}
 
   # ── Mock Driver on Windows ──────────────────────────────────
   # Driver / conn-string: see `.github/drivers.json` → drivers["mock-driver"]
