@@ -130,11 +130,21 @@ runs:
         # the job green was continue-on-error, which also swallowed a killed
         # run. `set +e` and PIPESTATUS because the pipe into tee would
         # otherwise report tee's status, which is always 0.
+        # S2: stderr goes to its own file rather than being folded into the
+        # report. crusher now names each probe on stderr before running it, so
+        # this file is the answer to "which probe wedged" — the question the
+        # H17 pair's first two runs could not answer, because both were killed
+        # at the cap and the block-buffered stdout was discarded. Keeping the
+        # two apart also stops 200 progress lines landing in the middle of the
+        # human-readable report on every healthy run.
         set +e
-        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -v 2>&1 | tee crusher-report.txt
+        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -v \
+          2>crusher-progress.txt | tee crusher-report.txt
         CRUSHER_RC=${PIPESTATUS[0]}
         set -e
         echo "crusher exit code: $CRUSHER_RC"
+        echo "--- last 15 lines of stderr (progress + diagnostics) ---"
+        tail -15 crusher-progress.txt || true
         case "$CRUSHER_RC" in
           0) ;;
           124|137)
@@ -170,13 +180,20 @@ runs:
           fi
         }
         # F12: see the text run above. Same reasoning, no pipe to work around.
+        # S2: append this run's progress to the same file, after a separator —
+        # the JSON run is the one whose report vanishes entirely when it is
+        # killed, so it is the run that most needs a breadcrumb.
         set +e
-        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -o json -f crusher-report.json
+        { echo; echo "===== JSON run ====="; } >>crusher-progress.txt
+        run_with_timeout "$CRUSHER_BIN" "${{ inputs.conn-string }}" --fail-on=none -o json -f crusher-report.json \
+          2>>crusher-progress.txt
         CRUSHER_RC=$?
         set -e
         echo "crusher exit code: $CRUSHER_RC"
+        echo "--- last 15 lines of stderr (progress + diagnostics) ---"
+        tail -15 crusher-progress.txt || true
         if [ "$CRUSHER_RC" -ne 0 ]; then
-          echo "::warning::crusher exited $CRUSHER_RC on the JSON run; the report may be partial or missing."
+          echo "::warning::crusher exited $CRUSHER_RC on the JSON run; the report may be partial or missing. crusher-progress.txt names the last probe it started."
         fi
 
     - name: Upload report
@@ -193,4 +210,5 @@ runs:
         path: |
           crusher-report.txt
           crusher-report.json
+          crusher-progress.txt
           actual_version.txt

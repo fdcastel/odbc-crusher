@@ -463,9 +463,12 @@ if (-not $IsMock) {
 
 Write-Step "Downloading report artifact"
 
-$ReportTxt  = Join-Path $ArtifactDir 'crusher-report.txt'
-$ReportJson = Join-Path $ArtifactDir 'crusher-report.json'
-$VersionTxt = Join-Path $ArtifactDir 'actual_version.txt'
+$ReportTxt   = Join-Path $ArtifactDir 'crusher-report.txt'
+$ReportJson  = Join-Path $ArtifactDir 'crusher-report.json'
+$VersionTxt  = Join-Path $ArtifactDir 'actual_version.txt'
+# S2: crusher's stderr, kept separate by the run-crusher composite. Unbuffered,
+# so it survives a SIGKILL that discards the report.
+$ProgressTxt = Join-Path $ArtifactDir 'crusher-progress.txt'
 
 if ($Offline) {
     Write-Note "Offline — using the artifacts already in $ArtifactDir"
@@ -474,7 +477,7 @@ else {
     # Delete first. On a connect failure crusher returns before report_end() and
     # writes no JSON at all, so a stale file from a previous run would otherwise
     # survive the download and be triaged as if it were this run's data.
-    foreach ($f in @($ReportTxt, $ReportJson, $VersionTxt)) {
+    foreach ($f in @($ReportTxt, $ReportJson, $VersionTxt, $ProgressTxt)) {
         if (Test-Path $f) { Remove-Item $f -Force }
     }
     & gh run download "$ResolvedRunId" --repo $RepoSlug --name "report-$Driver" --dir $ArtifactDir 2>&1 |
@@ -516,6 +519,23 @@ if (-not (Test-Path $ReportJson)) {
     } else {
         $reason += ' No text report either — the job produced nothing.'
     }
+
+    # S2. The text report is written to stdout, which is block-buffered on a
+    # pipe, so a run killed at the wall-clock cap discards every probe result it
+    # had already produced — which is why the H17 pair's first two runs were
+    # indistinguishable from runs that did nothing. crusher names each probe on
+    # *stderr* before running it, and the composite keeps that in its own file.
+    # The last name in it is the probe that never returned.
+    if (Test-Path $ProgressTxt) {
+        $started = @(Get-Content $ProgressTxt | Where-Object { $_ -match '^\s*->\s' })
+        if ($started.Count) {
+            $last = $started[-1].Trim() -replace '^->\s*', ''
+            Set-Fact 'LAST_PROBE_STARTED' $last
+            Set-Fact 'PROBES_STARTED'     $started.Count
+            $reason += " The last probe crusher started was '$last' ($($started.Count) started in total); if the run was killed at the cap, that is the one that did not return."
+        }
+    }
+
     Set-Fact 'NO_JSON_REASON' $reason
     Stop-Triage $EXIT_NO_REPORT $reason
 }

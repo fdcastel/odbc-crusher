@@ -12,8 +12,30 @@
 #include <optional>
 #include <stdexcept>
 #include <typeinfo>
+#include <iostream>
 
 namespace odbc_crusher::tests {
+
+// S2 — say which probe is running, before it runs.
+//
+// The console reporter prints a whole category at once, after `run()` returns,
+// so a probe that never returns prints nothing at all: the two stress-test runs
+// of the H17 Firebird pair were killed at the 570 s cap with text reports that
+// ended at `Phase 2: Running ODBC tests...`, and a wedged run was
+// indistinguishable from a run that produced nothing. Locating the culprit
+// needed the Windows driver-manager trace and the last ODBC call with no
+// matching EXIT, which is not a reasonable diagnostic path for a tool whose job
+// is diagnosis.
+//
+// stderr, because stdout carries the report — G1's rule, and the e2e harness
+// asserts it by capturing the two separately. Flushed, because the whole point
+// is what survives a SIGKILL. One line per probe start: not the completion,
+// since the interesting probe is the one that never completes.
+inline void note_probe_start(const std::string& category,
+                             const std::string& probe) {
+    std::cerr << "  -> " << category << " / " << probe << '\n' << std::flush;
+}
+
 
 // Test status
 enum class TestStatus {
@@ -305,6 +327,22 @@ public:
     // Get test category name
     virtual std::string category_name() const = 0;
 
+    // S3 — what survived a category that crashed.
+    //
+    // `run()` is written as `return { probe_a(), probe_b(), … }` in most
+    // categories, so a driver fault in probe C destroys A's and B's results
+    // along with it: the crash guard catches the fault, but the vector was
+    // never built. On 3.0.1.21 the Descriptor Tests category faulted and *five*
+    // probes vanished from the report — which is why the two runs of the H17
+    // pair differ by four in their totals, and why both triage agents had to
+    // caveat the baseline pass rate as "optimistic by an unknown margin".
+    //
+    // The margin need not be unknown. `run_test` records every probe as it
+    // completes, so on a crash the caller can report what actually ran instead
+    // of discarding it, and name the probe that did not return.
+    const std::vector<TestResult>& completed_results() const { return completed_; }
+    const std::string& last_probe_started() const { return last_started_; }
+
     // First SQLSTATE on a handle, or `fallback` when the driver posted no
     // diagnostic — C5.
     //
@@ -524,6 +562,13 @@ protected:
     core::OdbcConnection& conn_;
     std::string connection_string_;   // C13
 
+    // S3. Written by run_test as it goes, read by run_test_category only when
+    // the crash guard fires. `completed_` is a copy of every verdict already
+    // reached; `last_started_` is the probe that was running when the process
+    // faulted, which is the one the report most needs to name.
+    std::vector<TestResult> completed_;
+    std::string last_started_;
+
     // C13: the string `conn_` was opened with, when the caller supplied it.
     const std::string& connection_string() const { return connection_string_; }
 
@@ -626,6 +671,8 @@ protected:
         TestResult result = make_result(test_name, function, TestStatus::PASS,
                                         expected, "", severity, conformance,
                                         spec_reference);
+        note_probe_start(category_name(), test_name);   // S2
+        last_started_ = test_name;                      // S3
         auto start = std::chrono::high_resolution_clock::now();
         try {
             body(result);
@@ -677,6 +724,9 @@ protected:
         auto end = std::chrono::high_resolution_clock::now();
         result.duration =
             std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        // S3: keep a copy, so a later probe faulting the process does not take
+        // this one's verdict with it. Costs one vector append per probe.
+        completed_.push_back(result);
         return result;
     }
 

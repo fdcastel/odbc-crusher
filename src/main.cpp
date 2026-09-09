@@ -178,6 +178,15 @@ void run_test_category(tests::TestBase& test_suite, reporting::Reporter& reporte
     if (guard.crashed) {
         // The test category caused a driver crash (e.g. access violation).
         // Report it as an error result so the tool keeps running.
+        //
+        // S3: `results` is empty here. Every category builds its vector as
+        // `return { probe_a(), probe_b(), … }`, so a fault in probe C destroys
+        // A's and B's verdicts too — on Firebird 3.0.1.21 that silently removed
+        // all five Descriptor Tests probes from the report, and left both
+        // triage passes unable to say how optimistic the pass rate was.
+        // TestBase keeps a copy of each verdict as it is reached; take those.
+        results = test_suite.completed_results();
+
         tests::TestResult crash_result;
         crash_result.test_name = test_suite.category_name() + " (DRIVER CRASH)";
         crash_result.function = "N/A";
@@ -186,8 +195,25 @@ void run_test_category(tests::TestBase& test_suite, reporting::Reporter& reporte
         crash_result.conformance = tests::ConformanceLevel::CORE;
         crash_result.expected = "Test category completes without crashing";
         crash_result.actual = guard.description;
-        crash_result.diagnostic = "The ODBC driver crashed during this test category. "
-                                  "Some tests may have been lost. This is a driver bug.";
+
+        // Name the probe that did not return, and say what was kept. "Some
+        // tests may have been lost" was the old wording and it was the whole
+        // problem: it told the reader that the denominator was wrong without
+        // telling them by how much, or which coverage went missing.
+        std::string diag = "The ODBC driver crashed during this test category. "
+                           "This is a driver bug.";
+        if (!test_suite.last_probe_started().empty()) {
+            diag += " The probe that did not return is `" +
+                    test_suite.last_probe_started() + "`.";
+        }
+        diag += " " + std::to_string(results.size()) +
+                " probe(s) in this category completed before the crash and are "
+                "reported above; the remainder of the category did not run.";
+        crash_result.diagnostic = diag;
+        crash_result.suggestion =
+            "Probes after the crash point were never reached, so this "
+            "category's coverage is incomplete and the run's pass rate is "
+            "optimistic by that amount.";
         crash_result.duration = std::chrono::microseconds(0);
         results.push_back(crash_result);
     }

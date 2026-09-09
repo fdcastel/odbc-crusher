@@ -28,6 +28,7 @@ add_executable(odbc_crusher_tests
     unit/test_guarded_buffer.cpp
     unit/test_sqlwchar_utils.cpp
     unit/test_cursor_leak_heuristic.cpp
+    unit/test_crash_survivors.cpp
 )
 
 target_include_directories(odbc_crusher_tests PRIVATE
