@@ -764,7 +764,12 @@ jobs:
         set -euo pipefail
         mkdir firebird_odbc && cd firebird_odbc
         curl --no-progress-meter -fLO "${DRIVER_URL}"
-        TARBALL=$(ls *.tar.gz)
+        # The URL's own basename, not a glob over the directory. `ls *.tar.gz`
+        # is what was here and actionlint was right to reject it: it would pick
+        # an arbitrary one if the directory ever held two, and a filename
+        # beginning with a dash would be read as an option.
+        TARBALL="${DRIVER_URL##*/}"
+        test -f "${TARBALL}"
         # The digest matters more here than on the `firebird` entry, not less:
         # this binary is one half of a pair, and a re-cut release asset would
         # silently change what the diff is measuring.
