@@ -86,7 +86,7 @@ Every test reports `PASS`, `FAIL`, `SKIP` (unsupported), or `ERROR`, with ODBC s
 ## Example Output
 
 ```
-ODBC Crusher v0.2.0 - Driver analysis report
+ODBC Crusher v0.7.0 - Driver analysis report
 
 DRIVER:
   Driver Name:          myodbc9w.dll
