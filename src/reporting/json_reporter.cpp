@@ -117,6 +117,60 @@ void JsonReporter::report_summary(size_t total_tests, size_t passed, size_t fail
     // that key — see F2.
 }
 
+// D82: a report the tool cannot parse must not be handed over as if it were
+// one.
+//
+// Seen on macOS: `"categories": [` followed immediately by a bare `,`.
+// Element 0 had serialised to zero characters, which nlohmann does for
+// exactly one thing - a value whose `m_type` matches no case in
+// `serializer::dump`'s switch, where the `JSON_ASSERT(false)` in the default
+// arm is compiled out under NDEBUG. (A *discarded* value is not it; that
+// prints `<discarded>`, which is also unparseable but visible.) Either way
+// the node is corrupt, and the likeliest source is D71: unixODBC takes a wild
+// write when handed an unterminated string, and the three scenarios that hit
+// this are the three that hand it one.
+//
+// That cause is in someone else's library. This is about the consequence:
+// crusher wrote the broken document, printed "JSON report written to:", and
+// exited - so every consumer got a file that would not parse and nothing said
+// why. The report is the product; it is the one thing that has to survive.
+//
+// Returns how many elements had to be replaced.
+size_t quarantine_unserialisable(nlohmann::json& array_of_categories) {
+    if (!array_of_categories.is_array()) return 0;
+
+    constexpr auto kReplace = nlohmann::json::error_handler_t::replace;
+    size_t replaced = 0;
+
+    for (size_t i = 0; i < array_of_categories.size(); ++i) {
+        auto& element = array_of_categories[i];
+
+        // Round-trip each element on its own. Cheap next to the run itself,
+        // and it localises the damage to one category instead of losing the
+        // whole document - which is what happened.
+        bool ok = false;
+        try {
+            ok = nlohmann::json::accept(element.dump(-1, ' ', false, kReplace));
+        } catch (...) {
+            ok = false;   // dump() itself threw: equally unusable
+        }
+        if (ok) continue;
+
+        nlohmann::json marker = nlohmann::json::object();
+        marker["name"] = "(unserialisable category #" + std::to_string(i) + ")";
+        marker["tests"] = nlohmann::json::array();
+        marker["error"] =
+            "This category could not be serialised as JSON and was replaced so "
+            "the rest of the report survives. Its in-memory representation was "
+            "corrupt - see IMPROVEMENT_PLAN.md D82, and D71 for the wild write "
+            "in the driver manager that is the likeliest cause.";
+        element = std::move(marker);
+        ++replaced;
+    }
+
+    return replaced;
+}
+
 void JsonReporter::maybe_write_snapshot() {
     if (output_file_.empty()) return;
 
@@ -137,9 +191,21 @@ void JsonReporter::write_snapshot(bool complete) {
     sanitize_utf8_in_place(root_);
     sanitize_utf8_in_place(categories_);
 
+    // D82: only on the final write. The intermediate snapshots exist to
+    // survive a kill and run after every category; parsing a ~100 KB document
+    // 23 times to guard against a fault seen twice is the wrong trade, and a
+    // corrupt node found there would still be corrupt at the end.
+    size_t quarantined = 0;
+    if (complete) {
+        quarantined = quarantine_unserialisable(categories_);
+    }
+
     nlohmann::json doc = root_;
     doc["categories"] = categories_;
     doc["complete"] = complete;
+    if (quarantined > 0) {
+        doc["quarantined_categories"] = quarantined;
+    }
 
     // Write to a sibling temp file and rename over the target, so a signal
     // landing mid-write can never leave a truncated document behind. rename()
@@ -172,7 +238,29 @@ void JsonReporter::write_snapshot(bool complete) {
         // afford: the report is the product.
         constexpr auto kReplace = nlohmann::json::error_handler_t::replace;
         if (complete) {
-            file << doc.dump(2, ' ', false, kReplace) << std::endl;
+            // D82: and check the bytes parse before handing them over. The
+            // per-category quarantine above should have caught anything
+            // wrong, so reaching this fallback means the damage is somewhere
+            // that walk does not reach - and a small valid report saying so
+            // beats a large invalid one that does not.
+            std::string text = doc.dump(2, ' ', false, kReplace);
+            if (!nlohmann::json::accept(text)) {
+                nlohmann::json rescue = nlohmann::json::object();
+                rescue["schema_version"] = kSchemaVersion;
+                rescue["complete"] = true;
+                rescue["categories"] = nlohmann::json::array();
+                rescue["report_corrupt"] =
+                    "The report could not be serialised as valid JSON. This is "
+                    "a defect in odbc-crusher or in the memory it was given - "
+                    "see IMPROVEMENT_PLAN.md D82. The run's results are lost; "
+                    "the alternative is writing a document no consumer can "
+                    "read, which is what used to happen.";
+                text = rescue.dump(2, ' ', false, kReplace);
+                std::cerr << "Error: the report did not serialise as valid "
+                             "JSON and was replaced with a corruption notice."
+                          << std::endl;
+            }
+            file << text << std::endl;
         } else {
             file << doc.dump(-1, ' ', false, kReplace) << std::endl;
         }

@@ -76,4 +76,12 @@ private:
     std::chrono::steady_clock::time_point last_snapshot_{};
 };
 
+// D82: replace any element of `array_of_categories` that will not survive a
+// JSON round-trip, and return how many. Declared here rather than kept
+// file-local so it can be tested directly: the states it exists for - a json
+// node with a corrupt type byte - cannot be reached through the reporter's
+// public API, and a guard that cannot be exercised is the thing this project
+// keeps finding.
+size_t quarantine_unserialisable(nlohmann::json& array_of_categories);
+
 } // namespace odbc_crusher::reporting

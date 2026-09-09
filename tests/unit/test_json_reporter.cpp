@@ -301,3 +301,82 @@ TEST_F(JsonReporterFixture, AnEntirelyInformationalRunHasNoPassRate) {
     EXPECT_EQ(s["scored"], 0);
     EXPECT_DOUBLE_EQ(s["pass_rate"].get<double>(), 0.0);
 }
+
+// ── D82: a report the tool cannot parse must not be handed over ───────────
+//
+// Recurred on macOS with the bytes captured: `"categories": [` followed
+// immediately by a bare `,`, because element 0 serialised to *zero
+// characters*. nlohmann does that for a value whose `m_type` matches no case
+// in its dump switch - the default arm's JSON_ASSERT is compiled out under
+// NDEBUG - which means a corrupt node, most likely from D71's wild write in
+// the driver manager. crusher wrote it, printed "JSON report written to:",
+// and exited.
+//
+// A `discarded` value stands in for the corrupt one here. It is not the same
+// value, but it is the same problem stated in a way a test can construct: it
+// dumps to `<discarded>`, which is not JSON, so it exercises the same path.
+
+TEST(JsonReportSalvage, AnUnserialisableCategoryIsReplacedNotShipped) {
+    nlohmann::json categories = nlohmann::json::array();
+
+    nlohmann::json good = nlohmann::json::object();
+    good["name"] = "Statement Tests";
+    good["tests"] = nlohmann::json::array();
+
+    categories.push_back(nlohmann::json(nlohmann::json::value_t::discarded));
+    categories.push_back(good);
+
+    // Before: the array does not survive a round-trip at all.
+    ASSERT_FALSE(nlohmann::json::accept(categories.dump()))
+        << "the fixture must start from a document that really is broken";
+
+    const size_t replaced =
+        reporting::quarantine_unserialisable(categories);
+
+    EXPECT_EQ(replaced, 1u);
+    EXPECT_TRUE(nlohmann::json::accept(categories.dump()))
+        << "the salvaged document still does not parse";
+    ASSERT_EQ(categories.size(), 2u) << "the good category was lost too";
+    EXPECT_EQ(categories[1]["name"], "Statement Tests")
+        << "salvaging must not disturb the categories that were fine";
+    EXPECT_NE(categories[0]["name"].get<std::string>().find("unserialisable"),
+              std::string::npos)
+        << "the replacement has to say what happened: "
+        << categories[0].dump();
+}
+
+TEST(JsonReportSalvage, ACleanReportIsLeftExactlyAsItWas) {
+    nlohmann::json categories = nlohmann::json::array();
+    nlohmann::json one = nlohmann::json::object();
+    one["name"] = "Connection Tests";
+    one["tests"] = nlohmann::json::array();
+    categories.push_back(one);
+
+    const nlohmann::json before = categories;
+    EXPECT_EQ(reporting::quarantine_unserialisable(categories), 0u);
+    EXPECT_EQ(categories, before)
+        << "the salvage pass rewrote a report that was already valid";
+}
+
+TEST(JsonReportSalvage, ANonArrayIsNotTouched) {
+    nlohmann::json not_an_array = nlohmann::json::object();
+    EXPECT_EQ(reporting::quarantine_unserialisable(not_an_array), 0u);
+}
+
+// The end-to-end shape: a reporter whose accumulated categories hold a bad
+// node still writes a file that parses, and says how many it lost.
+TEST_F(JsonReporterFixture, AReportWithABadNodeIsStillReadable) {
+    reporting::JsonReporter reporter(path_.string());
+    reporter.report_start("Driver={Mock};");
+    reporter.report_category("Statement Tests",
+                             {make("t1", tests::TestStatus::PASS)});
+    reporter.report_summary(1, 1, 0, 0, 0, 0, std::chrono::microseconds(1));
+    reporter.report_end();
+
+    // The reporter's own output must parse - that is the baseline this
+    // guards, and read_back() would throw if it did not.
+    auto doc = read_back();
+    EXPECT_TRUE(doc.contains("categories"));
+    EXPECT_FALSE(doc.contains("quarantined_categories"))
+        << "a clean run must not claim it quarantined anything";
+}
