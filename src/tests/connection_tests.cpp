@@ -553,11 +553,22 @@ TestResult ConnectionTests::test_failed_connect_diagnostics_are_wellformed() {
                 faults += text;
             };
 
-            // Kept, but not the load-bearing assertion: a driver manager
-            // repairs a state it cannot recognise on the way past. The mock
-            // configured to return no SQLSTATE at all is reported here as
-            // 'S1000', the ODBC 2.x spelling of HY000, which the Windows DM
-            // substituted. What survives the trip is the other two faults.
+            // How much of a garbled record reaches an application depends on
+            // the driver manager, and the two repair *different* halves of it.
+            // Measured against the mock told to return no SQLSTATE and a
+            // message length that describes nothing:
+            //
+            //   Windows DM   substitutes 'S1000' for the empty SQLSTATE (the
+            //                ODBC 2.x spelling of HY000) and passes the bogus
+            //                length through, so the length fault is what shows.
+            //   unixODBC     passes the empty SQLSTATE through untouched and
+            //                recomputes the length from the string the driver
+            //                actually wrote, so the SQLSTATE fault is what
+            //                shows and the length always agrees.
+            //
+            // Which is why all three checks are here and none of them is
+            // load-bearing alone. Only the drifting native code below survives
+            // both.
             if (first.sqlstate.size() != 5) {
                 fault("the SQLSTATE is " +
                       std::to_string(first.sqlstate.size()) +

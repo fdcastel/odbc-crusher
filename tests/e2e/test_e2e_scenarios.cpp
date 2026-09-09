@@ -1823,16 +1823,35 @@ TEST_F(CrusherE2EFixture, FailedConnectDiagnosticsCatchAnUnreadableRecord) {
 
     const auto actual = t->value("actual", std::string{});
     EXPECT_EQ(t->value("status", std::string{}), "FAIL") << actual;
-    // The two faults that survive a driver manager. The third - an empty
-    // SQLSTATE - does not: the DM substitutes a state of its own for one it
-    // cannot recognise, which is why the probe does not lean on it and this
-    // scenario does not assert it.
-    EXPECT_NE(actual.find("does not describe the message written"),
-              std::string::npos)
-        << "the length/message disagreement was not reported; actual was: "
-        << actual;
+
+    // The drifting native code is the only one of the three faults that
+    // survives every driver manager, so it is the only one asserted outright.
     EXPECT_NE(actual.find("different diagnostics"), std::string::npos)
         << "the drifting native code was not reported; actual was: " << actual;
+
+    // The other two are platform-split, which this scenario found out the hard
+    // way: it asserted the length fault, passed on Windows, and failed on
+    // Linux and macOS. The driver managers repair *different* halves of the
+    // same broken record.
+    //
+    //   Windows DM   substitutes 'S1000' for the empty SQLSTATE and passes the
+    //                bogus length through -> the length fault is visible.
+    //   unixODBC     passes the empty SQLSTATE through and recomputes the
+    //                length from what the driver wrote -> the SQLSTATE fault
+    //                is visible and the length always agrees.
+    //
+    // The probe is right on both. Asserting that one of the two is named keeps
+    // this case honest without pinning it to whichever driver manager the
+    // author happened to be running.
+    const bool sqlstate_fault =
+        actual.find("SQLSTATE is 0 characters") != std::string::npos;
+    const bool length_fault =
+        actual.find("does not describe the message written") != std::string::npos;
+    EXPECT_TRUE(sqlstate_fault || length_fault)
+        << "neither the empty SQLSTATE nor the length disagreement was "
+           "reported, so nothing but the native code survived the driver "
+           "manager; actual was: "
+        << actual;
 }
 
 TEST_F(CrusherE2EFixture, FailedConnectDiagnosticsSkipWhenNoConnectCanFail) {
