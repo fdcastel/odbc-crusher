@@ -2345,6 +2345,31 @@ QueryResult execute_query(const ParsedQuery& query, int result_set_size,
             }
             const size_t stride = (row_count > 0 && total_vals > 0)
                 ? total_vals / row_count : 0;
+            // H18: the same check as D12's above, for the form D12 did not
+            // cover — `INSERT INTO t VALUES (…)` with no column list. Without
+            // one, the `else` branches below pad the row out to the table's
+            // width with monostate, so `INSERT INTO t VALUES (7777)` against a
+            // two-column table stored `(7777, NULL)` and reported success.
+            //
+            // That is more permissive than every real database: Firebird
+            // answers -804, PostgreSQL 42601, MySQL 21S01. The e2e suite runs
+            // against this mock, so four probes carrying exactly that
+            // malformed statement passed CI for their whole existence and
+            // failed only against a server — where the throw then skipped
+            // their rollback and the table-guard's DROP wedged the run. The
+            // mock being kinder than reality is not neutral; it is the reason
+            // the bug was invisible.
+            if (table && query.insert_columns.empty() && stride > 0
+                && stride != table->columns.size()) {
+                result.success = false;
+                result.error_sqlstate = "21S01";
+                result.error_message =
+                    "Insert value list does not match table width: "
+                    + std::to_string(stride) + " values for "
+                    + std::to_string(table->columns.size()) + " columns in "
+                    + query.table_name;
+                break;
+            }
             // Defensive: if the tuple count and value count don't divide evenly
             // we fall back to a single-row insert (shouldn't happen with a
             // well-formed VALUES clause).

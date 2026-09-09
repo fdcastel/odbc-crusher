@@ -181,6 +181,32 @@ TEST_F(WhereParserTest, InsertValueCountMustMatchTheColumnList) {
     EXPECT_EQ(TableSize(), 4) << "a malformed INSERT added a row";
 }
 
+// H18: the same rule for the form that names no columns, which the test above
+// did not reach. `INSERT INTO W VALUES (1)` against a two-column table used to
+// succeed here — the row was padded to the table's width with NULL — while
+// Firebird answers -804, PostgreSQL 42601 and MySQL 21S01. Four crusher probes
+// carried exactly that statement and passed the e2e suite for their whole
+// existence because this mock accepted it; against a real server the throw
+// skipped their rollback and the table guard's DROP then wedged the entire
+// run. A mock that is kinder than every real driver hides probe bugs rather
+// than driver bugs, which is the opposite of its job.
+TEST_F(WhereParserTest, InsertWithNoColumnListMustFillEveryColumn) {
+    EXPECT_FALSE(SQL_SUCCEEDED(Try("INSERT INTO W VALUES (1)")))
+        << "one value for a two-column table was accepted";
+    EXPECT_EQ(State(), "21S01");
+    EXPECT_EQ(TableSize(), 4) << "a short INSERT added a row";
+
+    // Too many is the same mistake in the other direction.
+    EXPECT_FALSE(SQL_SUCCEEDED(Try("INSERT INTO W VALUES (1, 2, 3)")));
+    EXPECT_EQ(State(), "21S01");
+    EXPECT_EQ(TableSize(), 4);
+
+    // And the well-formed column-less form still works, or this check would
+    // have broken every probe that uses it rather than only the wrong ones.
+    EXPECT_TRUE(SQL_SUCCEEDED(Try("INSERT INTO W VALUES (99, 'ok')")));
+    EXPECT_EQ(TableSize(), 5);
+}
+
 // ── Malformed SQL must not be undefined behaviour ────────────────────────
 //
 // Each of these reached a front()/back() on a string the statement text
