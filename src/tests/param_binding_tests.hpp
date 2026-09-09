@@ -56,6 +56,12 @@ private:
     // contract, not a rebind.
     TestResult test_param_bound_value_reread_on_execute();
 
+    // P8 (IMPROVEMENT_PLAN_V2): a value bound after a NULL on the same
+    // parameter, over six numeric column types. The three whose
+    // SQL_C_DEFAULT resolves to SQL_C_CHAR are the ones a driver loses;
+    // the other three are the controls that make the signature readable.
+    TestResult test_param_value_after_null_same_parameter();
+
     // §1.1 — numeric-C → character-SQL round-trip matrix. Integer shapes
     // share `run_int_to_string_roundtrip<CType>`; float shapes use
     // `run_float_to_string_roundtrip<CType>` (numeric tolerance because

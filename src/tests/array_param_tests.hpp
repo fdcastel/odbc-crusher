@@ -53,6 +53,10 @@ private:
     TestResult test_param_status_array();
     TestResult test_params_processed_count();
     TestResult test_array_with_null_values();
+    // P11 (IMPROVEMENT_PLAN_V2): SQLRowCount after an array execute,
+    // graded against the driver's own SQL_PARAM_ARRAY_ROW_COUNTS answer.
+    TestResult test_array_row_count_matches_its_claim();
+
     TestResult test_param_operation_array();
     TestResult test_paramset_size_one();
 

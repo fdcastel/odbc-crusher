@@ -52,8 +52,267 @@ std::vector<TestResult> ParameterBindingTests::run() {
     results.push_back(test_param_bind_once_execute_many_endtran());
     results.push_back(test_param_reexecute_requires_close());
     results.push_back(test_param_batch_then_single_row_tail());
+    // P8 (IMPROVEMENT_PLAN_V2)
+    results.push_back(test_param_value_after_null_same_parameter());
 
     return results;
+}
+
+// ── P8 (IMPROVEMENT_PLAN_V2) — a value bound after a NULL ───────────────
+//
+// There was no "NULL then value on the same parameter" probe, and the defect it
+// looks for is entirely silent.
+//
+// `SQL_C_DEFAULT` resolves to `SQL_C_CHAR` for `SQL_NUMERIC`, `SQL_DECIMAL` and
+// `SQL_BIGINT`. An application that binds its NULLs with `SQL_C_DEFAULT` and its
+// values with the value's own C type — an ordinary thing to do — therefore
+// retypes the parameter on its first NULL. If the driver describes the
+// parameter from the live sqlvar rather than from the prepare-time snapshot,
+// that retyping sticks: every later row on that parameter is written as text
+// into a numeric column and, because the null flag is still set from the NULL
+// row, reaches the server as **NULL**, with `SQL_SUCCESS` and a correct row
+// count. `SQLFreeStmt(SQL_RESET_PARAMS)` does not help, because the state is in
+// the sqlvar and not in the descriptors.
+//
+// `SQL_INTEGER`, `SQL_SMALLINT` and `SQL_DOUBLE` are the controls: their
+// `SQL_C_DEFAULT` never resolves to a character type, so they are expected to
+// survive on a driver that has the bug. A run where *every* cell is lost is a
+// different fault and the probe says so; a run where only the three
+// character-defaulting types are lost is the signature.
+TestResult ParameterBindingTests::test_param_value_after_null_same_parameter() {
+    return run_test(
+        "test_param_value_after_null_same_parameter",
+        "SQLBindParameter(SQL_C_DEFAULT, SQL_NULL_DATA) then a typed value",
+        "A value bound after a NULL on the same parameter reaches the server as "
+        "that value, for every numeric column type",
+        Severity::CRITICAL, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLBindParameter — SQL_C_DEFAULT and parameter retyping",
+        [&](TestResult& result) {
+            struct Cell {
+                const char* label;
+                std::vector<std::string> ddl;   // first spelling this engine takes
+                SQLSMALLINT sql_type;
+                SQLULEN     size;
+                SQLSMALLINT scale;
+                bool        default_is_character;   // the three that lose
+            };
+            // Sizes and scales matter: a driver validates them against the
+            // column, and getting them wrong turns a data question into a
+            // binding error.
+            static const Cell cells[] = {
+                {"NUMERIC(9,3)",      {"NUMERIC(9,3)"},                    SQL_NUMERIC, 9, 3,  true},
+                {"DECIMAL(18,2)",     {"DECIMAL(18,2)"},                   SQL_DECIMAL, 18, 2, true},
+                {"BIGINT",            {"BIGINT", "NUMERIC(18,0)"},         SQL_BIGINT, 19, 0,  true},
+                {"INTEGER",           {"INTEGER"},                         SQL_INTEGER, 10, 0, false},
+                {"SMALLINT",          {"SMALLINT"},                        SQL_SMALLINT, 5, 0, false},
+                {"DOUBLE PRECISION",  {"DOUBLE PRECISION", "FLOAT"},       SQL_DOUBLE, 15, 0,  false},
+            };
+
+            std::string lost;        // cells where the value came back NULL
+            std::string wrong;       // came back, but not as what was sent
+            std::string skipped;     // no DDL spelling this engine accepts
+            int measured = 0;
+            int lost_defaulting = 0, lost_control = 0;
+
+            int cell_index = 0;
+            for (const auto& cell : cells) {
+                // A table per cell. RoundTripTableGuard deliberately *reuses* an
+                // existing table rather than insisting on DDL privileges (C4),
+                // so one shared name would hand every cell after the first the
+                // previous cell's column type - and the probe would then report
+                // a NUMERIC(9,3) column truncating a BIGINT as a driver defect.
+                const std::string table =
+                    "ODBC_TEST_NULLTHEN_" + std::to_string(++cell_index);
+                if (!create_roundtrip_table_first_working(table, cell.ddl)) {
+                    if (!skipped.empty()) skipped += ", ";
+                    skipped += cell.label;
+                    continue;
+                }
+
+                core::OdbcStatement stmt(conn_);
+                const std::string sql = "INSERT INTO " + table + " (ID, VAL) VALUES (?, ?)";
+                if (!SQL_SUCCEEDED(prepare_w_then_ansi(stmt, {sql}))) {
+                    if (!skipped.empty()) skipped += ", ";
+                    skipped += std::string(cell.label) + " (prepare failed)";
+                    drop_roundtrip_table(table);
+                    continue;
+                }
+
+                // Row 1: the NULL, bound the way an application binds a NULL it
+                // has no typed value for.
+                SQLINTEGER id = 1;
+                SQLLEN id_ind = 0;
+                SQLLEN null_ind = SQL_NULL_DATA;
+                SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                                 SQL_INTEGER, 10, 0, &id, sizeof(id), &id_ind);
+                SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT, SQL_C_DEFAULT,
+                                 cell.sql_type, cell.size, cell.scale,
+                                 nullptr, 0, &null_ind);
+                SQLRETURN rc = SQLExecute(stmt.get_handle());
+                if (!SQL_SUCCEEDED(rc)) {
+                    if (!skipped.empty()) skipped += ", ";
+                    skipped += std::string(cell.label) + " (NULL insert rejected: " +
+                               first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "none") + ")";
+                    drop_roundtrip_table(table);
+                    continue;
+                }
+
+                // Row 2: a real value, bound with its own C type. This is the
+                // row the defect swallows.
+                id = 2;
+                SQLLEN val_ind = 0;
+                SQLDOUBLE dbl = 12.5;
+                SQLBIGINT big = 1234567890123LL;
+                SQLINTEGER i32 = 4242;
+                SQLSMALLINT i16 = 424;
+                std::string expected;
+                switch (cell.sql_type) {
+                    case SQL_BIGINT:
+                        expected = std::to_string(big);
+                        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_SBIGINT, cell.sql_type, cell.size,
+                                         cell.scale, &big, sizeof(big), &val_ind);
+                        break;
+                    case SQL_INTEGER:
+                        expected = std::to_string(i32);
+                        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_SLONG, cell.sql_type, cell.size,
+                                         cell.scale, &i32, sizeof(i32), &val_ind);
+                        break;
+                    case SQL_SMALLINT:
+                        expected = std::to_string(i16);
+                        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_SSHORT, cell.sql_type, cell.size,
+                                         cell.scale, &i16, sizeof(i16), &val_ind);
+                        break;
+                    default:   // NUMERIC, DECIMAL, DOUBLE
+                        expected = "12.5";
+                        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_DOUBLE, cell.sql_type, cell.size,
+                                         cell.scale, &dbl, sizeof(dbl), &val_ind);
+                        break;
+                }
+                rc = SQLExecute(stmt.get_handle());
+                if (!SQL_SUCCEEDED(rc)) {
+                    if (!skipped.empty()) skipped += ", ";
+                    skipped += std::string(cell.label) + " (value insert rejected: " +
+                               first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "none") + ")";
+                    drop_roundtrip_table(table);
+                    continue;
+                }
+
+                // Rows 3 and 4: NULL again, then another value. PR #302's own
+                // repro matrix is 24 cells - six types by four orderings - and
+                // the retyping does not necessarily stick on the first NULL
+                // alone. Two orderings in one probe covers "NULL first" and
+                // "NULL between values" without a second table.
+                id = 3;
+                null_ind = SQL_NULL_DATA;
+                SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT, SQL_C_DEFAULT,
+                                 cell.sql_type, cell.size, cell.scale,
+                                 nullptr, 0, &null_ind);
+                SQLExecute(stmt.get_handle());
+
+                id = 4;
+                val_ind = 0;
+                switch (cell.sql_type) {
+                    case SQL_BIGINT:
+                        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_SBIGINT, cell.sql_type, cell.size,
+                                         cell.scale, &big, sizeof(big), &val_ind);
+                        break;
+                    case SQL_INTEGER:
+                        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_SLONG, cell.sql_type, cell.size,
+                                         cell.scale, &i32, sizeof(i32), &val_ind);
+                        break;
+                    case SQL_SMALLINT:
+                        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_SSHORT, cell.sql_type, cell.size,
+                                         cell.scale, &i16, sizeof(i16), &val_ind);
+                        break;
+                    default:
+                        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT,
+                                         SQL_C_DOUBLE, cell.sql_type, cell.size,
+                                         cell.scale, &dbl, sizeof(dbl), &val_ind);
+                        break;
+                }
+                SQLExecute(stmt.get_handle());
+
+                CommitOutcome commit = commit_now();
+                if (!commit) {
+                    // A22: blame the commit, not the bind path.
+                    result.status = TestStatus::SKIP_INCONCLUSIVE;
+                    result.actual = "Could not commit the " + std::string(cell.label) +
+                                    " rows: " + commit.summary;
+                    drop_roundtrip_table(table);
+                    return;
+                }
+
+                RowVerification v = verify_rows_persisted(table, "ID", "VAL", 4);
+                ++measured;
+                if (!v.ok) {
+                    if (!wrong.empty()) wrong += ", ";
+                    wrong += std::string(cell.label) + " (" + v.diagnostic + ")";
+                } else if (!v.actual_values[1].has_value() ||
+                           !v.actual_values[3].has_value()) {
+                    // The signature: a row went in as a value and came back NULL.
+                    if (!lost.empty()) lost += ", ";
+                    lost += std::string(cell.label) + " (row " +
+                            (v.actual_values[1].has_value() ? "4" : "2") + ")";
+                    if (cell.default_is_character) ++lost_defaulting; else ++lost_control;
+                } else {
+                    // Present, but is it the right number? Compared numerically:
+                    // engines render 12.5 as "12.50", "12.500" and so on, and
+                    // that is the column's scale rather than a data defect.
+                    const std::string got = *v.actual_values[1];
+                    try {
+                        if (std::abs(std::stod(got) - std::stod(expected)) > 0.01) {
+                            if (!wrong.empty()) wrong += ", ";
+                            wrong += std::string(cell.label) + ": expected " + expected +
+                                     " got '" + got + "'";
+                        }
+                    } catch (const std::exception&) {
+                        if (!wrong.empty()) wrong += ", ";
+                        wrong += std::string(cell.label) + ": unparseable '" + got + "'";
+                    }
+                }
+                drop_roundtrip_table(table);
+            }
+
+            std::ostringstream oss;
+            oss << measured << " of 6 numeric column types measured";
+            if (!skipped.empty()) oss << "; not available here: " << skipped;
+
+            if (!lost.empty()) {
+                result.status = TestStatus::FAIL;
+                result.severity = Severity::CRITICAL;
+                oss << "; the value bound after a NULL came back as NULL for: " << lost;
+                if (lost_defaulting > 0 && lost_control == 0) {
+                    oss << " — exactly the types whose SQL_C_DEFAULT resolves to "
+                           "SQL_C_CHAR";
+                }
+                result.suggestion =
+                    "A NULL bound with SQL_C_DEFAULT must not retype the "
+                    "parameter for the rows that follow. Describing an INPUT "
+                    "parameter from the live sqlvar rather than from the "
+                    "prepare-time snapshot closes a loop: the NULL row rewrites "
+                    "the sqlvar to text, the next bind is described from that, "
+                    "and the value is written as text into a numeric column with "
+                    "the null flag still set. The application sees SQL_SUCCESS "
+                    "and a correct row count, and loses the row.";
+            } else if (!wrong.empty()) {
+                result.status = TestStatus::FAIL;
+                result.severity = Severity::CRITICAL;
+                oss << "; value mismatches: " << wrong;
+            } else if (measured == 0) {
+                result.status = TestStatus::SKIP_INCONCLUSIVE;
+                oss << "; no numeric column type could be created";
+            } else {
+                oss << "; every value bound after a NULL survived";
+            }
+            result.actual = oss.str();
+        });
 }
 
 // ── Round-trip test table lifecycle ─────────────────────────────────────────

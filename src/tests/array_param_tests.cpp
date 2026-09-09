@@ -4,6 +4,7 @@
 #include "core/odbc_error.hpp"
 #include <sstream>
 #include <cstring>
+#include <cstdio>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -109,6 +110,8 @@ std::vector<TestResult> ArrayParamTests::run() {
     results.push_back(test_paramset_size_one());
     results.push_back(test_param_status_per_row_partial_failure());
     results.push_back(test_paramset_size_unsupported_returns_error());
+    // P11 (IMPROVEMENT_PLAN_V2)
+    results.push_back(test_array_row_count_matches_its_claim());
 
     // Cleanup
     if (table_ok) drop_test_table();
@@ -818,6 +821,162 @@ TestResult ArrayParamTests::test_array_with_null_values() {
 }
 
 // ── Test 6: Parameter Operation Array (SQL_PARAM_IGNORE) ─────────────────────
+// ── P11 (IMPROVEMENT_PLAN_V2) — the row count, against the driver's claim ──
+//
+// `SQLRowCount` was never called in this file, and `SQL_PARAM_ARRAY_ROW_COUNTS`
+// and `SQL_PARAM_ARRAY_SELECTS` appear nowhere in `src/` — so neither what the
+// driver does after an array execute nor what it says it does was read.
+//
+// The trick is the one `test_scalar_function_claim_vs_execute` uses, and it is
+// the most productive shape in the suite: **ask the driver what it does, then
+// check that it does it.** Either answer to `SQL_PARAM_ARRAY_ROW_COUNTS` is
+// conformant —
+//
+//   SQL_PARC_BATCH     one row count per parameter set, stepped with
+//                      SQLMoreResults;
+//   SQL_PARC_NO_BATCH  one cumulative count for the whole execute.
+//
+// — and disagreeing with your own answer is not. A driver that answers BATCH,
+// keeps only the last set's update count and then returns SQL_NO_DATA from
+// SQLMoreResults gives an application 1 for a five-row insert and no way to
+// find the rest.
+TestResult ArrayParamTests::test_array_row_count_matches_its_claim() {
+    return run_test(
+        "test_array_row_count_matches_its_claim",
+        "SQLGetInfo(SQL_PARAM_ARRAY_ROW_COUNTS)/SQLRowCount/SQLMoreResults",
+        "After a 5-set array INSERT, SQLRowCount agrees with the driver's own "
+        "SQL_PARAM_ARRAY_ROW_COUNTS answer",
+        Severity::ERR, ConformanceLevel::LEVEL_1,
+        "ODBC 3.x Arrays of Parameter Values — row counts",
+        [&](TestResult& r) {
+        SQLUINTEGER claim = 0;
+        SQLRETURN rc = SQLGetInfo(conn_.get_handle(), SQL_PARAM_ARRAY_ROW_COUNTS,
+                                  &claim, sizeof(claim), nullptr);
+        if (!SQL_SUCCEEDED(rc)) {
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "SQLGetInfo(SQL_PARAM_ARRAY_ROW_COUNTS) failed, so there "
+                       "is no claim to grade the behaviour against";
+            return;
+        }
+        const bool claims_batch = (claim == SQL_PARC_BATCH);
+        const char* claim_name = claims_batch ? "SQL_PARC_BATCH" : "SQL_PARC_NO_BATCH";
+
+        // A baseline, because earlier probes in this category have already put
+        // rows in this table and the interesting number is the delta.
+        // verify_rows_persisted is not used here: it grades a count against an
+        // expectation, and this needs the count itself.
+        auto count_rows = [&]() -> long {
+            try {
+                core::OdbcStatement c(conn_);
+                c.execute("SELECT COUNT(*) FROM ODBC_TEST_ARRAY");
+                if (!c.fetch()) return -1;
+                SQLBIGINT n = 0;
+                SQLLEN ind = 0;
+                if (!SQL_SUCCEEDED(SQLGetData(c.get_handle(), 1, SQL_C_SBIGINT,
+                                              &n, sizeof(n), &ind))) return -1;
+                return static_cast<long>(n);
+            } catch (const core::OdbcError&) {
+                return -1;
+            }
+        };
+        const long before = count_rows();
+        if (before < 0) {
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual = "Could not count the table before the execute";
+            return;
+        }
+
+        core::OdbcStatement stmt(conn_);
+        constexpr SQLULEN kSets = 5;
+
+        // The paramset size is set *before* the prepare, deliberately, and this
+        // is the one probe in the category that does it that way. A driver that
+        // latches its executor at prepare time - the second defect in PR #308 -
+        // otherwise runs a single set here, and then there is no five-row
+        // execute for the row count to be right or wrong about. Isolating the
+        // fix under test from the one next door is the whole point of asking
+        // the question in this order.
+        if (!configure_array_exec(stmt, r, kSets)) return;
+        if (!prepare_array_insert(stmt, r,
+                "INSERT INTO ODBC_TEST_ARRAY (ID, NAME) VALUES (?, ?)")) return;
+
+        SQLINTEGER ids[kSets];
+        SQLLEN id_ind[kSets];
+        constexpr int kNameLen = 21;
+        char names[kSets][kNameLen];
+        SQLLEN name_ind[kSets];
+        for (SQLULEN i = 0; i < kSets; ++i) {
+            ids[i] = static_cast<SQLINTEGER>(7100 + i);
+            id_ind[i] = 0;
+            std::snprintf(names[i], kNameLen, "rowcount-%d", static_cast<int>(i));
+            name_ind[i] = SQL_NTS;
+        }
+        SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                         SQL_INTEGER, 0, 0, ids, 0, id_ind);
+        SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_INPUT, SQL_C_CHAR,
+                         SQL_VARCHAR, kNameLen - 1, 0, names, kNameLen, name_ind);
+
+        SQLRETURN exec_rc = SQLExecute(stmt.get_handle());
+        SQLLEN row_count = -99;
+        SQLRowCount(stmt.get_handle(), &row_count);
+
+        // How many counts can the application actually reach?
+        long long reachable = (row_count >= 0) ? row_count : 0;
+        int more_result_sets = 0;
+        while (SQLMoreResults(stmt.get_handle()) == SQL_SUCCESS) {
+            if (++more_result_sets > 20) break;
+            SQLLEN next = 0;
+            if (SQL_SUCCEEDED(SQLRowCount(stmt.get_handle(), &next)) && next > 0) {
+                reachable += next;
+            }
+        }
+
+        SQLSetStmtAttr(stmt.get_handle(), SQL_ATTR_PARAMSET_SIZE,
+                       reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+
+        const long after = count_rows();
+        const long inserted = (after >= 0 && before >= 0) ? after - before : -1;
+
+        std::ostringstream oss;
+        oss << "driver claims " << claim_name << "; execute rc=" << exec_rc
+            << "; SQLRowCount=" << row_count << "; " << more_result_sets
+            << " further result set(s) via SQLMoreResults; rows actually "
+               "inserted=" << inserted << "; total count reachable by the "
+               "application=" << reachable;
+        r.actual = oss.str();
+
+        if (!SQL_SUCCEEDED(exec_rc)) {
+            r.status = TestStatus::FAIL;
+            r.actual += " — the array execute itself failed";
+            return;
+        }
+        if (inserted != static_cast<long>(kSets)) {
+            // Not this probe's subject: another probe in this category grades
+            // whether all five sets ran. Without five rows there is no row
+            // count to judge.
+            r.status = TestStatus::SKIP_INCONCLUSIVE;
+            r.actual += " — the execute did not insert five rows, so the row "
+                        "count has nothing to be right about";
+            return;
+        }
+
+        if (reachable != static_cast<long long>(kSets)) {
+            r.status = TestStatus::FAIL;
+            r.severity = Severity::ERR;
+            r.suggestion =
+                std::string("The driver answers ") + claim_name +
+                " for SQL_PARAM_ARRAY_ROW_COUNTS. Under SQL_PARC_NO_BATCH "
+                "SQLRowCount must return the cumulative count for the whole "
+                "execute; under SQL_PARC_BATCH there is one count per parameter "
+                "set and SQLMoreResults must step to the next. Five rows went in "
+                "and the application can only account for " +
+                std::to_string(reachable) + " of them — an ORM using the count "
+                "to confirm its write sees a number that is simply wrong, with "
+                "no error to catch.";
+        }
+        });
+}
+
 TestResult ArrayParamTests::test_param_operation_array() {
     return run_test(
         "test_param_operation_array", "SQLSetStmtAttr/SQLExecute",
