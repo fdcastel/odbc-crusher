@@ -94,6 +94,39 @@ SQLRETURN SQL_API SQLGetDescField(
             emit_len(rec->octet_length);
             break;
 
+        // IMPROVEMENT_PLAN_V2 P6/P7: four fields the driver did not answer, so
+        // the probes for issue #316's shape could not ask it anything. Each is
+        // emitted at its specification width - emit_len is SQLLEN, emit_small
+        // is SQLSMALLINT - which is the other half of that issue.
+        case SQL_DESC_NAME:
+        case SQL_DESC_LABEL: {
+            if (!rec) return SQL_NO_DATA;
+            const std::string& n = rec->name;
+            if (rgbValue && cbValueMax > 0) {
+                const size_t room = static_cast<size_t>(cbValueMax) - 1;
+                const size_t copy = n.size() < room ? n.size() : room;
+                std::memcpy(rgbValue, n.data(), copy);
+                static_cast<char*>(rgbValue)[copy] = 0;
+            }
+            if (pcbValue) *pcbValue = static_cast<SQLINTEGER>(n.size());
+            break;
+        }
+
+        case SQL_DESC_NULLABLE:
+            if (!rec) return SQL_NO_DATA;
+            emit_small(rec->nullable);
+            break;
+
+        case SQL_DESC_DISPLAY_SIZE:
+            if (!rec) return SQL_NO_DATA;
+            emit_len(rec->display_size);
+            break;
+
+        case SQL_DESC_DATETIME_INTERVAL_CODE:
+            if (!rec) return SQL_NO_DATA;
+            emit_small(rec->datetime_interval_code);
+            break;
+
         case SQL_DESC_DATA_PTR:
             if (!rec) return SQL_NO_DATA;
             if (rgbValue) *static_cast<SQLPOINTER*>(rgbValue) = rec->data_ptr;
@@ -452,12 +485,43 @@ SQLRETURN SQL_API SQLColAttribute(
             }
             break;
             
-        case SQL_DESC_TYPE:
         // SQL_DESC_CONCISE_TYPE and SQL_COLUMN_TYPE are both 2, so the
-        // concise type is already answered here - D29 listed it as
-        // missing, but it was reachable all along under the other name.
+        // concise type is answered here - D29 listed it as missing, but it was
+        // reachable all along under the other name.
         case SQL_COLUMN_TYPE:
             if (pNumAttr) *pNumAttr = col_type;
+            break;
+
+        // IMPROVEMENT_PLAN_V2 P7: SQL_DESC_TYPE (1002) is a *different* field
+        // from the concise type, and for a datetime column the specification
+        // asks for SQL_DATETIME with the specific type carried in
+        // SQL_DESC_DATETIME_INTERVAL_CODE. Answering the concise code for both
+        // is issue #316 defect 3 in the Firebird driver, and this driver had
+        // the same shape: one shared case returning col_type.
+        case SQL_DESC_TYPE:
+            if (pNumAttr) {
+                switch (col_type) {
+                    case SQL_TYPE_DATE:
+                    case SQL_TYPE_TIME:
+                    case SQL_TYPE_TIMESTAMP:
+                        *pNumAttr = SQL_DATETIME;
+                        break;
+                    default:
+                        *pNumAttr = col_type;
+                        break;
+                }
+            }
+            break;
+
+        case SQL_DESC_DATETIME_INTERVAL_CODE:
+            if (pNumAttr) {
+                switch (col_type) {
+                    case SQL_TYPE_DATE:      *pNumAttr = SQL_CODE_DATE; break;
+                    case SQL_TYPE_TIME:      *pNumAttr = SQL_CODE_TIME; break;
+                    case SQL_TYPE_TIMESTAMP: *pNumAttr = SQL_CODE_TIMESTAMP; break;
+                    default:                 *pNumAttr = 0; break;
+                }
+            }
             break;
             
         case SQL_DESC_LENGTH:

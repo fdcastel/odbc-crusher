@@ -232,6 +232,61 @@ SQLRETURN deliver_row_to_bound_columns(StatementHandle* stmt,
 
 extern "C" {
 
+namespace {
+
+// IMPROVEMENT_PLAN_V2 P6 - fill the implementation row descriptor.
+//
+// The IRD was never populated, so SQL_DESC_COUNT on it answered 0 after
+// preparing a two-column SELECT and every record field was unreachable. That is
+// the same defect the Firebird driver carries as issue #316 defect 1 - a
+// descriptor the specification says is auto-populated, left at its constructor
+// defaults - and a mock that has it cannot be used to test for it.
+//
+// Called from both SQLExecDirect and SQLExecute, wherever the statement learns
+// its result-set shape.
+void populate_implementation_row_descriptor(StatementHandle* stmt) {
+    if (!stmt || !stmt->imp_row_desc_) return;
+    auto* ird = stmt->imp_row_desc_;
+    const size_t n = stmt->column_types_.size();
+    ird->records_.assign(n, DescriptorHandle::DescriptorRecord{});
+    ird->count_ = static_cast<SQLSMALLINT>(n);
+    for (size_t i = 0; i < n; ++i) {
+        auto& rec = ird->records_[i];
+        const SQLSMALLINT concise = stmt->column_types_[i];
+        rec.concise_type = concise;
+        // The verbose type is SQL_DATETIME for the three datetime concise
+        // types, with the specific one carried in the interval code. Handing
+        // out the concise code for both is issue #316 defect 2.
+        switch (concise) {
+            case SQL_TYPE_DATE:
+                rec.type = SQL_DATETIME;
+                rec.datetime_interval_code = SQL_CODE_DATE;
+                break;
+            case SQL_TYPE_TIME:
+                rec.type = SQL_DATETIME;
+                rec.datetime_interval_code = SQL_CODE_TIME;
+                break;
+            case SQL_TYPE_TIMESTAMP:
+                rec.type = SQL_DATETIME;
+                rec.datetime_interval_code = SQL_CODE_TIMESTAMP;
+                break;
+            default:
+                rec.type = concise;
+                rec.datetime_interval_code = 0;
+                break;
+        }
+        if (i < stmt->column_names_.size()) rec.name = stmt->column_names_[i];
+        const SQLULEN size = (i < stmt->column_sizes_.size())
+                           ? stmt->column_sizes_[i] : 0;
+        rec.length = static_cast<SQLLEN>(size);
+        rec.octet_length = static_cast<SQLLEN>(size);
+        rec.display_size = static_cast<SQLLEN>(size);
+        rec.nullable = SQL_NULLABLE;
+    }
+}
+
+}  // namespace
+
 SQLRETURN SQL_API SQLExecDirect(
     SQLHSTMT hstmt,
     SQLCHAR* szSqlStr,
@@ -326,6 +381,7 @@ SQLRETURN SQL_API SQLExecDirect(
         stmt->column_types_.push_back(t);
     }
     stmt->column_sizes_ = result.column_sizes;   // D14
+    populate_implementation_row_descriptor(stmt);  // IMPROVEMENT_PLAN_V2 P6
     stmt->result_data_.clear();
     stmt->reset_getdata_continuation();          // D85
     for (const auto& row : result.data) {
@@ -409,6 +465,11 @@ SQLRETURN SQL_API SQLPrepare(
         stmt->column_types_.clear();
         stmt->column_sizes_.clear();
     }
+    // IMPROVEMENT_PLAN_V2 P6: and into the IRD, which is where the
+    // specification says a prepared statement's column metadata lives. D14
+    // brought the shape forward to prepare time for SQLNumResultCols and
+    // SQLDescribeCol; the descriptor API was left reading an empty record list.
+    populate_implementation_row_descriptor(stmt);
 
     return SQL_SUCCESS;
 }
@@ -619,6 +680,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
         stmt->column_types_.push_back(t);
     }
     stmt->column_sizes_ = result.column_sizes;   // D14
+    populate_implementation_row_descriptor(stmt);  // IMPROVEMENT_PLAN_V2 P6
     stmt->result_data_.clear();
     stmt->reset_getdata_continuation();          // D85
     for (const auto& row : result.data) {

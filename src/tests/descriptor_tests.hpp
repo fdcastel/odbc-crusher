@@ -28,6 +28,14 @@ private:
     TestResult test_apd_fields();
     TestResult test_copy_desc();
     TestResult test_auto_populate_after_exec();
+
+    // P6 / P7 (IMPROVEMENT_PLAN_V2): what the records *say*, not just how
+    // many there are. The five probes above read SQL_DESC_COUNT and stop;
+    // the seven defects behind issue #316 all live in the fields they
+    // never asked for.
+    TestResult test_ird_records_describe_the_columns();
+    TestResult test_ird_length_fields_are_full_width();
+    TestResult test_colattribute_type_fields_follow_odbc();
 };
 
 } // namespace odbc_crusher::tests
