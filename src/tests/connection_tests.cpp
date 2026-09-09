@@ -261,6 +261,9 @@ TestResult ConnectionTests::test_reused_connection_starts_clean() {
 
             RoundTripTableGuard table(conn_, "ODBC_CRUSHER_REUSE_CONN",
                                       "INTEGER");
+            // A26: destroyed *before* `table`, so the guard's DROP does not
+            // wait forever on a transaction this probe left open on the sibling.
+            SiblingRelease release_sibling(sibling);
             if (!table.ok()) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "Could not create a table to test with: " +
@@ -280,7 +283,8 @@ TestResult ConnectionTests::test_reused_connection_starts_clean() {
 
             {
                 core::OdbcStatement stmt(*sibling);
-                stmt.execute("INSERT INTO " + table.name() + " VALUES (7777)");
+                stmt.execute("INSERT INTO " + table.name() + " (ID, " +
+                             table.val_column() + ") VALUES (7777, 7777)");
             }
             // SQLDisconnect may legitimately refuse while this is open — see
             // test_disconnect_with_open_transaction, which is the probe for
@@ -297,7 +301,8 @@ TestResult ConnectionTests::test_reused_connection_starts_clean() {
             // only for the second caller.
             try {
                 core::OdbcStatement stmt(*sibling);
-                stmt.execute("INSERT INTO " + table.name() + " VALUES (7778)");
+                stmt.execute("INSERT INTO " + table.name() + " (ID, " +
+                             table.val_column() + ") VALUES (7778, 7778)");
                 SQLEndTran(SQL_HANDLE_DBC, sibling->get_handle(), SQL_COMMIT);
             } catch (const core::OdbcError& e) {
                 r.status = TestStatus::FAIL;

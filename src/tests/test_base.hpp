@@ -821,6 +821,53 @@ private:
     std::string last_error_;
 };
 
+// A26: end a sibling connection's transaction before a RoundTripTableGuard in
+// the same scope drops the table that sibling touched.
+//
+// Destructors run in reverse declaration order, so a guard declared *after*
+// the sibling is destroyed *first* — its `DROP TABLE` runs while the sibling
+// still holds an open transaction on that table. Firebird's default lock wait
+// is infinite (`MON$TRANSACTIONS.MON$LOCK_TIMEOUT = -1`), so that DROP never
+// returns, and because crusher has no per-probe watchdog the wedge is not
+// contained: the CI job is killed at its wall-clock cap and the report, which
+// is block-buffered on a pipe, is lost entirely. A run that wedged and a run
+// that produced nothing are then indistinguishable.
+//
+// That is not hypothetical. It cost two whole stress-test runs of the H17
+// Firebird pair, on both driver builds, and it was only found by turning on
+// the Windows driver-manager trace and reading the last call that never
+// returned.
+//
+// Declare one immediately after the guard: being later in the scope it is
+// destroyed earlier, which is the entire point. The rollback comes before the
+// disconnect because `SQLDisconnect` is allowed to refuse with `25000` while a
+// transaction is open — `test_disconnect_with_open_transaction` is the probe
+// for exactly that — and a refused disconnect would leave the lock in place.
+class SiblingRelease {
+public:
+    explicit SiblingRelease(std::unique_ptr<core::OdbcConnection>& sibling)
+        : sibling_(sibling) {}
+
+    SiblingRelease(const SiblingRelease&) = delete;
+    SiblingRelease& operator=(const SiblingRelease&) = delete;
+
+    ~SiblingRelease() {
+        if (!sibling_) return;
+        // Nothing here may throw: this runs during unwinding on the very
+        // path that matters — a probe that threw before its own cleanup.
+        SQLEndTran(SQL_HANDLE_DBC, sibling_->get_handle(), SQL_ROLLBACK);
+        try {
+            sibling_->disconnect();   // throws through check_odbc_result
+        } catch (...) {
+            // A sibling we cannot close is not worth failing a probe over;
+            // the rollback above is what releases the table.
+        }
+    }
+
+private:
+    std::unique_ptr<core::OdbcConnection>& sibling_;
+};
+
 // Helper to convert conformance level to string
 inline const char* conformance_to_string(ConformanceLevel level) {
     switch (level) {

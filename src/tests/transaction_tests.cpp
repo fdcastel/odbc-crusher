@@ -667,6 +667,9 @@ TestResult TransactionTests::test_uncommitted_row_isolation() {
 
             RoundTripTableGuard table(conn_, "ODBC_CRUSHER_ISOLATION",
                                       "INTEGER");
+            // A26: destroyed *before* `table`, so the guard's DROP does not
+            // wait forever on a transaction this probe left open on the sibling.
+            SiblingRelease release_sibling(sibling);
             if (!table.ok()) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "Could not create a table to test with: " +
@@ -698,7 +701,8 @@ TestResult TransactionTests::test_uncommitted_row_isolation() {
 
             {
                 core::OdbcStatement stmt(*sibling);
-                stmt.execute("INSERT INTO " + table.name() + " VALUES (8888)");
+                stmt.execute("INSERT INTO " + table.name() + " (ID, " +
+                             table.val_column() + ") VALUES (8888, 8888)");
             }
 
             // Read from the *primary* while the sibling's transaction is still
@@ -787,6 +791,9 @@ TestResult TransactionTests::test_disconnect_rolls_back_open_transaction() {
             // whatever happens to the sibling and can be read afterwards.
             RoundTripTableGuard table(conn_, "ODBC_CRUSHER_DISCONNECT_TX",
                                       "INTEGER");
+            // A26: destroyed *before* `table`, so the guard's DROP does not
+            // wait forever on a transaction this probe left open on the sibling.
+            SiblingRelease release_sibling(sibling);
             if (!table.ok()) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "Could not create a table to test with: " +
@@ -817,7 +824,8 @@ TestResult TransactionTests::test_disconnect_rolls_back_open_transaction() {
 
             {
                 core::OdbcStatement stmt(*sibling);
-                stmt.execute("INSERT INTO " + table.name() + " VALUES (4242)");
+                stmt.execute("INSERT INTO " + table.name() + " (ID, " +
+                             table.val_column() + ") VALUES (4242, 4242)");
             }
 
             // Disconnect without committing. Two answers are conformant and
