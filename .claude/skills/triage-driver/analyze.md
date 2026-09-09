@@ -40,6 +40,7 @@ Keys you will use:
 | `PROVENANCE`, `PROVENANCE_DETAIL`, `PROVENANCE_NOTE` | Run integrity section |
 | `PARTIAL_REPORT`, `FILTERED_RUN`, `SCHEMA_VERSION` | Run integrity section |
 | `CRASHED_CATEGORIES`, `CRASHED_CATEGORY_NAMES` | Run integrity section |
+| `DISCOVERY_CRASHED` | present and `true` = the driver faulted before any probe ran |
 | `SUMMARY_*` | Summary table |
 | `OUTPUT_PATH` | **write your report exactly here** |
 
@@ -63,6 +64,19 @@ category was discarded** — the category object holds only the crash entry. So
 pass rate is correspondingly optimistic. Say this out loud in the report.
 `(DRIVER CRASH IN TEARDOWN)` is the milder variant: the probes ran, the cleanup
 faulted.
+
+**`DISCOVERY_CRASHED=true` is a finding in its own right**, and one of the most
+severe available. Discovery is `SQLGetInfo` / `SQLGetTypeInfo` / `SQLGetFunctions`
+— the calls every ODBC application makes before it does anything useful, and
+every driver manager and BI tool makes on connect. Crusher wraps all of it in
+one crash guard, so a fault there costs you `driver_info`, `type_info`,
+`function_info` and `scalar_functions` together: `REPORTED_VERSION` will be
+empty and the driver's own capability claims are unavailable, which is why
+`PROVENANCE` may degrade at the same time. Report it as its own root cause
+classified `BUG_IN_DRIVER`, near the top of the punch list, and say plainly that
+a driver which faults during discovery will fail against ordinary ODBC clients
+before any query is issued. Do not let it hide inside the category-crash count —
+it happens earlier and matters more.
 
 ---
 
@@ -157,6 +171,7 @@ reply.
 |---|---|
 | Report complete | ✅ / ⚠️ PARTIAL — `<PARTIAL_REPORT>` |
 | Category filter | full run / ⚠️ filtered: `<CATEGORIES_SELECTED>` |
+| Discovery phase | ✅ completed / ❌ **CRASHED** — `driver_info`, `type_info`, `function_info` and `scalar_functions` all unavailable |
 | Driver crashes | `<CRASHED_CATEGORIES>` categories — `<CRASHED_CATEGORY_NAMES>` |
 | Version provenance | `<PROVENANCE>` — <PROVENANCE_DETAIL> |
 | Report schema | `<SCHEMA_VERSION>` |
