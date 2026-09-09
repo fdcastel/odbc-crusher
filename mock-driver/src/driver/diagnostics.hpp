@@ -17,6 +17,19 @@ struct DiagnosticRecord {
     std::string server_name;    // Server name
     SQLINTEGER column_number = SQL_NO_COLUMN_NUMBER;
     SQLLEN row_number = SQL_NO_ROW_NUMBER;
+
+    // P10: a record the driver cannot describe correctly. SQLGetDiagRec
+    // writes one byte of `message` and reports the length of the whole of it,
+    // and `sqlstate` is whatever it was left as - the shape a diagnostic takes
+    // when it was built by reading an exception object through the wrong type
+    // (Firebird ODBC PR #298: every `catch (std::exception&)` did
+    // `(SQLException&)ex`, so the virtual dispatch read through whatever lay
+    // where the vtable pointer should be).
+    //
+    // Nothing sets this except a connection configured with
+    // `ConnectDiagnostics=Garbled`. It is the lever that lets
+    // test_failed_connect_diagnostics_are_wellformed fail.
+    bool garbled = false;
 };
 
 // Common SQLSTATE codes

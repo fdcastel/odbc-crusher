@@ -3,6 +3,7 @@
 #include "../mock/behaviors.hpp"   // D86
 #include <atomic>
 #include <algorithm>
+#include <utility>
 
 namespace mock_odbc {
 
@@ -20,11 +21,16 @@ void OdbcHandle::clear_diagnostics() {
 
 void OdbcHandle::add_diagnostic(const std::string& sqlstate, SQLINTEGER native_error,
                                  const std::string& message) {
-    diagnostics_.push_back(make_diagnostic(sqlstate, native_error, message));
+    add_diagnostic(make_diagnostic(sqlstate, native_error, message));
+}
+
+void OdbcHandle::add_diagnostic(DiagnosticRecord rec) {
     // D22: keep SQL_DIAG_RETURNCODE consistent with what was posted. A
     // `01xxx` state is a warning; anything else is an error, and an
     // error already recorded is never downgraded by a later warning.
-    const bool is_warning = sqlstate.compare(0, 2, "01") == 0;
+    const bool is_warning =
+        rec.sqlstate.size() >= 2 && rec.sqlstate.compare(0, 2, "01") == 0;
+    diagnostics_.push_back(std::move(rec));
     if (!is_warning) {
         return_code_ = SQL_ERROR;
     } else if (return_code_ != SQL_ERROR) {

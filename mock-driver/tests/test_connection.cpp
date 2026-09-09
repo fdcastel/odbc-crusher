@@ -11,6 +11,8 @@
 #include <sqlext.h>
 
 #include <chrono>
+#include <cstring>
+#include <string>
 
 using namespace mock_odbc;
 
@@ -126,16 +128,98 @@ TEST_F(ConnectionTest, SQLDriverConnect_NoOutput) {
     EXPECT_EQ(ret, SQL_SUCCESS);
 }
 
+// P10: `DATABASE=` is an accepted spelling of `Catalog=`, so it names one of
+// this driver's presets. This case used to pass `DATABASE=testdb` and expect
+// success - the keyword was parsed by nobody and the value went nowhere.
 TEST_F(ConnectionTest, SQLDriverConnect_WithDatabase) {
     SQLCHAR connStrOut[256] = {0};
     SQLSMALLINT outLen = 0;
-    
+
     SQLRETURN ret = SQLDriverConnect(hdbc, nullptr,
-        reinterpret_cast<SQLCHAR*>(const_cast<char*>("DSN=TestDSN;DATABASE=testdb;UID=admin")), SQL_NTS,
+        reinterpret_cast<SQLCHAR*>(const_cast<char*>("DSN=TestDSN;DATABASE=Default;UID=admin")), SQL_NTS,
         connStrOut, sizeof(connStrOut), &outLen, SQL_DRIVER_NOPROMPT);
-    
+
     EXPECT_EQ(ret, SQL_SUCCESS);
     EXPECT_GT(outLen, 0);
+}
+
+// P10: and a database this driver does not have is refused - the one connect
+// failure a caller can ask for without knowing `FailOn`, which is what
+// test_failed_connect_diagnostics_are_wellformed needs.
+TEST_F(ConnectionTest, SQLDriverConnect_RefusesAnUnknownDatabase) {
+    SQLCHAR connStrOut[256] = {0};
+    SQLSMALLINT outLen = 0;
+
+    SQLRETURN ret = SQLDriverConnect(hdbc, nullptr,
+        reinterpret_cast<SQLCHAR*>(const_cast<char*>("DSN=TestDSN;DATABASE=no_such_database;UID=admin")), SQL_NTS,
+        connStrOut, sizeof(connStrOut), &outLen, SQL_DRIVER_NOPROMPT);
+
+    ASSERT_EQ(ret, SQL_ERROR);
+
+    SQLCHAR state[16] = {0};
+    SQLCHAR message[512] = {0};
+    SQLINTEGER native = 0;
+    SQLSMALLINT msg_len = 0;
+    ASSERT_EQ(SQLGetDiagRec(SQL_HANDLE_DBC, hdbc, 1, state, &native, message,
+                            sizeof(message), &msg_len),
+              SQL_SUCCESS);
+    EXPECT_STREQ(reinterpret_cast<const char*>(state), "08001");
+    // The record describes itself: the length it reports is the length it
+    // wrote. `ConnectDiagnostics=Garbled` is what breaks that, deliberately.
+    EXPECT_EQ(static_cast<size_t>(msg_len),
+              std::strlen(reinterpret_cast<const char*>(message)));
+    EXPECT_NE(std::string(reinterpret_cast<const char*>(message))
+                  .find("no_such_database"),
+              std::string::npos);
+}
+
+// P10: the same refusal, described by a driver that cannot describe it. One
+// byte of the message with the length of all of it, and a native code that
+// moves - the Firebird ODBC PR #298 shape.
+TEST_F(ConnectionTest, SQLDriverConnect_GarbledDiagnosticsAreGarbled) {
+    const char* conn_str =
+        "DSN=TestDSN;DATABASE=no_such_database;ConnectDiagnostics=Garbled";
+
+    auto refuse = [&](SQLHDBC dbc, SQLINTEGER* native_out,
+                      SQLSMALLINT* msg_len_out, std::string* message_out) {
+        SQLCHAR connStrOut[256] = {0};
+        SQLSMALLINT outLen = 0;
+        ASSERT_EQ(SQLDriverConnect(dbc, nullptr,
+                                   reinterpret_cast<SQLCHAR*>(
+                                       const_cast<char*>(conn_str)),
+                                   SQL_NTS, connStrOut, sizeof(connStrOut),
+                                   &outLen, SQL_DRIVER_NOPROMPT),
+                  SQL_ERROR);
+        SQLCHAR state[16] = {0};
+        SQLCHAR message[512] = {0};
+        ASSERT_EQ(SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, state, native_out,
+                                message, sizeof(message), msg_len_out),
+                  SQL_SUCCESS);
+        // No SQLSTATE at all. Read straight off the driver there is no driver
+        // manager in the way to substitute one.
+        EXPECT_STREQ(reinterpret_cast<const char*>(state), "");
+        *message_out = reinterpret_cast<const char*>(message);
+    };
+
+    SQLINTEGER native_a = 0;
+    SQLSMALLINT len_a = 0;
+    std::string message_a;
+    refuse(hdbc, &native_a, &len_a, &message_a);
+    EXPECT_EQ(message_a.size(), 1u);
+    EXPECT_GT(len_a, 1) << "the reported length has to disagree with the "
+                           "single byte that was written";
+
+    SQLHDBC second = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &second), SQL_SUCCESS);
+    SQLINTEGER native_b = 0;
+    SQLSMALLINT len_b = 0;
+    std::string message_b;
+    refuse(second, &native_b, &len_b, &message_b);
+    SQLFreeHandle(SQL_HANDLE_DBC, second);
+
+    EXPECT_NE(native_a, native_b)
+        << "two identical refusals reported the same native code, so the "
+           "drift this mode exists to reproduce is not happening";
 }
 
 // ===== SQLBrowseConnect Tests =====

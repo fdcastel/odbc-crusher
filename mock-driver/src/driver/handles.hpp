@@ -28,8 +28,11 @@ public:
     
     // Diagnostics
     void clear_diagnostics();
-    void add_diagnostic(const std::string& sqlstate, SQLINTEGER native_error, 
+    void add_diagnostic(const std::string& sqlstate, SQLINTEGER native_error,
                        const std::string& message);
+    // P10: post a record built by the caller, for the fields make_diagnostic
+    // does not take - today only `garbled`.
+    void add_diagnostic(DiagnosticRecord rec);
     size_t diagnostic_count() const { return diagnostics_.size(); }
     const DiagnosticRecord* get_diagnostic(SQLSMALLINT rec_number) const;
     

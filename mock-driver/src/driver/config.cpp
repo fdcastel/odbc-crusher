@@ -297,9 +297,23 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
         config.mode = BehaviorMode::Success;
     }
     
-    // Catalog
-    config.catalog = get_string_value(pairs, "catalog", "Default");
-    
+    // Catalog. P10: `Database=` and `DBNAME=` are the same key under the two
+    // spellings a connection string normally uses for it, so a caller can
+    // spoil the database name without knowing this driver's own vocabulary.
+    // `Catalog=` still wins where both are given, because the strings that
+    // predate P10 all use it.
+    config.catalog = get_string_value(
+        pairs, "catalog",
+        get_string_value(pairs, "database",
+                         get_string_value(pairs, "dbname", "Default")));
+
+    // How a refused connect describes itself.
+    if (to_lower(get_string_value(pairs, "connectdiagnostics", "wellformed")) ==
+        "garbled") {
+        config.connect_diagnostics = DriverConfig::ConnectDiagnostics::Garbled;
+    }
+
+
     // Types
     config.types = get_string_value(pairs, "types", "AllTypes");
     

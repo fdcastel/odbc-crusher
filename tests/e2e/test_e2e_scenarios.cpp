@@ -223,8 +223,13 @@ std::optional<std::string> baseline_blocker(const nlohmann::json& report,
 // have caught the §7.7-§7.9 regressions on day one).
 
 TEST_F(CrusherE2EFixture, ModeSuccessProducesCoherentReport) {
+    // P10: `Database=`, not `Catalog=`, though they are the same key. The
+    // baseline exists to show that every probe can be *graded* against a
+    // healthy driver, and one of them needs a database name it can spoil to
+    // get a failed connect. With `Catalog=` it has nothing to spoil and skips,
+    // which is honest but is not what this scenario is for.
     auto run = run_crusher(
-        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
         "ResultSetSize=10;");
 
     ASSERT_TRUE(run.launched) << "Failed to launch crusher binary";
@@ -1774,6 +1779,74 @@ TEST_F(CrusherE2EFixture, ReconnectProbeGradesUsabilityAndReportsAutocommit) {
     EXPECT_NE(actual.find("SQL_ATTR_AUTOCOMMIT after reconnect"),
               std::string::npos)
         << "actual was: " << actual;
+}
+
+// ── P10: the diagnostics of a connect that fails ─────────────────────────
+//
+// The lever is `Database=`, an accepted spelling of `Catalog=`: the probe
+// spoils its value, the mock has no database by that name, and the connect is
+// refused for the most ordinary reason there is. `ConnectDiagnostics=Garbled`
+// then decides whether the refusal can be read.
+//
+// Three scenarios, because the probe has three outcomes and each one has been
+// wrong at some point in a probe of this shape: it grades a good record, it
+// catches a bad one, and it says so plainly when the data source cannot be
+// made to refuse a connect at all.
+TEST_F(CrusherE2EFixture, FailedConnectDiagnosticsPassWhenTheRecordIsReadable) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Connection Tests",
+                       "test_failed_connect_diagnostics_are_wellformed");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+
+    const auto actual = t->value("actual", std::string{});
+    EXPECT_EQ(t->value("status", std::string{}), "PASS") << actual;
+    EXPECT_NE(actual.find("08001"), std::string::npos)
+        << "the record the driver returned has to be quoted; actual was: "
+        << actual;
+}
+
+TEST_F(CrusherE2EFixture, FailedConnectDiagnosticsCatchAnUnreadableRecord) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;ConnectDiagnostics=Garbled;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Connection Tests",
+                       "test_failed_connect_diagnostics_are_wellformed");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+
+    const auto actual = t->value("actual", std::string{});
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL") << actual;
+    // The two faults that survive a driver manager. The third - an empty
+    // SQLSTATE - does not: the DM substitutes a state of its own for one it
+    // cannot recognise, which is why the probe does not lean on it and this
+    // scenario does not assert it.
+    EXPECT_NE(actual.find("does not describe the message written"),
+              std::string::npos)
+        << "the length/message disagreement was not reported; actual was: "
+        << actual;
+    EXPECT_NE(actual.find("different diagnostics"), std::string::npos)
+        << "the drifting native code was not reported; actual was: " << actual;
+}
+
+TEST_F(CrusherE2EFixture, FailedConnectDiagnosticsSkipWhenNoConnectCanFail) {
+    // No DBNAME, DATABASE, PWD, PASSWORD or UID to spoil, so the probe has no
+    // way to construct a connect that fails and must say that rather than
+    // grade a driver on a test it never ran.
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Connection Tests",
+                       "test_failed_connect_diagnostics_are_wellformed");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+
+    const auto actual = t->value("actual", std::string{});
+    EXPECT_EQ(t->value("status", std::string{}), "SKIP_INCONCLUSIVE") << actual;
+    EXPECT_NE(actual.find("none of the keywords"), std::string::npos)
+        << "the skip has to say why; actual was: " << actual;
 }
 
 

@@ -46,6 +46,13 @@ void MockCatalog::detach() {
     loaded_preset_.clear();
 }
 
+bool MockCatalog::is_known_preset(const std::string& preset) {
+    std::string lower = preset;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lower == "default" || lower == "empty" || lower == "large";
+}
+
 void MockCatalog::initialize(const std::string& preset) {
     std::lock_guard<std::mutex> g(mu_);
 

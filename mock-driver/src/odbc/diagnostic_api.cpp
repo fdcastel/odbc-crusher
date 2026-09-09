@@ -4,6 +4,7 @@
 #include "driver/handles.hpp"
 #include "driver/diagnostics.hpp"
 #include "utils/string_utils.hpp"
+#include <algorithm>
 #include <cstring>
 #include "driver/entry_guard.hpp"
 
@@ -60,25 +61,46 @@ SQLRETURN SQL_API SQLGetDiagRec(
         return SQL_NO_DATA;
     }
     
-    // Copy SQLSTATE
+    // Copy SQLSTATE. P10: this used to `memcpy` five bytes unconditionally,
+    // which reads off the end of any record whose state is shorter - and a
+    // record with no state at all is precisely what the garbled path below
+    // exists to produce. Copy what is there and terminate.
     if (szSqlState) {
-        std::memcpy(szSqlState, rec->sqlstate.c_str(), 5);
-        szSqlState[5] = '\0';
+        const size_t n = std::min<size_t>(rec->sqlstate.size(), 5);
+        if (n > 0) std::memcpy(szSqlState, rec->sqlstate.c_str(), n);
+        szSqlState[n] = '\0';
     }
-    
+
     // Copy native error
     if (pfNativeError) {
         *pfNativeError = rec->native_error;
     }
-    
+
     // Copy message
     SQLRETURN ret = SQL_SUCCESS;
+    if (rec->garbled) {
+        // P10. One byte of the message, and the length of all of it - the two
+        // halves of the record describing different strings. A caller that
+        // trusts the length reads uninitialised bytes; one that trusts the
+        // terminator gets a single character. Neither can tell the user what
+        // went wrong.
+        if (szErrorMsg && cbErrorMsgMax > 1) {
+            szErrorMsg[0] = rec->message.empty()
+                                ? static_cast<SQLCHAR>('?')
+                                : static_cast<SQLCHAR>(rec->message[0]);
+            szErrorMsg[1] = 0;
+        }
+        if (pcbErrorMsg) {
+            *pcbErrorMsg = static_cast<SQLSMALLINT>(rec->message.length());
+        }
+        return SQL_SUCCESS;
+    }
     if (szErrorMsg && cbErrorMsgMax > 0) {
         ret = copy_string_to_buffer(rec->message, szErrorMsg, cbErrorMsgMax, pcbErrorMsg);
     } else if (pcbErrorMsg) {
         *pcbErrorMsg = static_cast<SQLSMALLINT>(rec->message.length());
     }
-    
+
     return ret;
 }
 MOCK_ENTRY_CATCH(hHandle)

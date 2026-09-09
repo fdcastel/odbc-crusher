@@ -20,8 +20,23 @@ struct DriverConfig {
     // Behavior mode
     BehaviorMode mode = BehaviorMode::Success;
     
-    // Catalog preset
+    // Catalog preset. `Database=` and `DBNAME=` are accepted spellings of the
+    // same key (P10): this driver's databases *are* its catalog presets, and
+    // those two are what a connection string normally calls the database, so
+    // a caller who spoils one is asking for a database this driver does not
+    // have. A name that is not a preset is refused at connect - see
+    // MockCatalog::is_known_preset. Before P10 an unrecognised name silently
+    // loaded the default catalog, so no connection string could produce a
+    // failed connect for an ordinary reason, and the one probe that needs one
+    // had nothing to run against.
     std::string catalog = "Default";
+
+    // Whether the refusal above describes itself correctly. `Garbled` is the
+    // Firebird ODBC PR #298 shape - no SQLSTATE, a message length that
+    // disagrees with the message, and a native code that moves between
+    // identical attempts.
+    enum class ConnectDiagnostics { Wellformed, Garbled };
+    ConnectDiagnostics connect_diagnostics = ConnectDiagnostics::Wellformed;
     
     // Data types
     std::string types = "AllTypes";

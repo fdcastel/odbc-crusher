@@ -121,6 +121,14 @@ public:
     // Initialize catalog based on preset
     void initialize(const std::string& preset);
 
+    // P10: the preset names this driver actually has. `initialize` treats
+    // anything it does not recognise as the default, which is the right thing
+    // once a connection is open and the wrong thing at connect time - a
+    // database name the driver does not have is the ordinary reason a connect
+    // fails, and silently substituting another one meant no connection string
+    // could ask for that failure.
+    static bool is_known_preset(const std::string& preset);
+
     // Connection bookkeeping - D47.
     //
     // The catalog is a process-global singleton, so its lifetime has to

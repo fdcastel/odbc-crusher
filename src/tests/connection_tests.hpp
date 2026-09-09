@@ -26,6 +26,7 @@ private:
     TestResult test_connection_attributes();
     TestResult test_connection_pooling();
     TestResult test_reused_connection_starts_clean();   // I8
+    TestResult test_failed_connect_diagnostics_are_wellformed();   // P10
 };
 
 } // namespace odbc_crusher::tests

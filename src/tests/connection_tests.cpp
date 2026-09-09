@@ -2,7 +2,11 @@
 #include "core/guarded_buffer.hpp"
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
+#include <cctype>
+#include <cstring>
 #include <sstream>
+#include <string>
+#include <vector>
 
 namespace odbc_crusher::tests {
 
@@ -15,6 +19,7 @@ std::vector<TestResult> ConnectionTests::run() {
         test_connection_timeout(),
         test_connection_pooling(),
         test_reused_connection_starts_clean(),   // I8
+        test_failed_connect_diagnostics_are_wellformed(),   // P10
     };
 }
 
@@ -353,6 +358,255 @@ TestResult ConnectionTests::test_reused_connection_starts_clean() {
                                                       "the handle contract "
                                                       "allows)"))
                                  : std::string("not readable"));
+        });
+}
+
+// ── P10 — the diagnostics of a connect that fails ────────────────────────
+//
+// Every other connection probe in this suite starts from a connect that
+// worked. The record a driver leaves when it genuinely cannot connect - the
+// first thing a user ever sees from a driver, and often the only thing - was
+// never read.
+//
+// Firebird ODBC PR #298 is what that hid. Every `catch (std::exception&)` in
+// the driver did `(SQLException&)ex`, a reinterpret_cast, so when the caught
+// object was not an SQLException the virtual dispatch read through whatever
+// lay where the vtable pointer should be: an empty SQLSTATE, a native code
+// that changed run to run, and a message the record could not describe.
+// isql, pyodbc and tdbc::odbc can recover nothing from a record like that.
+//
+// The assertions need no engine knowledge, which is the point. A SQLSTATE is
+// five characters; a reported length describes the string that was written;
+// the same failure twice gives the same code. A data source that cannot be
+// made to refuse a connect skips, and says so.
+TestResult ConnectionTests::test_failed_connect_diagnostics_are_wellformed() {
+    return run_test(
+        "test_failed_connect_diagnostics_are_wellformed",
+        "SQLDriverConnect/SQLGetDiagRec",
+        "A connect that fails leaves a record an application can read: a "
+        "5-character SQLSTATE, a message whose reported length matches it, and "
+        "a native code that is stable across identical attempts",
+        Severity::ERR, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetDiagRec - diagnostics after a failed connection",
+        [&](TestResult& r) {
+            const std::string base = connection_string();
+            if (base.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "No connection string is available to derive a "
+                           "failing one from";
+                return;
+            }
+
+            std::string upper;
+            upper.reserve(base.size());
+            for (char c : base) {
+                upper += static_cast<char>(
+                    std::toupper(static_cast<unsigned char>(c)));
+            }
+
+            // Replace one keyword's value and leave the rest of the string
+            // alone, so the driver gets far enough to try and then fail for
+            // the reason we chose.
+            auto spoil = [&](const std::string& key) -> std::string {
+                const std::string needle = key + "=";
+                const size_t at = upper.find(needle);
+                if (at == std::string::npos) return {};
+                // Only at the start of a keyword, or PWD would match a
+                // connection string carrying NEWPWD.
+                if (at > 0 && upper[at - 1] != ';' &&
+                    !std::isspace(static_cast<unsigned char>(upper[at - 1]))) {
+                    return {};
+                }
+                const size_t value_start = at + needle.size();
+                size_t value_end = base.find(';', value_start);
+                if (value_end == std::string::npos) value_end = base.size();
+                return base.substr(0, value_start) +
+                       "__odbc_crusher_no_such_thing__" +
+                       base.substr(value_end);
+            };
+
+            struct Attempt {
+                std::string conn_str;
+                std::string what;
+            };
+            std::vector<Attempt> attempts;
+            // Deliberately not SERVER or DSN. A bad host name is answered by
+            // the resolver rather than the driver and can take the DNS
+            // timeout to say so; a bad DSN is answered by the driver manager,
+            // whose diagnostics are not the ones under test.
+            for (const char* key : {"DBNAME", "DATABASE", "PWD", "PASSWORD",
+                                    "UID"}) {
+                std::string mangled = spoil(key);
+                if (!mangled.empty()) {
+                    attempts.push_back({std::move(mangled),
+                                        std::string("a bad ") + key});
+                }
+            }
+            if (attempts.empty()) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "The connection string carries none of the keywords "
+                           "this probe knows how to spoil (DBNAME, DATABASE, "
+                           "PWD, PASSWORD, UID), so no failing connect could "
+                           "be constructed";
+                return;
+            }
+
+            struct Outcome {
+                bool failed = false;
+                bool got_record = false;
+                std::string sqlstate;
+                std::string message;
+                SQLINTEGER native = 0;
+                SQLSMALLINT reported_len = 0;
+            };
+
+            auto try_connect = [&](const std::string& conn_str) -> Outcome {
+                Outcome out;
+                SQLHDBC dbc = SQL_NULL_HDBC;
+                if (!SQL_SUCCEEDED(SQLAllocHandle(
+                        SQL_HANDLE_DBC, conn_.get_environment().get_handle(),
+                        &dbc))) {
+                    return out;
+                }
+                core::GuardedBuffer<SQLCHAR> out_conn(1024, 0);   // D62
+                SQLSMALLINT out_len = 0;
+                const SQLRETURN rc = SQLDriverConnect(
+                    dbc, nullptr,
+                    reinterpret_cast<SQLCHAR*>(
+                        const_cast<char*>(conn_str.c_str())),
+                    SQL_NTS, out_conn.data(), out_conn.declared_bytes(),
+                    &out_len, SQL_DRIVER_NOPROMPT);
+
+                if (SQL_SUCCEEDED(rc)) {
+                    SQLDisconnect(dbc);
+                } else {
+                    out.failed = true;
+                    // Six bytes: five for the state and one for a terminator
+                    // the driver is required to write.
+                    SQLCHAR state[16];
+                    std::memset(state, 0, sizeof(state));
+                    core::GuardedBuffer<SQLCHAR> msg(1024, 0);
+                    SQLSMALLINT msg_len = 0;
+                    SQLINTEGER native = 0;
+                    if (SQL_SUCCEEDED(SQLGetDiagRec(
+                            SQL_HANDLE_DBC, dbc, 1, state, &native, msg.data(),
+                            msg.declared_bytes(), &msg_len))) {
+                        out.got_record = true;
+                        out.sqlstate = std::string(
+                            reinterpret_cast<const char*>(state),
+                            ::strnlen(reinterpret_cast<const char*>(state), 5));
+                        out.message = std::string(
+                            reinterpret_cast<const char*>(msg.data()),
+                            ::strnlen(reinterpret_cast<const char*>(msg.data()),
+                                      msg.declared_elements()));
+                        out.native = native;
+                        out.reported_len = msg_len;
+                    }
+                }
+                SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+                return out;
+            };
+
+            Outcome first;
+            size_t used = attempts.size();
+            for (size_t i = 0; i < attempts.size(); ++i) {
+                first = try_connect(attempts[i].conn_str);
+                if (first.failed) {
+                    used = i;
+                    break;
+                }
+            }
+            if (!first.failed) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Every spoiled connection string still connected, so "
+                           "there is no failed connect to read diagnostics from";
+                r.suggestion =
+                    "Some data sources ignore the attributes this probe "
+                    "spoils - an embedded or trusted-authentication setup "
+                    "will not reject a wrong password. The diagnostic "
+                    "contract is untested here rather than shown to hold.";
+                return;
+            }
+
+            std::ostringstream oss;
+            oss << "A connect with " << attempts[used].what << " failed";
+            if (!first.got_record) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = oss.str() + ", but SQLGetDiagRec returned no record "
+                                       "for it";
+                r.suggestion =
+                    "A failed connect must leave a diagnostic record. Without "
+                    "one an application knows only that it failed and can say "
+                    "nothing to the user about why.";
+                return;
+            }
+
+            oss << ": SQLSTATE='" << first.sqlstate << "', native "
+                << first.native << ", message '" << first.message << "' ("
+                << first.reported_len << " reported, " << first.message.size()
+                << " written)";
+
+            std::string faults;
+            auto fault = [&](const std::string& text) {
+                if (!faults.empty()) faults += "; ";
+                faults += text;
+            };
+
+            // Kept, but not the load-bearing assertion: a driver manager
+            // repairs a state it cannot recognise on the way past. The mock
+            // configured to return no SQLSTATE at all is reported here as
+            // 'S1000', the ODBC 2.x spelling of HY000, which the Windows DM
+            // substituted. What survives the trip is the other two faults.
+            if (first.sqlstate.size() != 5) {
+                fault("the SQLSTATE is " +
+                      std::to_string(first.sqlstate.size()) +
+                      " characters, not 5");
+            }
+            if (first.message.empty()) {
+                fault("the message is empty");
+            }
+            // The length a driver reports is the length of the string it
+            // wrote. A record whose two halves describe different strings is
+            // the signature of one built by reading an exception through the
+            // wrong type.
+            if (first.reported_len >= 0 &&
+                static_cast<size_t>(first.reported_len) !=
+                    first.message.size()) {
+                fault("the reported message length (" +
+                      std::to_string(first.reported_len) +
+                      ") does not describe the message written (" +
+                      std::to_string(first.message.size()) + " bytes)");
+            }
+
+            // The same failure twice. A native code that moves between two
+            // identical attempts is not a native code - it is whatever was in
+            // memory when the record was built.
+            const Outcome second = try_connect(attempts[used].conn_str);
+            if (second.got_record) {
+                oss << "; a second identical attempt gave SQLSTATE='"
+                    << second.sqlstate << "', native " << second.native;
+                if (second.native != first.native ||
+                    second.sqlstate != first.sqlstate) {
+                    fault("two identical failed connects reported different "
+                          "diagnostics");
+                }
+            }
+
+            r.actual = oss.str();
+            if (!faults.empty()) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual += " - " + faults;
+                r.suggestion =
+                    "This record is the first thing a user sees from a driver "
+                    "and often the only thing. A missing SQLSTATE, a length "
+                    "that disagrees with its own message, or a native code "
+                    "that changes between identical attempts is the signature "
+                    "of a diagnostic assembled by reading an exception object "
+                    "through the wrong type - and no ODBC client can recover "
+                    "anything from it.";
+            }
         });
 }
 

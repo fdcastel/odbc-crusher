@@ -8,6 +8,8 @@
 #include "mock/behaviors.hpp"
 #include "utils/string_utils.hpp"
 #include "driver/entry_guard.hpp"
+#include <atomic>
+#include <utility>
 
 using namespace mock_odbc;
 
@@ -136,7 +138,32 @@ SQLRETURN SQL_API SQLDriverConnect(
         conn->add_diagnostic(config.error_code, 0, "Simulated connection failure");
         return SQL_ERROR;
     }
-    
+
+    // P10: a database this driver does not have. The one reason a connect
+    // fails that needs no fault injection at all, and the only one a caller
+    // can ask for by spoiling a value it already knows the name of - which is
+    // what test_failed_connect_diagnostics_are_wellformed does, since it
+    // cannot know `FailOn`.
+    if (!MockCatalog::is_known_preset(config.catalog)) {
+        DiagnosticRecord rec = make_diagnostic(
+            sqlstate::CONNECTION_FAILURE, 335544344,
+            "Database '" + config.catalog + "' does not exist on this driver. "
+            "Known databases: Default, Empty, Large.");
+        if (config.connect_diagnostics ==
+            DriverConfig::ConnectDiagnostics::Garbled) {
+            // The PR #298 shape, in full: no SQLSTATE, a message the record
+            // cannot describe (see DiagnosticRecord::garbled), and a native
+            // code read out of a counter rather than the error, so two
+            // identical attempts disagree.
+            static std::atomic<SQLINTEGER> drift{0};
+            rec.sqlstate.clear();
+            rec.native_error = 900000 + drift.fetch_add(7);
+            rec.garbled = true;
+        }
+        conn->add_diagnostic(std::move(rec));
+        return SQL_ERROR;
+    }
+
     // Apply latency
     config.apply_latency();
     
