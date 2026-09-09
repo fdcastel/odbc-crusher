@@ -126,7 +126,15 @@ struct DriverConfig {
         // number of matched rows, then writes none of them. The count stays
         // honest deliberately - the lie is in the data, which is what makes
         // it silent, and what a probe asserting only SQLRowCount cannot see.
-        DropUpdates
+        DropUpdates,
+
+        // D86. The driver D85 found the mock being: a SQLGetData continuation
+        // that outlives the result set it belongs to. Reading the same cell
+        // of the same row in a second result set resumes at the first read's
+        // offset, so the value comes back with its leading characters gone -
+        // or, once the offset is past the end, as SQL_NO_DATA with the
+        // caller's buffer untouched. Silent both ways.
+        StaleGetDataOffset
     };
     SilentCorruptionMode silent_corruption = SilentCorruptionMode::None;
 

@@ -1,5 +1,6 @@
 #include "handles.hpp"
 #include "../mock/mock_txn.hpp"   // I6
+#include "../mock/behaviors.hpp"   // D86
 #include <atomic>
 #include <algorithm>
 
@@ -84,6 +85,24 @@ void ConnectionHandle::open_write_buffer() {
 void ConnectionHandle::close_write_buffer() {
     TxnRegistry::instance().close(id_);
     writes_.reset();
+}
+
+// D86: the one place the continuation is forgotten - and the one lever that
+// stops it being forgotten.
+//
+// D85 fixed the real defect and left the tool with no probe for it, because
+// the mock could no longer produce the behaviour. This is how it produces it
+// again: under StaleGetDataOffset the offset survives its result set, so the
+// same cell read twice comes back short, or as SQL_NO_DATA into an untouched
+// buffer once the offset is past the end.
+void StatementHandle::reset_getdata_continuation() {
+    if (BehaviorController::instance().config().silent_corruption ==
+        DriverConfig::SilentCorruptionMode::StaleGetDataOffset) {
+        return;
+    }
+    getdata_col_ = 0;
+    getdata_row_ = -1;
+    getdata_offset_ = 0;
 }
 
 ConnectionHandle::~ConnectionHandle() {

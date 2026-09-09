@@ -21,6 +21,7 @@
 #include <sqlext.h>
 
 #include "driver/handles.hpp"
+#include "mock/mock_catalog.hpp"   // D91: live_connections()
 
 #include <string>
 #include <vector>
@@ -313,4 +314,102 @@ TEST(CatalogSharing, CreatingTablesWhileAnotherConnectionQueriesIsSafe) {
     SQLDisconnect(a);
     SQLFreeHandle(SQL_HANDLE_DBC, a);
     SQLFreeHandle(SQL_HANDLE_ENV, henv);
+}
+
+// ── D91: the leak is not reachable, and these are the reasons why ─────────
+//
+// The row reads: "~ConnectionHandle never calls MockCatalog::detach(), so
+// freeing a connected environment leaks the attach refcount." The second half
+// is true - detach() has exactly one caller, SQLDisconnect. The first half is
+// not: an application cannot get a connected ConnectionHandle to its
+// destructor, because SQLFreeHandle refuses at both levels.
+//
+// Those two refusals are load-bearing and neither had a test. If either is
+// ever relaxed - to match some other driver's leniency, say - the leak stops
+// being theoretical, D47's reset-on-last-disconnect silently stops firing for
+// the rest of the process, and a later test inherits another's tables. These
+// fail first and point at that.
+
+TEST(CatalogSharing, FreeingAConnectionThatIsStillOpenIsRefused) {
+    SQLHENV henv = SQL_NULL_HENV;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv), SQL_SUCCESS);
+    ASSERT_EQ(SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0), SQL_SUCCESS);
+
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &dbc), SQL_SUCCESS);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDriverConnect(
+        dbc, NULL, (SQLCHAR*)kConn, SQL_NTS, NULL, 0, NULL,
+        SQL_DRIVER_NOPROMPT)));
+
+    EXPECT_EQ(SQLFreeHandle(SQL_HANDLE_DBC, dbc), SQL_ERROR)
+        << "freeing a connected handle would run ~ConnectionHandle with the "
+           "catalog refcount still held, and nothing there gives it back";
+
+    SQLCHAR state[6] = {0};
+    SQLINTEGER native = 0;
+    SQLCHAR msg[256] = {0};
+    SQLSMALLINT len = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLGetDiagRec(
+        SQL_HANDLE_DBC, dbc, 1, state, &native, msg, sizeof(msg), &len)));
+    EXPECT_STREQ((const char*)state, "HY010");
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDisconnect(dbc)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_DBC, dbc)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_ENV, henv)));
+}
+
+TEST(CatalogSharing, FreeingAnEnvironmentWithAllocatedConnectionsIsRefused) {
+    SQLHENV henv = SQL_NULL_HENV;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv), SQL_SUCCESS);
+    ASSERT_EQ(SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0), SQL_SUCCESS);
+
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &dbc), SQL_SUCCESS);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDriverConnect(
+        dbc, NULL, (SQLCHAR*)kConn, SQL_NTS, NULL, 0, NULL,
+        SQL_DRIVER_NOPROMPT)));
+
+    EXPECT_EQ(SQLFreeHandle(SQL_HANDLE_ENV, henv), SQL_ERROR)
+        << "this is what makes ~EnvironmentHandle's child-deleting loop "
+           "unreachable while a connection exists - and with it, D91's leak";
+
+    // Still refused once merely *allocated* rather than connected: the guard
+    // is on the list being non-empty, not on the connection being open.
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDisconnect(dbc)));
+    EXPECT_EQ(SQLFreeHandle(SQL_HANDLE_ENV, henv), SQL_ERROR);
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_DBC, dbc)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_ENV, henv)));
+}
+
+// And the accounting itself: a full cycle gives back exactly what it took.
+// Relative, because these tests share a process and a global counter.
+TEST(CatalogSharing, AConnectCycleIsRefcountNeutral) {
+    using mock_odbc::MockCatalog;
+    const int before = MockCatalog::instance().live_connections();
+
+    SQLHENV henv = SQL_NULL_HENV;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv), SQL_SUCCESS);
+    ASSERT_EQ(SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0), SQL_SUCCESS);
+
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    ASSERT_EQ(SQLAllocHandle(SQL_HANDLE_DBC, henv, &dbc), SQL_SUCCESS);
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDriverConnect(
+        dbc, NULL, (SQLCHAR*)kConn, SQL_NTS, NULL, 0, NULL,
+        SQL_DRIVER_NOPROMPT)));
+    EXPECT_EQ(MockCatalog::instance().live_connections(), before + 1)
+        << "the connect did not register with the catalog";
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLDisconnect(dbc)));
+    EXPECT_EQ(MockCatalog::instance().live_connections(), before)
+        << "SQLDisconnect is the only caller of detach(), so if it stops "
+           "detaching nothing else will";
+
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_DBC, dbc)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFreeHandle(SQL_HANDLE_ENV, henv)));
+    EXPECT_EQ(MockCatalog::instance().live_connections(), before)
+        << "freeing the handles released a count a second time";
 }

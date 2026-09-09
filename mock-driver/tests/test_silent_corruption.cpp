@@ -274,3 +274,40 @@ TEST_F(SilentCorruptionTest, DefaultIsNoneWithUnrelatedKnobs) {
     EXPECT_EQ(CountRows("T_DEFAULT"), 1);
     EXPECT_EQ(FetchFirstString("SELECT V FROM T_DEFAULT"), "Verbatim");
 }
+
+// StaleGetDataOffset - D86. The mock being the driver D85 caught it being.
+//
+// D85 is fixed, and fixing it left the tool with no way to detect the same
+// bug in someone else's driver: the reference report was byte-identical
+// before and after, because no probe looks. This mode is what gives that
+// probe a configuration it can fail on, so it has to genuinely reproduce the
+// behaviour rather than merely name it.
+TEST_F(SilentCorruptionTest, StaleGetDataOffsetSurvivesItsResultSet) {
+    Connect("SilentCorruption=StaleGetDataOffset;Catalog=Default;");
+    Exec("CREATE TABLE T_SGO (ID INTEGER, V VARCHAR(50))");
+    Exec("INSERT INTO T_SGO (ID, V) VALUES (1, 'abcdefghij')");
+
+    EXPECT_EQ(FetchFirstString("SELECT V FROM T_SGO"), "abcdefghij")
+        << "the first read must be correct - the lie is in the second";
+
+    // Same column, same row, a new result set. The offset from the first read
+    // is past the end of the value, so the mock reports SQL_NO_DATA and never
+    // touches the buffer: the caller keeps whatever it had, which here is the
+    // empty string it started with.
+    EXPECT_EQ(FetchFirstString("SELECT V FROM T_SGO"), "")
+        << "StaleGetDataOffset did not carry the offset into the next result "
+           "set, so it is not reproducing D85 and the probe built on it "
+           "proves nothing";
+}
+
+// And the default is still fixed - the mode is opt-in, not a regression of
+// D85 for everyone.
+TEST_F(SilentCorruptionTest, WithoutTheModeTheSameCellReadsTheSameTwice) {
+    Connect("Catalog=Default;");
+    Exec("CREATE TABLE T_SGO2 (ID INTEGER, V VARCHAR(50))");
+    Exec("INSERT INTO T_SGO2 (ID, V) VALUES (1, 'abcdefghij')");
+
+    EXPECT_EQ(FetchFirstString("SELECT V FROM T_SGO2"), "abcdefghij");
+    EXPECT_EQ(FetchFirstString("SELECT V FROM T_SGO2"), "abcdefghij")
+        << "D85 has regressed";
+}

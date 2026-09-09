@@ -71,6 +71,9 @@ bool apply_silent_corruption(MockRow& row, const MockTable& table,
         // nothing to do - dropping it here would make DropUpdates drop
         // inserts too, which is a mode we already have.
         case Mode::DropUpdates:
+        // D86: a fetch-path mode, like the four above - it changes what a
+        // second read of a value returns, not what was stored.
+        case Mode::StaleGetDataOffset:
             return true;
         case Mode::DropInserts:
             return false;

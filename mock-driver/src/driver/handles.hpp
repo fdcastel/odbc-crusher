@@ -197,11 +197,13 @@ public:
 
     // D85: forget any part-retrieved value. Cheap and idempotent, so a site
     // that is not sure whether it needs it should call it.
-    void reset_getdata_continuation() {
-        getdata_col_ = 0;
-        getdata_row_ = -1;
-        getdata_offset_ = 0;
-    }
+    //
+    // D86: out of line, because it consults the fault-injection config -
+    // `SilentCorruption=StaleGetDataOffset` makes it do nothing, which is the
+    // driver D85 found the mock being, on demand. A header that deliberately
+    // forward-declares TxnBuffer to keep mock includes out of itself is not
+    // the place to pull BehaviorController in for one branch.
+    void reset_getdata_continuation();
     
     // Attributes
     SQLULEN cursor_type_ = SQL_CURSOR_FORWARD_ONLY;

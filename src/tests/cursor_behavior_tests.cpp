@@ -17,7 +17,8 @@ std::vector<TestResult> CursorBehaviorTests::run() {
         test_forward_only_past_end(),
         test_fetchscroll_first_forward_only(),
         test_cursor_type_attribute(),
-        test_getdata_same_column_twice()
+        test_getdata_same_column_twice(),
+        test_getdata_restarts_in_a_new_result_set()
     };
 }
 
@@ -228,6 +229,139 @@ TestResult CursorBehaviorTests::test_cursor_type_attribute() {
             actual << "Default cursor: " << cursor_name
                    << "; Requested STATIC, got: " << actual_name;
             r.actual = actual.str();
+        });
+}
+
+// D86: the same cell, read twice, in two result sets.
+//
+// D85 was exactly this bug in this repo's own mock: `getdata_offset_` was
+// keyed on (column, row), and a new result set puts column 1 of row 0 where
+// the old one had column 1 of row 0 - so the key was unchanged and a finished
+// offset was carried into a different value. Fixing it moved the reference
+// report by nothing at all, in either configuration, because no probe looked.
+// A driver shipping that defect would have passed this suite clean.
+//
+// Two failure shapes, and the quiet one is worse. Once the stale offset is
+// past the end of the new value the driver reports SQL_NO_DATA and never
+// touches the buffer, so an application keeps whatever it had there. When the
+// new value is longer, the offset is a *valid* position: the call succeeds
+// and returns the value with its leading characters missing, with no
+// indicator that anything happened.
+TestResult CursorBehaviorTests::test_getdata_restarts_in_a_new_result_set() {
+    return run_test(
+        "test_getdata_restarts_in_a_new_result_set", "SQLGetData",
+        "The same cell read in two successive result sets returns the same "
+        "value both times",
+        Severity::CRITICAL, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetData: a retrieval sequence belongs to one result set",
+        [&](TestResult& r) {
+            // A literal, so the probe knows what it should get back without
+            // creating a table. Long enough that a stale offset lands inside
+            // it rather than past the end - that is the silent-truncation
+            // shape, and the one a shorter value would hide.
+            const std::string expected = "ABCDEFGHIJKLMNOPQRST";
+            const std::vector<std::string> queries = {
+                "SELECT '" + expected + "'",
+                "SELECT '" + expected + "' FROM RDB$DATABASE",
+                "SELECT '" + expected + "' FROM DUAL"
+            };
+
+            // One statement, executed twice. The retrieval offset lives on
+            // the *statement*, so a fresh handle per read gives each read a
+            // clean one and the probe would test nothing - the first draft of
+            // this did exactly that and passed against a driver deliberately
+            // configured to fail it. Reusing one handle is also what an
+            // application does when it loops on a prepared statement.
+            core::OdbcStatement stmt(conn_);
+
+            std::string chosen;
+            auto read_once = [&](std::string& out) -> SQLRETURN {
+                SQLRETURN exec_rc = SQL_ERROR;
+                if (chosen.empty()) {
+                    for (const auto& q : queries) {
+                        exec_rc = SQLExecDirectW(stmt.get_handle(),
+                                                 SqlWcharBuf(q.c_str()).ptr(),
+                                                 SQL_NTS);
+                        if (SQL_SUCCEEDED(exec_rc)) { chosen = q; break; }
+                        SQLFreeStmt(stmt.get_handle(), SQL_CLOSE);
+                    }
+                } else {
+                    exec_rc = SQLExecDirectW(stmt.get_handle(),
+                                             SqlWcharBuf(chosen.c_str()).ptr(),
+                                             SQL_NTS);
+                }
+                if (!SQL_SUCCEEDED(exec_rc)) return exec_rc;
+                if (!SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) return SQL_ERROR;
+
+                core::GuardedBuffer<char> buf(64, 0);
+                SQLLEN ind = 0;
+                const SQLRETURN rc = SQLGetData(stmt.get_handle(), 1, SQL_C_CHAR,
+                                                buf.data(), buf.declared_bytes(),
+                                                &ind);
+                if (SQL_SUCCEEDED(rc)) {
+                    out = core::bounded_string(buf.data(),
+                                               buf.declared_elements(),
+                                               ind).value;
+                }
+                SQLCloseCursor(stmt.get_handle());
+                return rc;
+            };
+
+            std::string first;
+            const SQLRETURN rc1 = read_once(first);
+            if (!SQL_SUCCEEDED(rc1)) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Could not read a literal back at all (rc=" +
+                           std::to_string(rc1) + "); this probe needs one "
+                           "readable value before it can ask for it twice";
+                return;
+            }
+            if (first != expected) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "The driver returned '" + first + "' for a literal "
+                           "'" + expected + "', so a second read cannot be "
+                           "compared against anything";
+                return;
+            }
+
+            std::string second;
+            const SQLRETURN rc2 = read_once(second);
+
+            if (rc2 == SQL_NO_DATA) {
+                r.status = TestStatus::FAIL;
+                r.actual = "The second read of the same cell returned "
+                           "SQL_NO_DATA and left the buffer untouched";
+                r.suggestion =
+                    "The retrieval offset from the first result set survived "
+                    "into the second. A SQLGetData sequence belongs to one "
+                    "result set: executing again must restart it. An "
+                    "application reading the same column of the first row in "
+                    "a loop gets its value once and nothing afterwards.";
+                return;
+            }
+            if (!SQL_SUCCEEDED(rc2)) {
+                r.status = TestStatus::FAIL;
+                r.actual = "The second read of the same cell failed (rc=" +
+                           std::to_string(rc2) + ") after the first succeeded";
+                r.suggestion =
+                    "Re-executing a statement must leave SQLGetData able to "
+                    "read the new result set from the start.";
+                return;
+            }
+
+            r.actual = "Both reads returned '" + second + "'";
+            if (second != expected) {
+                r.status = TestStatus::FAIL;
+                r.actual = "First read '" + first + "', second read '" +
+                           second + "'";
+                r.suggestion =
+                    "The second read came back short by the length of the "
+                    "first - the retrieval offset survived into the new "
+                    "result set and is a valid position inside this value, so "
+                    "the call succeeded and silently dropped the leading "
+                    "characters. Reset the per-column retrieval offset "
+                    "whenever a result set is installed, closed or abandoned.";
+            }
         });
 }
 

@@ -5,7 +5,7 @@
 
 A command-line tool that tests ODBC drivers for correctness and spec compliance.
 
-Point it at any ODBC connection string and it will run **207 checks** covering connections, statements, metadata, data types, transactions, Unicode handling (including non-ASCII round-trip), catalog functions, diagnostics, cursor behavior, parameter binding (including `{?=CALL …}` IN/OUT/INOUT), error handling, buffer validation, NUMERIC byte-equality, escape sequence translation, and state machine compliance — then report what passed, failed, or was skipped.
+Point it at any ODBC connection string and it will run **208 checks** covering connections, statements, metadata, data types, transactions, Unicode handling (including non-ASCII round-trip), catalog functions, diagnostics, cursor behavior, parameter binding (including `{?=CALL …}` IN/OUT/INOUT), error handling, buffer validation, NUMERIC byte-equality, escape sequence translation, and state machine compliance — then report what passed, failed, or was skipped.
 
 ## Quick Start
 
@@ -123,7 +123,7 @@ Statement Tests:                                 2 passed, 2 failed, 11 skipped
   ...
 
 SUMMARY:
-  Total Tests:  207
+  Total Tests:  208
   Passed:       142 (72.8%)
   Failed:       16
   Skipped:      37
@@ -237,7 +237,7 @@ The mock driver supports these connection-string parameters:
 | `BufferValidation` | `Strict` (default), `Lenient` | `Lenient` returns strings **without** their NUL terminator, the classic careless-driver behaviour. Since D62 this is applied in the one copy every string return passes through, so it reaches `SQLGetData`, `SQLDescribeCol`, `SQLGetCursorName`, `SQLNativeSql` and `SQLGetDiagRec` as well as `SQLGetInfo`. |
 | `StateChecking` | `Strict`, `Lenient` | ODBC state-machine validation. |
 | `TransactionMode` | `ReadOnly`, `ReadWrite` | Transaction read/write capability. |
-| **`SilentCorruption`** | `None` (default), `DropInserts`, `DropUpdates`, `MangleVarchar`, `TruncateNumeric`, `NullAsEmpty`, `MangleUnicode`, `SkewNumeric`, `SkewNumericBound` | Silently tamper with stored data while keeping return codes successful — used to validate that round-trip / `verify_rows_persisted` checks actually catch a misbehaving driver. `NullAsEmpty` = NULL char/wchar cells fetch as empty + `ind=0` (Oracle-style). `MangleUnicode` = non-ASCII bytes replaced with `?` (codepage-bound driver pattern). `SkewNumeric` = every numeric cell comes back +1 on both the bound-column and `SQLGetData` paths. `SkewNumericBound` = only the bound-column path is skewed, so reading one column both ways disagrees. `DropUpdates` = `UPDATE` resolves its SET targets and reports the true number of matched rows, then writes none of them — the count stays honest on purpose, because a probe that grades only `SQLRowCount` cannot see this. |
+| **`SilentCorruption`** | `None` (default), `DropInserts`, `DropUpdates`, `MangleVarchar`, `TruncateNumeric`, `NullAsEmpty`, `MangleUnicode`, `SkewNumeric`, `SkewNumericBound`, `StaleGetDataOffset` | Silently tamper with stored data while keeping return codes successful — used to validate that round-trip / `verify_rows_persisted` checks actually catch a misbehaving driver. `NullAsEmpty` = NULL char/wchar cells fetch as empty + `ind=0` (Oracle-style). `MangleUnicode` = non-ASCII bytes replaced with `?` (codepage-bound driver pattern). `SkewNumeric` = every numeric cell comes back +1 on both the bound-column and `SQLGetData` paths. `SkewNumericBound` = only the bound-column path is skewed, so reading one column both ways disagrees. `DropUpdates` = `UPDATE` resolves its SET targets and reports the true number of matched rows, then writes none of them — the count stays honest on purpose, because a probe that grades only `SQLRowCount` cannot see this. `StaleGetDataOffset` = a `SQLGetData` retrieval offset survives into the next result set, so the same cell read twice comes back short or as `SQL_NO_DATA` into an untouched buffer. |
 | **`NativeSqlPassThrough`** | `true`, `false` (default) | When `true`, `SQLNativeSql` returns the input verbatim without translating any escape sequence. Drives the escape-translation probes' canary path. |
 | **`Procedures`** | (default) / `BrokenInout` | When `BrokenInout`, `MOCK_INOUT` runs but its callback returns no output values — mocks drivers that accept `{?=CALL …}` syntactically but never write back to OUT/INOUT bound buffers. |
 | **`ArrayBindRowFailsAt`** | Number (default 0) | When `> 0`, the Nth row (1-indexed) of any array-parameter execute is forced to fail with SQLSTATE `23000`; surrounding rows execute normally. |
@@ -277,8 +277,8 @@ odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
 - **Scrollable cursors** (static cursors with SQL_FETCH_FIRST/LAST/PRIOR/ABSOLUTE/RELATIVE)
 - **Parameter binding** (SQLBindParameter with value substitution in literal SELECTs)
 
-Against `Mode=Success` the mock driver scores **192/192 scored probes (100%)**, with
-15 further probes reported as `INFORMATIONAL` — 207 results in total. Six of those
+Against `Mode=Success` the mock driver scores **193/193 scored probes (100%)**, with
+15 further probes reported as `INFORMATIONAL` — 208 results in total. Six of those
 record what the driver answered where the spec leaves no right answer to grade (an
 optional attribute's value, a `SQLGetInfo` bitmask, the type `COUNT(*)` comes back
 as). The other nine are enforced by the **driver manager** rather than the driver:

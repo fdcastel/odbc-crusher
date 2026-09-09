@@ -2049,6 +2049,66 @@ TEST_F(CrusherE2EFixture, AWScopedFailOnAlsoStopsTheAnsiFallback) {
 // `test_sqlrowcount_after_update` still PASSes. That is not a gap in the
 // row-count probe - it grades SQLRowCount, and SQLRowCount is right. It is
 // the demonstration that grading the count was never going to catch this.
+// D86: a driver whose SQLGetData offset outlives its result set, and the
+// probe that now notices.
+//
+// D85 was that defect in this repo's own mock. Fixing it moved the reference
+// report by nothing in either configuration, because no probe looked - so a
+// third-party driver with the same bug would have passed the suite clean.
+// This is that gap closed, and the assertion is the one AGENTS.md step 6
+// asks for: a configuration that makes the probe fail.
+//
+// The second half matters as much as the first. `StaleGetDataOffset` must
+// fail this probe and *only* this probe: a mode that broke fetching generally
+// would fail plenty of probes and prove nothing about whether this one can
+// see its own subject.
+TEST_F(CrusherE2EFixture, AStaleGetDataOffsetIsCaughtByReadingACellTwice) {
+    const std::string base =
+        "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
+        "ResultSetSize=10;";
+    const char* kProbe = "test_getdata_restarts_in_a_new_result_set";
+
+    auto honest = run_crusher(base);
+    ASSERT_TRUE(honest.report.contains("summary")) << report_outline(honest);
+    SKIP_IF_KILLED(honest);
+    {
+        auto t = find_test(honest.report, "Cursor Behavior Tests", kProbe);
+        ASSERT_TRUE(t.has_value())
+            << "the re-read probe is missing from the report\n"
+            << report_outline(honest);
+        EXPECT_EQ(t->value("status", std::string{}), "PASS")
+            << "a driver that restarts the retrieval must pass\n  actual: "
+            << t->value("actual", std::string{});
+    }
+
+    auto stale = run_crusher(base + "SilentCorruption=StaleGetDataOffset;");
+    ASSERT_TRUE(stale.report.contains("summary")) << report_outline(stale);
+    SKIP_IF_KILLED(stale);
+
+    auto t = find_test(stale.report, "Cursor Behavior Tests", kProbe);
+    ASSERT_TRUE(t.has_value()) << report_outline(stale);
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL")
+        << "a retrieval offset carried into the next result set must fail "
+           "this probe - if it does not, D85's shape is still undetectable "
+           "in someone else's driver\n  actual: "
+        << t->value("actual", std::string{});
+
+    // And nothing else notices, which is what makes the result attributable.
+    int failed = 0;
+    for (const auto& category : stale.report["categories"]) {
+        if (!category.is_object() || !category.contains("tests")) continue;
+        for (const auto& probe : category["tests"]) {
+            if (!probe.is_object()) continue;
+            const auto status = probe.value("status", std::string{});
+            if (status == "FAIL" || status == "ERROR") ++failed;
+        }
+    }
+    EXPECT_EQ(failed, 1)
+        << "StaleGetDataOffset should fail exactly the one probe written for "
+           "it; failing more would mean the mode breaks fetching generally "
+           "and says nothing about this probe's reach";
+}
+
 TEST_F(CrusherE2EFixture, AnUpdateThatChangesNothingIsCaughtByReadingItBack) {
     const std::string base =
         "Driver={Mock ODBC Driver};Mode=Success;Catalog=Default;"
