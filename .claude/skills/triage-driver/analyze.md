@@ -9,9 +9,13 @@ You were given one value: **`OUT_DIR`**. Everything else is read from there.
 
 > H11: this file used to carry nine `<PLACEHOLDER>` tokens that the calling
 > agent had to find-and-replace before sending — 7 KB transcribed by hand on
-> every run, with nine chances to get it wrong, and one placeholder
-> (`<VERSION>`) that was undefined for `mock-driver` and produced a report
-> filename with an empty version in it. The values live in `preflight.txt` now.
+> every run, with nine chances to get it wrong. `<VERSION>` was mapped to a
+> variable the old skill set only in the version-check step, which it told you
+> to skip for `mock-driver`; followed literally that left the report title and
+> the "Manifest version" line empty for that driver. It never actually
+> happened, because the agent doing the substitution used the sensible value
+> rather than the one the table named — which is the argument against having a
+> table at all. The values live in `preflight.txt` now.
 
 ---
 

@@ -78,9 +78,15 @@ instructions of your own — you have not read the findings, and a hint from you
 would bias a classification you are not in a position to make.
 
 > H11: this step used to hand the sub-agent a copy of `analyze.md` with nine
-> `<PLACEHOLDER>` tokens find-and-replaced by hand. One of them (`<VERSION>`)
-> referenced a variable that was never set for `mock-driver`, so that driver's
-> reports were written to a path with an empty version in the filename.
+> `<PLACEHOLDER>` tokens find-and-replaced by hand. One of them, `<VERSION>`,
+> was mapped to `$MANIFEST` — a variable set only in the version-check step,
+> which the old skill told you to *skip* for `mock-driver`. Taken literally
+> that put an empty version in the report's title and in its "Manifest
+> version" line. The filename was never affected (it was built from
+> `$VERSION`, which step 1 always set), and the surviving April report reads
+> ``v`workspace` `` correctly — because whoever ran it substituted the
+> sensible value instead of the one the table named. A substitution table
+> that only works when you ignore it is the argument for not having one.
 
 ---
 
