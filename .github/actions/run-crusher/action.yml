@@ -1,5 +1,8 @@
-# Composite action — IMPROVEMENT_PLAN.md §6.9 (originally) and §7.5
-# (master-tracking pivot).
+# Composite action — docs/old-IMPROVEMENT_PLAN.md §6.9 (originally) and §7.5
+# (master-tracking pivot). The `§N.M` numbering is the *old* plan's; the
+# current docs/IMPROVEMENT_PLAN.md uses lettered row IDs (F12, H11, …) and has
+# no § sections at all, so an unqualified "IMPROVEMENT_PLAN.md §6.9" sent the
+# reader to a document where that identifier does not exist.
 #
 # Each stress-test driver job used to repeat ~25 lines of: download
 # odbc-crusher from the latest release, run it text + JSON, upload

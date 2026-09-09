@@ -80,7 +80,7 @@ belongs to the first failure, not the cleanup.
 
 1. Prefer `FetchContent` for header-only or small libraries
 2. Use `find_package()` for system packages
-3. Update PROJECT_PLAN.md with the rationale
+3. Add a row to `docs/IMPROVEMENT_PLAN.md` with the rationale
 
 ---
 
@@ -113,8 +113,16 @@ Before considering work complete:
 - [ ] All unit tests pass (`ctest --test-dir build`)
 - [ ] RAII used for all ODBC handles
 - [ ] Error handling extracts full diagnostic records
-- [ ] PROJECT_PLAN.md updated (if applicable)
-- [ ] Git commit message follows conventional commits
+- [ ] `docs/IMPROVEMENT_PLAN.md` row added or updated, in this same commit
+      (H11: this line said "PROJECT_PLAN.md updated", which has been the wrong
+      file since **H8** moved the work queue into `docs/`. `PROJECT_PLAN.md` is
+      now a stable architecture document whose §3 just points at the plan, so
+      following this checklist led you to edit the one file that does not track
+      work. The plan's own rules are at the top of `docs/IMPROVEMENT_PLAN.md`:
+      update it in the same commit as the change, fill the Commit column, and
+      never delete a row.)
+- [ ] Git commit message follows conventional commits, with the plan row's ID
+      in parentheses — e.g. `fix(mock): … (D85)`
 
 ---
 

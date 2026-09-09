@@ -1,4 +1,5 @@
-# CodeQL static analysis — IMPROVEMENT_PLAN.md §4.1
+# CodeQL static analysis — docs/old-IMPROVEMENT_PLAN.md §4.1 (the `§N.M`
+# numbering is the old plan's; the current plan uses lettered row IDs)
 #
 # CodeQL was chosen over a clang-tidy CI job because the plan flags
 # non-blocking CI checks as anti-features ("a non-blocking CI job that

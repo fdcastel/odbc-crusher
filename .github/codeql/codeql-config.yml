@@ -1,4 +1,5 @@
-# CodeQL config — IMPROVEMENT_PLAN.md §6.3
+# CodeQL config — docs/old-IMPROVEMENT_PLAN.md §6.3 (the `§N.M` numbering is
+# the old plan's; the current docs/IMPROVEMENT_PLAN.md uses lettered row IDs)
 #
 # Without this config, CodeQL analyses the fetched FetchContent sources
 # (googletest, nlohmann/json, CLI11) under build/_deps/. That produced

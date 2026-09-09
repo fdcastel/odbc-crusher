@@ -380,7 +380,7 @@ jobs:
       # one, so without always() the reference run is skipped in exactly
       # the job that failed - the one worth reading. Found on the macOS
       # runner, where the e2e step failed and this printed nothing.
-      # IMPROVEMENT_PLAN Phase 6 is driven by this number: there is no
+      # docs/IMPROVEMENT_PLAN.md Phase 6 (Part J) is driven by this number: there is no
       # Linux machine to measure on, so each experiment in orders 43-47
       # pushes a change and reads the counts out of this step. ctest
       # swallows a passing test's output, which is why this runs the
