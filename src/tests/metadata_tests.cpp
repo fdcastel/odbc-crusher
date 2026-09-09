@@ -1,4 +1,5 @@
 #include "metadata_tests.hpp"
+#include <cctype>
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
 #include <optional>
@@ -25,9 +26,117 @@ std::vector<TestResult> MetadataTests::run() {
         test_desc_unsigned_on_signed_integer(),
         test_count_star_result_metadata(),
         test_sqlprocedures_smoke(),
-        test_sqlprocedurecolumns_smoke()
+        test_sqlprocedurecolumns_smoke(),
+        // P13 (IMPROVEMENT_PLAN_V2)
+        test_dbms_version_agrees_with_itself()
     };
 }
+
+// ── P13 (IMPROVEMENT_PLAN_V2) — SQL_DBMS_VER against its own tail ───────
+//
+// `SQL_DBMS_VER` is read three times in this suite and its *value* has never
+// been asserted: it is only ever a subject for buffer-length and Unicode
+// probes. Firebird ODBC 3.0.1.21 answered `06.03.1683 WI-V Firebird 5.0` — the
+// engine/ODS number, not the product version — so `atoi` on it gives **6** and
+// every consumer mis-identifies a Firebird 5 server as Firebird 6.
+//
+// A driver-agnostic prober has no independent source for a product version, and
+// inventing one would mean knowing each engine. But it does not need one: ODBC
+// fixes the format as `##.##.####` followed by optional vendor text, and when
+// that text contains a version-shaped token, the two halves are claims about
+// the same thing. `06.03…` beside a tail saying `Firebird 5.0` is a
+// contradiction the driver states in a single string.
+//
+// WARNING rather than FAIL, and skipped when the tail carries no version: the
+// heuristic is sound where it applies and silent where it does not.
+TestResult MetadataTests::test_dbms_version_agrees_with_itself() {
+    return run_test(
+        "test_dbms_version_agrees_with_itself",
+        "SQLGetInfo(SQL_DBMS_VER)",
+        "The numeric prefix of SQL_DBMS_VER agrees with any version in its own "
+        "vendor text",
+        Severity::WARNING, ConformanceLevel::CORE,
+        "ODBC 3.8 SQLGetInfo — SQL_DBMS_VER is ##.##.#### plus vendor text",
+        [&](TestResult& r) {
+            core::GuardedBuffer<char> buf(256, 0);   // D62
+            SQLSMALLINT len = 0;
+            SQLRETURN rc = SQLGetInfo(conn_.get_handle(), SQL_DBMS_VER,
+                                      buf.data(),
+                                      static_cast<SQLSMALLINT>(buf.declared_bytes()),
+                                      &len);
+            if (!SQL_SUCCEEDED(rc)) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "SQLGetInfo(SQL_DBMS_VER) returned " +
+                           first_sqlstate(SQL_HANDLE_DBC, conn_.get_handle(), "an error");
+                return;
+            }
+            const std::string value =
+                bounded_string(buf.data(), buf.declared_elements(), len).value;
+            r.actual = "SQL_DBMS_VER = '" + value + "'";
+
+            // The specification's own shape: two digits, a dot, two digits.
+            if (value.size() < 5 || !std::isdigit(static_cast<unsigned char>(value[0])) ||
+                !std::isdigit(static_cast<unsigned char>(value[1])) || value[2] != '.' ||
+                !std::isdigit(static_cast<unsigned char>(value[3])) ||
+                !std::isdigit(static_cast<unsigned char>(value[4]))) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::WARNING;
+                r.actual += " — the specification's format is ##.##.####, "
+                            "optionally followed by vendor text";
+                r.suggestion =
+                    "Applications parse the fixed prefix. A value that does not "
+                    "start with it is read as a major version of whatever "
+                    "happens to be at the front.";
+                return;
+            }
+            const int prefix_major = (value[0] - '0') * 10 + (value[1] - '0');
+
+            // The first version-shaped token in the tail: digits, a dot, digits.
+            // Only the first is considered - a tail may carry a build number
+            // too, and the product version is what leads.
+            const std::string tail = value.substr(5);
+            int tail_major = -1;
+            for (size_t i = 0; i + 2 < tail.size(); ++i) {
+                if (!std::isdigit(static_cast<unsigned char>(tail[i]))) continue;
+                if (i > 0 && (std::isdigit(static_cast<unsigned char>(tail[i - 1])) ||
+                              tail[i - 1] == '.')) continue;
+                size_t j = i;
+                int major = 0;
+                while (j < tail.size() && std::isdigit(static_cast<unsigned char>(tail[j]))) {
+                    major = major * 10 + (tail[j] - '0');
+                    ++j;
+                }
+                if (j < tail.size() && tail[j] == '.' && j + 1 < tail.size() &&
+                    std::isdigit(static_cast<unsigned char>(tail[j + 1]))) {
+                    tail_major = major;
+                    break;
+                }
+            }
+
+            if (tail_major < 0) {
+                r.status = TestStatus::INFORMATIONAL;
+                r.actual += " — the vendor text carries no version to "
+                            "cross-check the numeric prefix against";
+                return;
+            }
+
+            r.actual += "; numeric prefix major " + std::to_string(prefix_major) +
+                        ", vendor text major " + std::to_string(tail_major);
+            if (prefix_major != tail_major) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::WARNING;
+                r.suggestion =
+                    "The two halves of SQL_DBMS_VER describe the same product "
+                    "and disagree. The usual cause is the numeric prefix being "
+                    "built from an engine, ODS or wire-protocol number while "
+                    "the text names the release — and since applications parse "
+                    "the prefix, they get the wrong major version with nothing "
+                    "to warn them. Report the product version the vendor text "
+                    "names.";
+            }
+        });
+}
+
 
 TestResult MetadataTests::test_tables_catalog() {
     return run_test(

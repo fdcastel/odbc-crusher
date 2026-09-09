@@ -49,6 +49,27 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `
    with nothing to register it against. `tests/unit/` is still the right
    place for a pure function — see `test_guarded_buffer.cpp`.)
 7. Update mock driver if new ODBC functions are exercised
+8. **A probe's `expected` string is a contract.** If the body cannot fail when
+   that expectation is violated, the probe is not finished — rename it or
+   strengthen it. (IMPROVEMENT_PLAN_V2 **Q4**.) This is not a hypothetical
+   tidiness rule: a sweep for the shape found `test_cursor_scrollable_attr`
+   setting an attribute and never reading it back, which is precisely the
+   defect PR #304 fixed; `test_bindparam_null_indicator` binding a NULL and
+   printing a return code without ever fetching the value; `test_rowset_size`
+   setting a rowset size and never fetching a rowset; `test_ird_after_prepare`
+   reading `SQL_DESC_COUNT` and stopping, so a descriptor full of unfilled
+   records passed; `test_statement_attributes` calling itself "various
+   attributes" and reading five; and `test_param_status_per_row_partial_failure`
+   promising "the row that violates a server-side constraint" while inserting
+   five valid rows. Every one of them reported a pass over the bug it was named
+   for, and **a probe that cannot fail is worse than no probe** — no probe is an
+   admitted gap, a passing one is a false assurance.
+
+   The tell is a body that ends at `SQL_SUCCEEDED(rc)` while its name or
+   `expected` text promises something about a *value*. When you write one, ask
+   what the driver would have to do wrong for this probe to notice, and if the
+   answer is "return an error", the probe is testing the return code and should
+   say so.
 
 ### Preserve the primary exception on rollback-path failure
 

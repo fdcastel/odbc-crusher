@@ -13,6 +13,10 @@
 #include <stdexcept>
 #include <typeinfo>
 #include <iostream>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 namespace odbc_crusher::tests {
 
@@ -36,6 +40,115 @@ inline void note_probe_start(const std::string& category,
     std::cerr << "  -> " << category << " / " << probe << '\n' << std::flush;
 }
 
+
+// S1 (IMPROVEMENT_PLAN_V2) — say when a probe has stopped coming back.
+//
+// A probe that never returns is the one failure mode the crash guard cannot
+// help with: nothing unwinds, so there is nothing to catch. It cost the H17
+// Firebird pair two complete stress-test runs, killed at the 570 s cap with
+// nothing to show for them.
+//
+// **This watchdog reports; it does not recover.** Recovering would mean
+// abandoning a thread inside a driver call, which leaks the handle it was
+// holding and can leave the connection in a state no later probe can use — so
+// the "cure" would corrupt the results of everything after it, which is worse
+// than the disease and much harder to notice. What actually cost those two runs
+// was not the absence of recovery but the absence of *information*: the report
+// was block-buffered on a pipe and discarded by the SIGKILL, and locating the
+// culprit needed the Windows driver-manager trace. That part is fixable with no
+// risk at all.
+//
+// So: a background thread that notices a probe has been running too long and
+// says so on stderr, repeatedly, while it is still running. The run still dies
+// at the harness's wall-clock cap, but the progress log now ends with a line
+// that names the probe and how long it has been stuck — which is the whole of
+// what the trace had to be used for.
+class ProbeWatchdog {
+public:
+    // The interval is deliberately generous. A probe that takes ten seconds
+    // against a slow driver over a slow network is unremarkable; one that takes
+    // sixty is worth a line in the log whether or not it eventually returns.
+    explicit ProbeWatchdog(std::chrono::seconds warn_after = std::chrono::seconds(60))
+        : warn_after_(warn_after),
+          worker_([this] { loop(); }) {}
+
+    ~ProbeWatchdog() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        if (worker_.joinable()) worker_.join();
+    }
+
+    ProbeWatchdog(const ProbeWatchdog&) = delete;
+    ProbeWatchdog& operator=(const ProbeWatchdog&) = delete;
+
+    // Called by run_test either side of a probe body.
+    void enter(const std::string& category, const std::string& probe) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        current_ = category + " / " + probe;
+        started_ = std::chrono::steady_clock::now();
+        warned_ = 0;
+        active_ = true;
+    }
+    void leave() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        active_ = false;
+    }
+
+    // One instance for the process. Probes reach it through run_test, and a
+    // build with no probes running never starts the thread.
+    static ProbeWatchdog& instance() {
+        static ProbeWatchdog watchdog;
+        return watchdog;
+    }
+
+private:
+    void loop() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        while (!stop_) {
+            // Wake often enough to be useful, rarely enough to cost nothing.
+            cv_.wait_for(lock, std::chrono::seconds(5), [this] { return stop_; });
+            if (stop_) break;
+            if (!active_) continue;
+            const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - started_);
+            if (elapsed < warn_after_) continue;
+            // Once at the threshold, then once per further interval, so a
+            // genuinely wedged probe leaves a trail rather than one line that
+            // might have scrolled past.
+            const long long ticks = elapsed.count() / warn_after_.count();
+            if (ticks <= warned_) continue;
+            warned_ = ticks;
+            std::cerr << "  !! " << current_ << " has not returned after "
+                      << elapsed.count() << "s — the driver has not come back "
+                         "from an ODBC call\n" << std::flush;
+        }
+    }
+
+    const std::chrono::seconds warn_after_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::string current_;
+    std::chrono::steady_clock::time_point started_{};
+    long long warned_ = 0;
+    bool active_ = false;
+    bool stop_ = false;
+    std::thread worker_;
+};
+
+// Marks a probe as running for as long as it is in scope, so an early return
+// from a probe body cannot leave the watchdog pointing at it.
+class ScopedProbeWatch {
+public:
+    ScopedProbeWatch(const std::string& category, const std::string& probe) {
+        ProbeWatchdog::instance().enter(category, probe);
+    }
+    ~ScopedProbeWatch() { ProbeWatchdog::instance().leave(); }
+    ScopedProbeWatch(const ScopedProbeWatch&) = delete;
+    ScopedProbeWatch& operator=(const ScopedProbeWatch&) = delete;
+};
 
 // Test status
 enum class TestStatus {
@@ -714,6 +827,7 @@ protected:
                                         spec_reference);
         note_probe_start(category_name(), test_name);   // S2
         last_started_ = test_name;                      // S3
+        ScopedProbeWatch watch(category_name(), test_name);   // S1
         auto start = std::chrono::high_resolution_clock::now();
         try {
             body(result);

@@ -29,6 +29,12 @@ private:
     // developers who tested the table-side catalog functions.
     TestResult test_sqlprocedures_smoke();
     TestResult test_sqlprocedurecolumns_smoke();
+
+    // P13 (IMPROVEMENT_PLAN_V2): SQL_DBMS_VER is read three times in this
+    // suite and its value has never been asserted. A prober cannot know
+    // the product version independently - but the string carries two
+    // claims about it, and they must agree.
+    TestResult test_dbms_version_agrees_with_itself();
 };
 
 } // namespace odbc_crusher::tests
