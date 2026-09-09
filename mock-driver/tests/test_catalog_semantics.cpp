@@ -75,7 +75,7 @@ protected:
 
 TEST_F(CatalogSemanticsTest, ProcedureColumnsHasAllNineteenColumns) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLProcedureColumns(
-        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"MOCK_INOUT", SQL_NTS, NULL, 0)));
+        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"CRUSHER_PROC", SQL_NTS, NULL, 0)));
     SQLSMALLINT cols = 0;
     ASSERT_TRUE(SQL_SUCCEEDED(SQLNumResultCols(hstmt, &cols)));
     SQLCloseCursor(hstmt);
@@ -91,7 +91,7 @@ TEST_F(CatalogSemanticsTest, ProcedureColumnsNamesEveryColumnInSpecOrder) {
         "CHAR_OCTET_LENGTH", "ORDINAL_POSITION", "IS_NULLABLE"
     };
     ASSERT_TRUE(SQL_SUCCEEDED(SQLProcedureColumns(
-        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"MOCK_INOUT", SQL_NTS, NULL, 0)));
+        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"CRUSHER_PROC", SQL_NTS, NULL, 0)));
     for (SQLUSMALLINT i = 0; i < 19; ++i) {
         char name[64] = {0};
         SQLSMALLINT name_len = 0, type = 0, scale = 0, nullable = 0;
@@ -109,7 +109,7 @@ TEST_F(CatalogSemanticsTest, ProcedureColumnsNamesEveryColumnInSpecOrder) {
 // function's return value is position 0 by definition.
 TEST_F(CatalogSemanticsTest, ProcedureColumnsNumbersParametersFromOne) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLProcedureColumns(
-        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"MOCK_INOUT", SQL_NTS, NULL, 0)));
+        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"CRUSHER_PROC", SQL_NTS, NULL, 0)));
     const auto ordinals = ColumnValues(18);
     ASSERT_EQ(ordinals.size(), 3u);
     EXPECT_EQ(ordinals[0], "1");
@@ -118,7 +118,7 @@ TEST_F(CatalogSemanticsTest, ProcedureColumnsNumbersParametersFromOne) {
 
 TEST_F(CatalogSemanticsTest, AFunctionsReturnValueIsOrdinalZero) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLProcedureColumns(
-        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"MOCK_FN", SQL_NTS, NULL, 0)));
+        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"CRUSHER_FUNC", SQL_NTS, NULL, 0)));
     const auto ordinals = ColumnValues(18);
     ASSERT_GE(ordinals.size(), 1u);
     EXPECT_EQ(ordinals[0], "0") << "the return value is not parameter 1";

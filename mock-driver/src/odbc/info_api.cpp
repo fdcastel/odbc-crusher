@@ -621,7 +621,7 @@ SQLRETURN SQL_API SQLGetInfo(
         case SQL_KEYWORDS:
             // The words the mock's parser treats specially beyond the ODBC
             // reserved list. Reporting the real set beats reporting none.
-            RETURN_STRING("MOCK_FN,MOCK_INOUT,INSERT_N_ROWS");
+            RETURN_STRING("CRUSHER_FUNC,CRUSHER_PROC,INSERT_N_ROWS");
 
         case SQL_MAX_STATEMENT_LEN:
             // 0 means "no limit or unknown"; the mock has no limit, and D14

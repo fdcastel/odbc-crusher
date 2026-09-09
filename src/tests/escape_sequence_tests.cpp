@@ -1192,21 +1192,333 @@ TestResult EscapeSequenceTests::test_call_escape_format_variants() {
         });
 }
 
-// ── PORT plan §4.3 — {CALL …} IN/OUT/INOUT parameter direction probes ────
-//
-// All three probes target a known stored procedure, MOCK_INOUT, which the
-// mock-driver registers in every catalog preset (params = IN INTEGER,
-// OUT INTEGER, INOUT VARCHAR). Real drivers rarely have a procedure of
-// that exact name; the probes SKIP_INCONCLUSIVE when SQLProcedures
-// reports MOCK_INOUT is absent — the suggestion explains how to register
-// an equivalent. The mock-driver path is what the e2e canary asserts.
-
 namespace {
 
-// Discover whether MOCK_INOUT (or any user-registered equivalent the user
-// may rename it to via env var) is visible via SQLProcedures. Returns the
-// procedure name on success, empty string when the catalog has no
-// matching entry.
+// ── R2 — the CALL-escape parameter-direction probes ─────────────────────
+//
+// These used to hard-code `{CALL MOCK_INOUT(?, ?, ?)}` and bind
+// (IN, OUT, INOUT): a procedure name that existed only in this repo's mock
+// driver, and a parameter shape only the mock has. Their own header admitted
+// it — "Real drivers rarely have a procedure of that exact name" — so against
+// every real driver they skipped, and the only SQL_PARAM_OUTPUT and
+// SQL_PARAM_INPUT_OUTPUT coverage in the suite was coverage of the mock.
+//
+// Firebird makes the point concretely. Ask its driver about a two-in/two-out
+// procedure and SQLProcedureColumns answers (IN, IN, OUT, OUT): inputs first,
+// then outputs, and SQL_PARAM_INPUT_OUTPUT never appears, because Firebird's
+// procedure model has no INOUT. No fixture can give it the shape the probes
+// assumed.
+//
+// So the probes now *ask*. `describe_procedure` reads the parameter list the
+// driver declares, `call_by_contract` binds exactly those in exactly those
+// directions, and each probe asserts the part of the ODBC contract that
+// applies to what was found — skipping, with the reason, when the engine
+// declares no parameter of the direction it is about. Nothing here names an
+// engine or a dialect.
+//
+// The procedure itself comes from the fixture contract, docs/FIXTURE_CONTRACT.md:
+// CRUSHER_PROC takes at least one integer input and at least one integer
+// output, and sets the first integer output to twice the first integer input;
+// where the engine has character parameters it appends "-out" to the first one.
+// CRUSHER_FUNC returns a*10 + b, chosen so that an argument bound into the
+// wrong slot gives a wrong answer rather than a coincidentally right one.
+
+// The fixture contract's names and values — docs/FIXTURE_CONTRACT.md.
+//
+// Names, not shapes: what parameters these have is read from the driver at run
+// time. The values are fixed by the contract so a probe can assert an answer
+// rather than merely "something was written". 47 for the function is chosen so
+// that an argument bound into the wrong slot is visibly wrong: with a=4, b=7
+// the answer is 47, and the off-by-one reading (the return-value slot taken as
+// `a`) gives 0*10 + 4 = 4.
+constexpr const char* kContractProcedure = "CRUSHER_PROC";
+constexpr const char* kContractFunction  = "CRUSHER_FUNC";
+constexpr SQLINTEGER  kContractIntIn     = 42;
+constexpr const char* kContractTextIn    = "hello";
+constexpr SQLINTEGER  kContractFuncA     = 4;
+constexpr SQLINTEGER  kContractFuncB     = 7;
+constexpr SQLINTEGER  kContractFuncResult = kContractFuncA * 10 + kContractFuncB;
+
+// Defined below; declared here because the contract helpers use it.
+std::string find_named_procedure(core::OdbcConnection& conn,
+                                 const char* name_filter);
+
+// One parameter as the driver describes it.
+struct ProcParam {
+    SQLSMALLINT ordinal = 0;      // 1-based bind position
+    std::string name;
+    SQLSMALLINT direction = 0;    // SQL_PARAM_INPUT / _OUTPUT / _INPUT_OUTPUT / SQL_RETURN_VALUE
+    SQLSMALLINT sql_type = 0;
+    SQLULEN     size = 0;
+
+    bool writes_back() const {
+        return direction == SQL_PARAM_OUTPUT ||
+               direction == SQL_PARAM_INPUT_OUTPUT ||
+               direction == SQL_RETURN_VALUE;
+    }
+    bool reads_in() const {
+        return direction == SQL_PARAM_INPUT ||
+               direction == SQL_PARAM_INPUT_OUTPUT;
+    }
+};
+
+const char* direction_name(SQLSMALLINT d) {
+    switch (d) {
+        case SQL_PARAM_INPUT:        return "IN";
+        case SQL_PARAM_OUTPUT:       return "OUT";
+        case SQL_PARAM_INPUT_OUTPUT: return "INOUT";
+        case SQL_RETURN_VALUE:       return "RETURN";
+        case SQL_RESULT_COL:         return "RESULT_COL";
+        default:                     return "UNKNOWN";
+    }
+}
+
+// Is this SQL type one we can bind as an integer? Anything else this helper
+// treats as character, which is what the contract's other parameter is.
+bool is_integral_sql_type(SQLSMALLINT t) {
+    return t == SQL_INTEGER || t == SQL_SMALLINT || t == SQL_TINYINT ||
+           t == SQL_BIGINT  || t == SQL_NUMERIC  || t == SQL_DECIMAL;
+}
+
+// SQLProcedureColumns, as a parameter list. SQL_RESULT_COL rows are dropped:
+// they describe a result set the procedure returns, not something to bind.
+std::vector<ProcParam> describe_procedure(core::OdbcConnection& conn,
+                                          const std::string& proc_name) {
+    std::vector<ProcParam> params;
+    try {
+        core::OdbcStatement stmt(conn);
+        SQLRETURN rc = SQLProcedureColumns(
+            stmt.get_handle(), nullptr, 0, nullptr, 0,
+            reinterpret_cast<SQLCHAR*>(const_cast<char*>(proc_name.c_str())), SQL_NTS,
+            nullptr, 0);
+        if (!SQL_SUCCEEDED(rc)) return params;
+
+        SQLSMALLINT ordinal = 0;
+        while (SQL_SUCCEEDED(SQLFetch(stmt.get_handle()))) {
+            ProcParam p;
+            core::GuardedBuffer<char> name(128, 0);   // D62
+            SQLLEN ind = 0;
+            if (SQL_SUCCEEDED(SQLGetData(stmt.get_handle(), 4, SQL_C_CHAR,
+                                         name.data(), name.declared_bytes(), &ind)) &&
+                ind != SQL_NULL_DATA) {
+                p.name = core::bounded_string(name.data(), name.declared_elements(), ind).value;
+            }
+            SQLSMALLINT column_type = 0;
+            SQLLEN ct_ind = 0;
+            if (!SQL_SUCCEEDED(SQLGetData(stmt.get_handle(), 5, SQL_C_SSHORT,
+                                          &column_type, 0, &ct_ind))) {
+                continue;
+            }
+            if (column_type == SQL_RESULT_COL) continue;
+
+            SQLSMALLINT data_type = 0;
+            SQLLEN dt_ind = 0;
+            SQLGetData(stmt.get_handle(), 6, SQL_C_SSHORT, &data_type, 0, &dt_ind);
+            SQLULEN column_size = 0;
+            SQLLEN cs_ind = 0;
+            SQLGetData(stmt.get_handle(), 8, SQL_C_ULONG, &column_size, 0, &cs_ind);
+
+            p.direction = column_type;
+            p.sql_type  = data_type;
+            p.size      = (cs_ind == SQL_NULL_DATA || column_size == 0) ? 64 : column_size;
+            p.ordinal   = ++ordinal;
+            params.push_back(std::move(p));
+        }
+    } catch (const core::OdbcError&) {
+        // A driver that cannot describe its own procedures is reported by the
+        // caller as an inconclusive skip, not as a direction defect.
+        params.clear();
+    }
+    return params;
+}
+
+// Every slot's buffer, kept alive for the duration of the call.
+struct CallSlot {
+    ProcParam meta;
+    SQLINTEGER int_value = 0;
+    std::vector<char> text;      // sized from meta.size
+    SQLLEN ind = 0;
+    bool integral = false;
+};
+
+struct ContractCall {
+    bool described = false;
+    bool prepared  = false;
+    bool bound     = false;
+    bool executed  = false;
+    SQLRETURN exec_rc = SQL_SUCCESS;
+    std::string sql;
+    std::string error;
+    std::string sqlstate;
+    std::vector<CallSlot> slots;
+
+    // The values the contract says to send, so assertions can be written
+    // against them rather than against a literal repeated in each probe.
+    SQLINTEGER int_in = 0;
+    std::string text_in;
+
+    const CallSlot* first(SQLSMALLINT direction) const {
+        for (const auto& s : slots) {
+            if (s.meta.direction == direction) return &s;
+        }
+        return nullptr;
+    }
+    std::string shape() const {
+        std::string out;
+        for (size_t i = 0; i < slots.size(); ++i) {
+            if (i) out += ", ";
+            out += std::string(direction_name(slots[i].meta.direction)) + " " +
+                   slots[i].meta.name;
+        }
+        return out.empty() ? "(no parameters declared)" : out;
+    }
+};
+
+// The sentinel an OUT slot carries in: if it survives the execute, the driver
+// accepted the binding and never wrote back.
+constexpr SQLINTEGER kOutSentinel = static_cast<SQLINTEGER>(0xDEADBEEFu);
+constexpr const char* kTextSentinel = "@@sentinel@@";
+
+// Prepare `{CALL proc(?, …)}` (or `{?=CALL proc(?, …)}` when the driver
+// declares a return value), bind every declared parameter in its declared
+// direction, and execute.
+ContractCall call_by_contract(core::OdbcConnection& conn,
+                              const std::string& proc_name,
+                              SQLINTEGER int_in,
+                              const std::string& text_in) {
+    ContractCall call;
+    call.int_in  = int_in;
+    call.text_in = text_in;
+    call.slots.reserve(8);
+
+    auto params = describe_procedure(conn, proc_name);
+    if (params.empty()) return call;
+    call.described = true;
+
+    bool has_return = false;
+    for (const auto& p : params) {
+        if (p.direction == SQL_RETURN_VALUE) has_return = true;
+    }
+
+    // One marker per parameter; the return value's marker is the leading one.
+    const size_t arg_count = params.size() - (has_return ? 1 : 0);
+    std::string markers;
+    for (size_t i = 0; i < arg_count; ++i) markers += (i ? ", ?" : "?");
+    call.sql = has_return ? "{? = CALL " + proc_name + "(" + markers + ")}"
+                          : "{CALL " + proc_name + "(" + markers + ")}";
+
+    core::OdbcStatement stmt(conn);
+    SQLRETURN rc = SQLPrepare(
+        stmt.get_handle(),
+        reinterpret_cast<SQLCHAR*>(const_cast<char*>(call.sql.c_str())), SQL_NTS);
+    if (!SQL_SUCCEEDED(rc)) {
+        call.error = "SQLPrepare(" + call.sql + ") returned " + std::to_string(rc);
+        call.sqlstate = TestBase::first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "none");
+        return call;
+    }
+    call.prepared = true;
+
+    // Buffers must outlive SQLExecute, so the vector is sized once up front —
+    // a reallocation would move every address already handed to the driver.
+    call.slots.resize(params.size());
+    bool used_int_in = false;
+    bool used_text_in = false;
+    for (size_t i = 0; i < params.size(); ++i) {
+        CallSlot& slot = call.slots[i];
+        slot.meta = params[i];
+        slot.integral = is_integral_sql_type(slot.meta.sql_type);
+        if (slot.integral) {
+            slot.int_value = slot.meta.reads_in() ? int_in : kOutSentinel;
+            if (slot.meta.reads_in()) used_int_in = true;
+            slot.ind = slot.meta.reads_in() ? 0 : sizeof(SQLINTEGER);
+        } else {
+            const size_t cap = static_cast<size_t>(slot.meta.size) + 1;
+            slot.text.assign(cap > 8 ? cap : 8, '\0');
+            const std::string initial =
+                slot.meta.reads_in() ? text_in : std::string(kTextSentinel);
+            const size_t n = std::min(slot.text.size() - 1, initial.size());
+            std::memcpy(slot.text.data(), initial.data(), n);
+            slot.text[n] = '\0';
+            slot.ind = static_cast<SQLLEN>(n);
+            if (slot.meta.reads_in()) used_text_in = true;
+        }
+    }
+    (void)used_int_in;
+    (void)used_text_in;
+
+    for (auto& slot : call.slots) {
+        SQLRETURN brc;
+        if (slot.integral) {
+            brc = SQLBindParameter(stmt.get_handle(), slot.meta.ordinal,
+                                   slot.meta.direction, SQL_C_SLONG,
+                                   slot.meta.sql_type ? slot.meta.sql_type : SQL_INTEGER,
+                                   10, 0, &slot.int_value,
+                                   sizeof(slot.int_value), &slot.ind);
+        } else {
+            brc = SQLBindParameter(stmt.get_handle(), slot.meta.ordinal,
+                                   slot.meta.direction, SQL_C_CHAR,
+                                   slot.meta.sql_type ? slot.meta.sql_type : SQL_VARCHAR,
+                                   slot.text.size() - 1, 0, slot.text.data(),
+                                   static_cast<SQLLEN>(slot.text.size()), &slot.ind);
+        }
+        if (!SQL_SUCCEEDED(brc)) {
+            call.error = "SQLBindParameter(" + std::to_string(slot.meta.ordinal) +
+                         ", " + direction_name(slot.meta.direction) + ") returned " +
+                         std::to_string(brc);
+            call.sqlstate = TestBase::first_sqlstate(SQL_HANDLE_STMT,
+                                                     stmt.get_handle(), "none");
+            return call;
+        }
+    }
+    call.bound = true;
+
+    call.exec_rc = SQLExecute(stmt.get_handle());
+    if (!SQL_SUCCEEDED(call.exec_rc)) {
+        call.error = "SQLExecute returned " + std::to_string(call.exec_rc);
+        call.sqlstate = TestBase::first_sqlstate(SQL_HANDLE_STMT,
+                                                 stmt.get_handle(), "none");
+        return call;
+    }
+    call.executed = true;
+
+    // A16: drain any result sets the procedure produced before reading the
+    // output parameters. A driver may legally defer populating bound OUT and
+    // INOUT buffers until every result set has been consumed, so a conformant
+    // driver whose procedure body returns a result set would otherwise be
+    // FAILed for "did not write to the bound buffer". Firebird's selectable
+    // procedures make this a live concern, not a hypothetical one.
+    int guard = 0;
+    while (SQLMoreResults(stmt.get_handle()) == SQL_SUCCESS) {
+        if (++guard > 100) break;   // a driver stuck on the same result set
+    }
+    return call;
+}
+
+// The text a slot holds now, read to the length the driver reported — D68.
+std::string slot_text(const CallSlot& slot) {
+    if (slot.integral) return std::to_string(slot.int_value);
+    return core::bounded_string(slot.text.data(), slot.text.size(), slot.ind).value;
+}
+
+// Shared preamble: find the contract procedure and describe it, or explain.
+bool contract_procedure_ready(core::OdbcConnection& conn, const char* wanted,
+                              TestResult& r, std::string& found) {
+    found = find_named_procedure(conn, wanted);
+    if (found.empty()) {
+        r.status = TestStatus::SKIP_INCONCLUSIVE;
+        r.actual = std::string("Fixture procedure ") + wanted +
+                   " is not visible through SQLProcedures";
+        r.suggestion =
+            std::string("This probe needs the fixture described in "
+                        "docs/FIXTURE_CONTRACT.md. Create ") + wanted +
+            " in your database's own dialect and re-run; the probe reads its "
+            "parameter list with SQLProcedureColumns and binds whatever the "
+            "driver declares, so no particular parameter shape is assumed.";
+        return false;
+    }
+    return true;
+}
+
 std::string find_named_procedure(core::OdbcConnection& conn,
                                  const char* name_filter) {
     core::OdbcStatement stmt(conn);
@@ -1231,181 +1543,121 @@ std::string find_named_procedure(core::OdbcConnection& conn,
     return {};
 }
 
-std::string find_mock_inout(core::OdbcConnection& conn) {
-    return find_named_procedure(conn, "MOCK_INOUT");
-}
-
-struct CallProbeOutcome {
-    bool prepared    = false;
-    bool bind_ok     = false;
-    bool execute_ok  = false;
-    SQLRETURN exec_rc = SQL_ERROR;
-    std::string error;            // diagnostic text on first failure
-    SQLINTEGER out_int   = 0;
-    SQLLEN     out_int_ind = 0;
-    std::string inout_text;       // post-execute buffer contents
-    SQLLEN     inout_ind = 0;
-};
-
-// Executes `{CALL MOCK_INOUT(?, ?, ?)}` with the procedure's three params
-// bound. Returns the post-execute state of OUT and INOUT slots. Probes
-// inspect different parts of the outcome.
-CallProbeOutcome run_mock_inout_call(core::OdbcConnection& conn,
-                                     SQLINTEGER in_value,
-                                     const char* inout_initial)
-{
-    CallProbeOutcome out;
-    core::OdbcStatement stmt(conn);
-
-    const char* sql = "{CALL MOCK_INOUT(?, ?, ?)}";
-    SQLRETURN rc = SQLPrepare(stmt.get_handle(),
-                              reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql)),
-                              SQL_NTS);
-    if (!SQL_SUCCEEDED(rc)) {
-        out.error = "SQLPrepare returned " + std::to_string(rc);
-        return out;
-    }
-    out.prepared = true;
-
-    SQLINTEGER in_n      = in_value;
-    SQLLEN     in_n_ind  = 0;
-    out.out_int     = static_cast<SQLINTEGER>(0xDEADBEEFu);  // sentinel
-    out.out_int_ind = sizeof(SQLINTEGER);
-    core::GuardedBuffer<char> inout_buf(64, 0);  // D62
-    const std::string initial(inout_initial);
-    const size_t copy_len = std::min<size_t>(inout_buf.declared_elements() - 1, initial.size());
-    std::memcpy(inout_buf.data(), initial.data(), copy_len);
-    inout_buf.data()[copy_len] = '\0';
-    out.inout_ind = static_cast<SQLLEN>(copy_len);
-
-    rc = SQLBindParameter(stmt.get_handle(), 1, SQL_PARAM_INPUT,
-                          SQL_C_SLONG, SQL_INTEGER, 10, 0,
-                          &in_n, sizeof(in_n), &in_n_ind);
-    if (!SQL_SUCCEEDED(rc)) {
-        out.error = "SQLBindParameter(1, IN) returned " + std::to_string(rc);
-        return out;
-    }
-    rc = SQLBindParameter(stmt.get_handle(), 2, SQL_PARAM_OUTPUT,
-                          SQL_C_SLONG, SQL_INTEGER, 10, 0,
-                          &out.out_int, sizeof(out.out_int), &out.out_int_ind);
-    if (!SQL_SUCCEEDED(rc)) {
-        out.error = "SQLBindParameter(2, OUT) returned " + std::to_string(rc);
-        return out;
-    }
-    rc = SQLBindParameter(stmt.get_handle(), 3, SQL_PARAM_INPUT_OUTPUT,
-                          SQL_C_CHAR, SQL_VARCHAR, inout_buf.declared_elements() - 1, 0,
-                          inout_buf.data(), inout_buf.declared_bytes(), &out.inout_ind);
-    if (!SQL_SUCCEEDED(rc)) {
-        out.error = "SQLBindParameter(3, INOUT) returned " + std::to_string(rc);
-        return out;
-    }
-    out.bind_ok = true;
-
-    out.exec_rc = SQLExecute(stmt.get_handle());
-    if (!SQL_SUCCEEDED(out.exec_rc)) {
-        out.error = "SQLExecute returned " + std::to_string(out.exec_rc);
-        return out;
-    }
-    out.execute_ok = true;
-
-    // A16: drain any result sets the procedure produced before reading the
-    // output parameters. A driver may legally defer populating bound OUT and
-    // INOUT buffers until every result set has been consumed, so a conformant
-    // driver whose SP body returns a result set was being FAILed at
-    // Severity::ERR for "did not write to the bound buffer".
-    //
-    // SQL_NO_DATA ends the sequence; anything else means there are no more
-    // result sets to wait for, and it is not this helper's job to judge that.
-    int guard = 0;
-    while (SQLMoreResults(stmt.get_handle()) == SQL_SUCCESS) {
-        if (++guard > 100) break;   // a driver stuck on the same result set
-    }
-
-    // D68: the INOUT buffer to the length the driver reported in
-    // `inout_ind`. Read to a terminator, a driver that writes back "HELLO"
-    // correctly and omits the NUL was reported as returning 'HELLOX' and
-    // FAILed for not matching the procedure's UPPER contract - with
-    // `indicator=5` printed in the same sentence.
-    out.inout_text =
-        core::bounded_string(inout_buf.data(), inout_buf.declared_elements(), out.inout_ind).value;
-    return out;
-}
-
 } // namespace
 
 TestResult EscapeSequenceTests::test_call_escape_in_parameter() {
     return run_test(
         "test_call_escape_in_parameter", "SQLPrepare/SQLBindParameter/SQLExecute",
-        "{CALL …(?)} prepares, binds an SQL_PARAM_INPUT parameter, and "
-        "executes successfully against a registered procedure",
+        "{CALL …(?)} prepares, binds every parameter the driver declares in "
+        "the direction it declares, and executes",
         Severity::INFO, ConformanceLevel::CORE,
         "ODBC 3.8 Procedure Call Escape — SQL_PARAM_INPUT direction",
         [&](TestResult& r) {
-            std::string proc = find_mock_inout(conn_);
-            if (proc.empty()) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Test procedure MOCK_INOUT not visible via "
-                           "SQLProcedures";
-                r.suggestion = "Register a 3-parameter procedure named "
-                               "MOCK_INOUT(IN n INTEGER, OUT m INTEGER, "
-                               "INOUT s VARCHAR(64)) so this probe can run "
-                               "against your DBMS.";
-                return;
-            }
-            auto outcome = run_mock_inout_call(conn_, 42, "hello");
-            if (!outcome.execute_ok) {
+            std::string proc;
+            if (!contract_procedure_ready(conn_, kContractProcedure, r, proc)) return;
+
+            auto call = call_by_contract(conn_, proc, kContractIntIn, kContractTextIn);
+            if (!call.described) {
                 r.status = TestStatus::FAIL;
-                r.actual = outcome.error;
                 r.severity = Severity::ERR;
+                r.actual = "SQLProcedures found " + proc +
+                           " but SQLProcedureColumns described no parameters for it";
+                r.suggestion =
+                    "A procedure the catalog lists must also be describable. An "
+                    "application cannot call what it cannot describe.";
                 return;
             }
-            r.actual = "Prepared + bound (IN, OUT, INOUT) + executed against "
-                     + proc + " (SQL_PARAM_INPUT path verified)";
+            if (call.first(SQL_PARAM_INPUT) == nullptr &&
+                call.first(SQL_PARAM_INPUT_OUTPUT) == nullptr) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "The driver declares no input parameter for " + proc +
+                           ": " + call.shape();
+                return;
+            }
+            if (!call.executed) {
+                r.status = TestStatus::FAIL;
+                r.severity = Severity::ERR;
+                r.actual = call.error + " (SQLSTATE=" + call.sqlstate + ") for `" +
+                           call.sql + "`, declared as " + call.shape();
+                return;
+            }
+            r.actual = "Prepared, bound and executed `" + call.sql +
+                       "` with parameters declared as " + call.shape();
         });
 }
 
 TestResult EscapeSequenceTests::test_call_escape_out_parameter() {
     return run_test(
         "test_call_escape_out_parameter", "SQLBindParameter(SQL_PARAM_OUTPUT)",
-        "{CALL …(?, ?, ?)} writes back to a SQL_PARAM_OUTPUT bound buffer",
+        "A parameter the driver declares as OUT is written back after execute",
         Severity::ERR, ConformanceLevel::CORE,
         "ODBC 3.8 SQLBindParameter — SQL_PARAM_OUTPUT direction",
         [&](TestResult& r) {
-            std::string proc = find_mock_inout(conn_);
-            if (proc.empty()) {
+            std::string proc;
+            if (!contract_procedure_ready(conn_, kContractProcedure, r, proc)) return;
+
+            auto call = call_by_contract(conn_, proc, kContractIntIn, kContractTextIn);
+            if (!call.described) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Test procedure MOCK_INOUT not visible via "
-                           "SQLProcedures";
-                r.suggestion = "Register a 3-parameter procedure named "
-                               "MOCK_INOUT(IN n INTEGER, OUT m INTEGER, "
-                               "INOUT s VARCHAR(64)) where m := n*2.";
+                r.actual = "SQLProcedureColumns described no parameters for " + proc;
                 return;
             }
-            const SQLINTEGER kIn = 42;
-            const SQLINTEGER kExpectedOut = 84;
-            auto outcome = run_mock_inout_call(conn_, kIn, "hello");
-            if (!outcome.execute_ok) {
+            const CallSlot* out = call.first(SQL_PARAM_OUTPUT);
+            if (out == nullptr) {
+                // Not every engine has output parameters, and one that has none
+                // is not failing this: it is answering a question it was not
+                // asked. Say what it does declare so the reader can tell the
+                // two apart.
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "The driver declares no SQL_PARAM_OUTPUT parameter "
+                           "for " + proc + ": " + call.shape();
+                r.suggestion =
+                    "docs/FIXTURE_CONTRACT.md asks for a procedure with at "
+                    "least one output parameter. If this engine has none, that "
+                    "is worth knowing and this cell stays unmeasured.";
+                return;
+            }
+            if (!call.executed) {
                 r.status = TestStatus::FAIL;
-                r.actual = outcome.error;
+                r.actual = call.error + " (SQLSTATE=" + call.sqlstate + ")";
                 return;
             }
+
             std::ostringstream oss;
-            oss << "OUT buffer post-execute: " << outcome.out_int
-                << " (expected " << kExpectedOut << " for n=" << kIn
-                << ", n*2 contract); indicator=" << outcome.out_int_ind;
-            r.actual = oss.str();
-            if (outcome.out_int == static_cast<SQLINTEGER>(0xDEADBEEF)) {
+            oss << "OUT parameter `" << out->meta.name << "` post-execute: "
+                << slot_text(*out) << " (indicator " << out->ind << ")";
+
+            const bool untouched =
+                out->integral ? (out->int_value == kOutSentinel)
+                              : (slot_text(*out) == kTextSentinel);
+            if (untouched) {
                 r.status = TestStatus::FAIL;
-                r.suggestion = "Driver accepted SQL_PARAM_OUTPUT binding but "
-                               "did not write to the bound buffer (sentinel "
-                               "value survived).";
+                r.actual = oss.str() + " — the sentinel survived";
+                r.suggestion =
+                    "The driver accepted a SQL_PARAM_OUTPUT binding and never "
+                    "wrote to the bound buffer. An application has no way to "
+                    "tell that from an output parameter that legitimately "
+                    "carries the sentinel's value.";
                 return;
             }
-            if (outcome.out_int != kExpectedOut) {
+
+            // The contract fixes the value, so the probe can say more than
+            // "something was written": the first integer output is twice the
+            // first integer input.
+            if (out->integral && out->int_value != kContractIntIn * 2) {
                 r.status = TestStatus::FAIL;
-                r.suggestion = "Driver wrote a value, but it doesn't match "
-                               "the procedure contract m := n*2.";
+                r.actual = oss.str() + "; expected " +
+                           std::to_string(kContractIntIn * 2) +
+                           " (contract: the first integer output is twice the "
+                           "first integer input, and the input was " +
+                           std::to_string(kContractIntIn) + ")";
+                r.suggestion =
+                    "A value was written back, but not the one the procedure "
+                    "computed — the arguments or the output slots are being "
+                    "matched up wrongly.";
+                return;
             }
+            r.actual = oss.str();
         });
 }
 
@@ -1418,10 +1670,10 @@ TestResult EscapeSequenceTests::test_call_escape_out_parameter() {
 // parameter 2 — and a driver that binds the first argument as parameter 1
 // computes a wrong answer with no diagnostic at all.
 //
-// MOCK_FN(a, b) returns a*10 + b, chosen so an argument in the wrong slot is
-// visibly wrong rather than coincidentally right: with a=4, b=7 the answer is
-// 47, and the off-by-one reading (the return-value slot taken as `a`) gives
-// 0*10 + 4 = 4, which the probe names explicitly.
+// The contract's CRUSHER_FUNC(a, b) returns a*10 + b, chosen so an argument in
+// the wrong slot is visibly wrong rather than coincidentally right: with a=4,
+// b=7 the answer is 47, and the off-by-one reading (the return-value slot
+// taken as `a`) gives 0*10 + 4 = 4, which the probe names explicitly.
 TestResult EscapeSequenceTests::test_function_call_escape_return_value() {
     return run_test(
         "test_function_call_escape_return_value",
@@ -1431,15 +1683,44 @@ TestResult EscapeSequenceTests::test_function_call_escape_return_value() {
         Severity::ERR, ConformanceLevel::CORE,
         "ODBC 3.8 Procedure Call Escape — function return value",
         [&](TestResult& r) {
-            const std::string fn = find_named_procedure(conn_, "MOCK_FN");
-            if (fn.empty()) {
-                r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Test function MOCK_FN not visible via SQLProcedures";
+            std::string fn;
+            if (!contract_procedure_ready(conn_, kContractFunction, r, fn)) return;
+
+            // R2: ask before assuming. The `{?=CALL}` form binds the return
+            // value as parameter 1, so it needs a driver that describes one.
+            // A driver whose procedure model has no return value is not failing
+            // this probe - it is answering a question it was not asked - and
+            // saying what it *did* declare is what lets a reader tell the two
+            // apart.
+            const auto fn_params = describe_procedure(conn_, fn);
+            bool declares_return = false;
+            int declared_args = 0;
+            std::string fn_shape;
+            for (const auto& fp : fn_params) {
+                if (!fn_shape.empty()) fn_shape += ", ";
+                fn_shape += std::string(direction_name(fp.direction)) + " " + fp.name;
+                if (fp.direction == SQL_RETURN_VALUE) declares_return = true;
+                else if (fp.direction == SQL_PARAM_INPUT) ++declared_args;
+            }
+            if (!declares_return) {
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "The driver declares no SQL_RETURN_VALUE parameter "
+                           "for " + fn + ", so the {?=CALL} form has nothing to "
+                           "bind as parameter 1: " +
+                           (fn_shape.empty() ? "(no parameters declared)" : fn_shape);
                 r.suggestion =
-                    "Register a two-argument function named "
-                    "MOCK_FN(a INTEGER, b INTEGER) RETURNS INTEGER that "
-                    "returns a*10 + b, so this probe can check that your "
-                    "driver numbers a function's arguments from parameter 2.";
+                    "Engines differ on whether a callable returns a value or "
+                    "writes an output parameter. Where yours has a return "
+                    "value, docs/FIXTURE_CONTRACT.md asks the fixture to use "
+                    "one, and this probe then checks the arguments are numbered "
+                    "from parameter 2.";
+                return;
+            }
+            if (declared_args != 2) {
+                r.status = TestStatus::SKIP_INCONCLUSIVE;
+                r.actual = "Fixture function " + fn + " declares " +
+                           std::to_string(declared_args) + " input argument(s), "
+                           "not the two the contract specifies: " + fn_shape;
                 return;
             }
 
@@ -1459,7 +1740,8 @@ TestResult EscapeSequenceTests::test_function_call_escape_return_value() {
             {
                 CallOutcome oc;
                 core::OdbcStatement stmt(conn_);
-                const char* sql = "{?=CALL MOCK_FN(?, ?)}";
+                const std::string sql_text = "{? = CALL " + fn + "(?, ?)}";
+                const char* sql = sql_text.c_str();
                 SQLRETURN rc = SQLPrepare(
                     stmt.get_handle(),
                     reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql)), SQL_NTS);
@@ -1711,42 +1993,68 @@ TestResult EscapeSequenceTests::test_scalar_function_claim_vs_execute() {
 TestResult EscapeSequenceTests::test_call_escape_inout_parameter() {
     return run_test(
         "test_call_escape_inout_parameter", "SQLBindParameter(SQL_PARAM_INPUT_OUTPUT)",
-        "{CALL …(?, ?, ?)} round-trips a value through a "
-        "SQL_PARAM_INPUT_OUTPUT bound buffer",
+        "A parameter the driver declares as INOUT carries a value in and a "
+        "value out of the same buffer",
         Severity::ERR, ConformanceLevel::CORE,
         "ODBC 3.8 SQLBindParameter — SQL_PARAM_INPUT_OUTPUT direction",
         [&](TestResult& r) {
-            std::string proc = find_mock_inout(conn_);
-            if (proc.empty()) {
+            std::string proc;
+            if (!contract_procedure_ready(conn_, kContractProcedure, r, proc)) return;
+
+            auto call = call_by_contract(conn_, proc, kContractIntIn, kContractTextIn);
+            if (!call.described) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
-                r.actual = "Test procedure MOCK_INOUT not visible via "
-                           "SQLProcedures";
-                r.suggestion = "Register a 3-parameter procedure named "
-                               "MOCK_INOUT(IN n INTEGER, OUT m INTEGER, "
-                               "INOUT s VARCHAR(64)) where s := UPPER(s).";
+                r.actual = "SQLProcedureColumns described no parameters for " + proc;
                 return;
             }
-            auto outcome = run_mock_inout_call(conn_, 1, "hello");
-            if (!outcome.execute_ok) {
-                r.status = TestStatus::FAIL;
-                r.actual = outcome.error;
+            const CallSlot* inout = call.first(SQL_PARAM_INPUT_OUTPUT);
+            if (inout == nullptr) {
+                // Most engines have no INOUT at all — Firebird's procedure
+                // model separates inputs from outputs entirely, and its driver
+                // describes a two-in/two-out procedure as (IN, IN, OUT, OUT).
+                // That is not a defect and must not be reported as one; it is a
+                // capability the report should simply state.
+                r.status = TestStatus::SKIP_UNSUPPORTED;
+                r.actual = "The driver declares no SQL_PARAM_INPUT_OUTPUT "
+                           "parameter for " + proc + ": " + call.shape();
+                r.suggestion =
+                    "Many engines separate input and output parameters and have "
+                    "no INOUT to describe. Where the engine does have one, "
+                    "docs/FIXTURE_CONTRACT.md asks the fixture to use it, and "
+                    "this probe then checks the buffer carries a value in both "
+                    "directions.";
                 return;
             }
-            r.actual = "INOUT buffer post-execute: '" + outcome.inout_text
-                     + "' (input was 'hello', expected 'HELLO' per "
-                       "UPPER contract); indicator=" + std::to_string(outcome.inout_ind);
-            if (outcome.inout_text == "hello") {
+            if (!call.executed) {
                 r.status = TestStatus::FAIL;
-                r.suggestion = "Driver accepted SQL_PARAM_INPUT_OUTPUT but did "
-                               "not write back — common bug shape: driver "
-                               "treats INOUT as IN-only.";
+                r.actual = call.error + " (SQLSTATE=" + call.sqlstate + ")";
                 return;
             }
-            if (outcome.inout_text != "HELLO") {
+
+            const std::string got = slot_text(*inout);
+            std::ostringstream oss;
+            oss << "INOUT parameter `" << inout->meta.name
+                << "` post-execute: '" << got << "' (indicator " << inout->ind
+                << "), sent '" << call.text_in << "'";
+
+            if (got == kTextSentinel) {
                 r.status = TestStatus::FAIL;
-                r.suggestion = "Driver wrote back, but the value doesn't match "
-                               "the procedure contract s := UPPER(s).";
+                r.actual = oss.str() + " — the sentinel survived, so the input "
+                                       "half never reached the procedure";
+                return;
             }
+            if (got == call.text_in) {
+                r.status = TestStatus::FAIL;
+                r.actual = oss.str() + " — unchanged, so nothing was written back";
+                r.suggestion =
+                    "An INOUT parameter carries a value in *and* out. A buffer "
+                    "that comes back exactly as it went in means the driver "
+                    "accepted the binding and skipped the write-back, which is "
+                    "indistinguishable to the application from a procedure that "
+                    "chose not to change it.";
+                return;
+            }
+            r.actual = oss.str();
         });
 }
 

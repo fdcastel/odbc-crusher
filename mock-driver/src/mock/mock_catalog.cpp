@@ -143,7 +143,7 @@ void MockCatalog::initialize(const std::string& preset) {
     // The probes assert the OUT/INOUT slots are mutated post-execute.
     {
         MockProcedure inout;
-        inout.name = "MOCK_INOUT";
+        inout.name = "CRUSHER_PROC";
         inout.params = {
             {"P_IN_INT",     SQL_PARAM_INPUT,         SQL_INTEGER, 10, 0},
             {"P_OUT_INT",    SQL_PARAM_OUTPUT,        SQL_INTEGER, 10, 0},
@@ -151,7 +151,7 @@ void MockCatalog::initialize(const std::string& preset) {
         };
         inout.input_param_count = 3;  // total bound positions, IN+INOUT
         inout.remarks =
-            "MOCK_INOUT(IN n INTEGER, OUT m INTEGER, INOUT s VARCHAR(64)) — "
+            "CRUSHER_PROC(IN n INTEGER, OUT m INTEGER, INOUT s VARCHAR(64)) — "
             "sets m := n*2 and s := UPPER(s). Drives the PORT plan port 3 "
             "{?=CALL …} IN/OUT/INOUT escape probes.";
         inout.callback =
@@ -189,16 +189,16 @@ void MockCatalog::initialize(const std::string& preset) {
         procedures_.push_back(std::move(inout));
     }
 
-    // D13 — a callable *function*: `{?=CALL MOCK_FN(?, ?)}`.
+    // D13 — a callable *function*: `{?=CALL CRUSHER_FUNC(?, ?)}`.
     //
-    // The mock had no function at all, only the MOCK_INOUT procedure, so the
+    // The mock had no function at all, only the CRUSHER_PROC procedure, so the
     // shape the README advertises as the port-3 canary had nothing to run
     // against and A17/I7 stayed deferred. params[0] is the SQL_RETURN_VALUE
     // slot, which means the caller's first *argument* is parameter 2 - and a
     // driver that binds it as parameter 1 is the defect those probes look for.
     {
         MockProcedure fn;
-        fn.name = "MOCK_FN";
+        fn.name = "CRUSHER_FUNC";
         fn.params = {
             {"RETURN_VALUE", SQL_RETURN_VALUE, SQL_INTEGER, 10, 0},
             {"P_A",          SQL_PARAM_INPUT,  SQL_INTEGER, 10, 0},
@@ -208,7 +208,7 @@ void MockCatalog::initialize(const std::string& preset) {
         // is bound too but is not an argument, hence 2 rather than 3.
         fn.input_param_count = 2;
         fn.remarks =
-            "MOCK_FN(a INTEGER, b INTEGER) RETURNS INTEGER - returns a*10 + b. "
+            "CRUSHER_FUNC(a INTEGER, b INTEGER) RETURNS INTEGER - returns a*10 + b. "
             "Drives the {?=CALL fn(...)} function-call escape: parameter 1 is "
             "the return value, so a is parameter 2 and b is parameter 3.";
         fn.callback =

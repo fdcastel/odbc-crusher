@@ -448,6 +448,15 @@ jobs:
           "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (2, 1, 'row two');"
           "INSERT INTO CRUSHER_FIXTURE (ID, PARENT_ID, NAME) VALUES (3, NULL, 'orphan');"
           "COMMIT;"
+          "SET TERM ^ ;"
+          "CREATE PROCEDURE CRUSHER_PROC (IN_N INTEGER, IN_S VARCHAR(64))"
+          "RETURNS (OUT_N INTEGER, OUT_S VARCHAR(64)) AS"
+          "BEGIN OUT_N = IN_N * 2; OUT_S = IN_S || '-out'; END^"
+          "CREATE PROCEDURE CRUSHER_FUNC (A INTEGER, B INTEGER)"
+          "RETURNS (RESULT INTEGER) AS"
+          "BEGIN RESULT = A * 10 + B; END^"
+          "SET TERM ; ^"
+          "COMMIT;"
         ) -join "`n"
         $fixture | Invoke-FirebirdIsql -Database $db -Environment $fb
 

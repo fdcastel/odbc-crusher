@@ -10,7 +10,7 @@
 // leading `?` is the return value and occupies parameter 1, so the first
 // argument is parameter 2. A driver that binds the first argument as
 // parameter 1 is the classic defect those probes look for, so the mock has to
-// model the correct numbering exactly — and MOCK_FN returns a*10 + b so that
+// model the correct numbering exactly — and CRUSHER_FUNC returns a*10 + b so that
 // arguments landing in the wrong slots give a visibly wrong answer.
 #include <gtest/gtest.h>
 #ifdef _WIN32
@@ -53,7 +53,7 @@ protected:
 // The whole point: parameter 1 is the return value, arguments start at 2.
 TEST_F(FunctionCallTest, ReturnValueIsParameterOneAndArgumentsFollow) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
-        hstmt, (SQLCHAR*)"{?=CALL MOCK_FN(?, ?)}", SQL_NTS)));
+        hstmt, (SQLCHAR*)"{?=CALL CRUSHER_FUNC(?, ?)}", SQL_NTS)));
 
     SQLINTEGER ret = -1, a = 4, b = 7;
     SQLLEN ret_ind = 0, a_ind = 0, b_ind = 0;
@@ -75,7 +75,7 @@ TEST_F(FunctionCallTest, ReturnValueIsParameterOneAndArgumentsFollow) {
 // The spaced spelling is the same statement.
 TEST_F(FunctionCallTest, SpacedReturnMarkerParsesToo) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
-        hstmt, (SQLCHAR*)"{ ? = CALL MOCK_FN(?, ?) }", SQL_NTS)));
+        hstmt, (SQLCHAR*)"{ ? = CALL CRUSHER_FUNC(?, ?) }", SQL_NTS)));
 
     SQLINTEGER ret = -1, a = 1, b = 2;
     SQLLEN ind = 0;
@@ -94,7 +94,7 @@ TEST_F(FunctionCallTest, SpacedReturnMarkerParsesToo) {
 // offset applies to the function form only.
 TEST_F(FunctionCallTest, ProcedureCallStillNumbersArgumentsFromOne) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLPrepare(
-        hstmt, (SQLCHAR*)"{CALL MOCK_INOUT(?, ?, ?)}", SQL_NTS)));
+        hstmt, (SQLCHAR*)"{CALL CRUSHER_PROC(?, ?, ?)}", SQL_NTS)));
 
     SQLINTEGER n = 21, m = -1;
     char s[64] = "abc";
@@ -115,7 +115,7 @@ TEST_F(FunctionCallTest, ProcedureCallStillNumbersArgumentsFromOne) {
 // The function is enumerable, so a driver can discover it the usual way.
 TEST_F(FunctionCallTest, TheFunctionIsListedBySqlProcedures) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLProcedures(
-        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"MOCK_FN", SQL_NTS)));
+        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"CRUSHER_FUNC", SQL_NTS)));
     int rows = 0;
     while (SQLFetch(hstmt) == SQL_SUCCESS) ++rows;
     SQLCloseCursor(hstmt);
@@ -126,7 +126,7 @@ TEST_F(FunctionCallTest, TheFunctionIsListedBySqlProcedures) {
 // is how a client learns that arguments start at parameter 2.
 TEST_F(FunctionCallTest, ProcedureColumnsReportsTheReturnValueSlot) {
     ASSERT_TRUE(SQL_SUCCEEDED(SQLProcedureColumns(
-        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"MOCK_FN", SQL_NTS, NULL, 0)));
+        hstmt, NULL, 0, NULL, 0, (SQLCHAR*)"CRUSHER_FUNC", SQL_NTS, NULL, 0)));
 
     bool saw_return = false;
     int rows = 0;
