@@ -13,6 +13,7 @@
 #include <sql.h>
 #include <sqlext.h>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -208,6 +209,106 @@ TEST_F(CursorDataTest, FetchAndFetchScrollDeliverTheSameBytes) {
     };
     EXPECT_EQ(read_with(false), 9);
     EXPECT_EQ(read_with(true), 9);
+}
+
+// ── D85: the continuation belongs to a result set, not to a pair of ───────
+//        coordinates
+//
+// D37 keyed the offset on (column, row) and the comment on the state claimed
+// that covered re-execute, SQLFreeStmt(SQL_CLOSE) and the catalog functions
+// too, "without having to remember to reset anything". It does not. A new
+// result set puts column 1 of row 0 exactly where the old one had column 1 of
+// row 0, so the key is unchanged and a finished offset is carried into a
+// different value - which the mock then reports as SQL_NO_DATA, leaving the
+// caller's buffer untouched.
+//
+// Found by D83's first read-back test, which read the same column of the same
+// row twice in two result sets - the shape of every "SELECT one column WHERE
+// key = n" an application runs in a loop.
+
+TEST_F(CursorDataTest, TheSameCellReadTwiceInTwoResultSetsReadsTheSameValue) {
+    Exec("INSERT INTO CD (ID, V) VALUES (1, 'abc')");
+
+    auto read_v = [&]() {
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+            hstmt, (SQLCHAR*)"SELECT V FROM CD WHERE ID = 1", SQL_NTS)));
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+        char buf[32] = {0};
+        SQLLEN ind = 0;
+        const SQLRETURN rc = SQLGetData(hstmt, 1, SQL_C_CHAR, buf,
+                                        sizeof(buf), &ind);
+        SQLCloseCursor(hstmt);
+        return std::make_pair(rc, std::string(buf));
+    };
+
+    const auto first = read_v();
+    EXPECT_EQ(first.first, SQL_SUCCESS);
+    EXPECT_EQ(first.second, "abc");
+
+    const auto second = read_v();
+    EXPECT_NE(second.first, SQL_NO_DATA)
+        << "the first read's exhausted offset ended the second one";
+    EXPECT_EQ(second.second, "abc");
+}
+
+// The partial case, where the stale offset is not merely exhausted but points
+// into the middle of a value that is no longer there.
+TEST_F(CursorDataTest, AnAbandonedChunkedReadDoesNotResumeInTheNextResultSet) {
+    Exec("INSERT INTO CD (ID, V) VALUES (1, 'abcdefghij')");
+
+    // Take the first four characters and walk away without finishing.
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT V FROM CD WHERE ID = 1", SQL_NTS)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+    char partial[5] = {0};
+    SQLLEN ind = 0;
+    ASSERT_TRUE(SQL_SUCCEEDED(
+        SQLGetData(hstmt, 1, SQL_C_CHAR, partial, sizeof(partial), &ind)));
+    EXPECT_STREQ(partial, "abcd");
+    SQLCloseCursor(hstmt);
+
+    // A fresh result set starts at the beginning of the value, not at byte 4.
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLExecDirect(
+        hstmt, (SQLCHAR*)"SELECT V FROM CD WHERE ID = 1", SQL_NTS)));
+    ASSERT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+    char whole[32] = {0};
+    ASSERT_TRUE(SQL_SUCCEEDED(
+        SQLGetData(hstmt, 1, SQL_C_CHAR, whole, sizeof(whole), &ind)));
+    SQLCloseCursor(hstmt);
+    EXPECT_STREQ(whole, "abcdefghij")
+        << "the read resumed where the abandoned one stopped";
+}
+
+// A catalog result set is installed by a different function - not by the
+// execute path - and had the same gap. Running SQLTables twice is an ordinary
+// thing for an application to do.
+//
+// It reads the same cell twice and compares, rather than asserting anything
+// about what the catalog holds. That matters: the first draft asserted only
+// `rc != SQL_NO_DATA`, and **passed against the unfixed driver**, because an
+// offset that lands inside a longer value is not exhausted - it is a valid
+// position, so the call succeeds and returns the value with its leading
+// characters gone. Silent truncation is the worse of the two failures and the
+// weaker assertion could not see it.
+TEST_F(CursorDataTest, ACatalogResultSetDoesNotInheritTheLastOnesOffset) {
+    auto table_name = [&]() {
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLTables(hstmt, NULL, 0, NULL, 0, NULL, 0,
+                                            NULL, 0)));
+        EXPECT_TRUE(SQL_SUCCEEDED(SQLFetch(hstmt)));
+        char cell[128] = {0};
+        SQLLEN ind = 0;
+        const SQLRETURN rc = SQLGetData(hstmt, 3, SQL_C_CHAR, cell,
+                                        sizeof(cell), &ind);
+        EXPECT_NE(rc, SQL_NO_DATA)
+            << "the previous result set's offset ended this read at once";
+        SQLCloseCursor(hstmt);
+        return std::string(cell);
+    };
+
+    const std::string first = table_name();
+    ASSERT_FALSE(first.empty()) << "the fixture needs a non-empty TABLE_NAME";
+    EXPECT_EQ(table_name(), first)
+        << "the second read came back short by the first read's offset";
 }
 
 }  // namespace

@@ -175,12 +175,33 @@ public:
     // mock used to restart from byte 0 every time, so a caller looping on
     // 01004 (which is what the ODBC spec tells it to do) never terminated.
     // The offset is keyed on (column, row) and checked inside SQLGetData, so
-    // that every path that moves the cursor - SQLFetch, SQLFetchScroll,
-    // re-execute, SQLFreeStmt(SQL_CLOSE), the catalog functions - restarts the
-    // value without having to remember to reset anything.
+    // moving to another column or another row of the same result set restarts
+    // the value with nothing to remember.
+    //
+    // D85: that is as far as the key goes, and the comment here used to claim
+    // further - that re-execute, SQLFreeStmt(SQL_CLOSE) and the catalog
+    // functions were covered too, "without having to remember to reset
+    // anything". They are not. A *new result set* puts column 1 of row 0
+    // where the old one had column 1 of row 0, so the coordinates are
+    // unchanged and a stale offset is carried into a different value. Reading
+    // the first row of `SELECT V FROM T WHERE ID = ?` twice returned the
+    // value, then SQL_NO_DATA and an untouched buffer.
+    //
+    // A result set is therefore an explicit boundary: every site that
+    // installs, clears or abandons `result_data_` calls
+    // `reset_getdata_continuation()`. Grep for it - the set of callers is the
+    // invariant.
     SQLUSMALLINT getdata_col_ = 0;
     SQLLEN getdata_row_ = -1;
     size_t getdata_offset_ = 0;
+
+    // D85: forget any part-retrieved value. Cheap and idempotent, so a site
+    // that is not sure whether it needs it should call it.
+    void reset_getdata_continuation() {
+        getdata_col_ = 0;
+        getdata_row_ = -1;
+        getdata_offset_ = 0;
+    }
     
     // Attributes
     SQLULEN cursor_type_ = SQL_CURSOR_FORWARD_ONLY;

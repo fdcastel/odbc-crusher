@@ -91,6 +91,7 @@ SQLRETURN SQL_API SQLEndTran(
             if (fType == SQL_ROLLBACK) {
                 stmt->executed_ = false;
                 stmt->result_data_.clear();
+                stmt->reset_getdata_continuation();   // D85
             }
         }
 

@@ -47,6 +47,7 @@ void setup_catalog_result(StatementHandle* stmt,
     stmt->column_names_ = col_names;
     stmt->column_types_ = col_types;
     stmt->result_data_.clear();
+    stmt->reset_getdata_continuation();          // D85
 }
 
 } // anonymous namespace

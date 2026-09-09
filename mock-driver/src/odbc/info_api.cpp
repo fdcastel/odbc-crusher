@@ -690,6 +690,7 @@ SQLRETURN SQL_API SQLGetTypeInfo(
     
     stmt->num_result_cols_ = 19;
     stmt->result_data_.clear();
+    stmt->reset_getdata_continuation();          // D85
     
     auto types = get_mock_types(config.types);
     

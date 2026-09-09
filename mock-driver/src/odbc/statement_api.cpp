@@ -327,6 +327,7 @@ SQLRETURN SQL_API SQLExecDirect(
     }
     stmt->column_sizes_ = result.column_sizes;   // D14
     stmt->result_data_.clear();
+    stmt->reset_getdata_continuation();          // D85
     for (const auto& row : result.data) {
         std::vector<std::variant<std::monostate, long long, double, std::string>> converted_row;
         for (const auto& cell : row) {
@@ -547,6 +548,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
         stmt->column_names_ = std::move(result_col_names);
         stmt->column_types_ = std::move(result_col_types);
         stmt->result_data_ = std::move(all_result_data);
+        stmt->reset_getdata_continuation();      // D85
         
         // Determine return code based on success/error counts
         if (error_count == 0) {
@@ -618,6 +620,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     }
     stmt->column_sizes_ = result.column_sizes;   // D14
     stmt->result_data_.clear();
+    stmt->reset_getdata_continuation();          // D85
     for (const auto& row : result.data) {
         std::vector<std::variant<std::monostate, long long, double, std::string>> converted_row;
         for (const auto& cell : row) {
@@ -1461,7 +1464,11 @@ SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
     stmt->cursor_open_ = false;
     stmt->current_row_ = -1;
     stmt->result_data_.clear();
-    
+    // D85: and the part-retrieved value with it. The spec makes this the
+    // equivalent of SQLFreeStmt(SQL_CLOSE), which has always done it; leaving
+    // it out here is what let an offset outlive its result set.
+    stmt->reset_getdata_continuation();
+
     return SQL_SUCCESS;
 }
 MOCK_ENTRY_CATCH(hstmt)
@@ -1873,9 +1880,7 @@ SQLRETURN SQL_API SQLFreeStmt(
             stmt->current_row_ = -1;
             stmt->result_data_.clear();
             // D37: a closed cursor has no value to continue retrieving.
-            stmt->getdata_col_ = 0;
-            stmt->getdata_row_ = -1;
-            stmt->getdata_offset_ = 0;
+            stmt->reset_getdata_continuation();
             break;
 
         case SQL_UNBIND:
