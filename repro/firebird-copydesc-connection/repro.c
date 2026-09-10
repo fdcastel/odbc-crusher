@@ -5,9 +5,10 @@
  *
  * Two separate claims, and this program separates them:
  *
- *   (1) SQLCopyDesc into an explicitly allocated descriptor faults.
- *       Reproduced here in plain C. Already fixed on the 3.5 line, so it is
- *       included as the *setup* for (2) rather than as a finding.
+ *   (1) SQLCopyDesc between the application row descriptors of two fresh
+ *       statement handles - neither prepared, neither bound, so both empty -
+ *       faults. Already fixed on the 3.5 line, so it is included as the
+ *       *setup* for (2) rather than as a finding.
  *
  *   (2) Having survived that fault, the connection is dead: an ordinary call
  *       on the same handle blocks forever, while the identical call on a
@@ -162,25 +163,30 @@ int main(int argc, char **argv)
         return 3;
     }
 
-    SQLHSTMT stmt = SQL_NULL_HSTMT;
-    say("SQLAllocHandle(STMT) + SQLPrepare(SELECT ...)");
-    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt)))
+    /* Two statement handles, neither prepared and neither bound, and their
+     * *application* row descriptors. Both are therefore empty - no records,
+     * SQL_DESC_COUNT of zero - and that is the shape that faults.
+     *
+     * The first version of this reproducer copied an IRD into an explicitly
+     * allocated descriptor instead, and SQLCopyDesc returned 0 without
+     * faulting. That result is worth keeping rather than forgetting: it says
+     * the fault belongs to this pairing, not to SQLCopyDesc in general. */
+    SQLHSTMT stmt1 = SQL_NULL_HSTMT, stmt2 = SQL_NULL_HSTMT;
+    say("SQLAllocHandle(STMT) x2 - neither prepared, neither bound");
+    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt1)))
         return 3;
-    if (!SQL_SUCCEEDED(SQLPrepare(stmt,
-            (SQLCHAR *)"SELECT 1 FROM RDB$DATABASE", SQL_NTS))) {
-        fprintf(stderr, "     could not prepare the SELECT\n");
+    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt2)))
+        return 3;
+
+    SQLHDESC ard1 = SQL_NULL_HDESC, ard2 = SQL_NULL_HDESC;
+    say("SQLGetStmtAttr(SQL_ATTR_APP_ROW_DESC) on both statements");
+    if (!SQL_SUCCEEDED(SQLGetStmtAttr(stmt1, SQL_ATTR_APP_ROW_DESC,
+                                      &ard1, 0, NULL)) ||
+        !SQL_SUCCEEDED(SQLGetStmtAttr(stmt2, SQL_ATTR_APP_ROW_DESC,
+                                      &ard2, 0, NULL))) {
+        fprintf(stderr, "     could not obtain both ARDs\n");
         return 3;
     }
-
-    SQLHDESC ird = SQL_NULL_HDESC;
-    SQLHDESC target = SQL_NULL_HDESC;
-    say("SQLGetStmtAttr(SQL_ATTR_IMP_ROW_DESC) — the source descriptor");
-    if (!SQL_SUCCEEDED(SQLGetStmtAttr(stmt, SQL_ATTR_IMP_ROW_DESC,
-                                      &ird, 0, NULL)))
-        return 3;
-    say("SQLAllocHandle(DESC) — an explicitly allocated target");
-    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_DESC, dbc, &target)))
-        return 3;
 
     struct sigaction sa, prev_segv, prev_bus;
     memset(&sa, 0, sizeof(sa));
@@ -189,9 +195,9 @@ int main(int argc, char **argv)
     sigaction(SIGBUS, &sa, &prev_bus);
 
     g_faulted = 0;
-    say("SQLCopyDesc(IRD -> explicit descriptor)   <-- expected to fault");
+    say("SQLCopyDesc(ARD of stmt1 -> ARD of stmt2)   <-- expected to fault");
     if (sigsetjmp(g_fault, 1) == 0) {
-        SQLRETURN rc = SQLCopyDesc(ird, target);
+        SQLRETURN rc = SQLCopyDesc(ard1, ard2);
         fprintf(stderr, "     SQLCopyDesc returned %d without faulting\n",
                 (int)rc);
         fflush(stderr);
