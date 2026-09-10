@@ -189,10 +189,12 @@ void JsonReporter::report_category(const std::string& category_name,
         std::any_of(results.begin(), results.end(), [](const tests::TestResult& r) {
             return r.status == tests::TestStatus::ERR;
         });
+    ++unwritten_categories_;   // S8: reset by whichever write happens next
     if (category_had_error) {
         write_snapshot(false);
         wrote_snapshot_ = true;
         last_snapshot_ = std::chrono::steady_clock::now();
+        unwritten_categories_ = 0;
     } else {
         maybe_write_snapshot();
     }
@@ -290,12 +292,21 @@ size_t quarantine_unserialisable(nlohmann::json& array_of_categories) {
 void JsonReporter::maybe_write_snapshot() {
     if (output_file_.empty()) return;
 
+    // S8: two bounds, covering opposite cases. Against a slow driver each
+    // category exceeds the time bound and writes, as it always did; against a
+    // fast one - Firebird on localhost runs the whole suite in under a second
+    // of probe time - the count bound is the one that fires, and it is what
+    // stops nine categories disappearing into a single window.
     const auto now = std::chrono::steady_clock::now();
-    if (wrote_snapshot_ && (now - last_snapshot_) < kSnapshotInterval) return;
+    const bool first = !wrote_snapshot_;
+    const bool due_by_time = (now - last_snapshot_) >= kSnapshotInterval;
+    const bool due_by_count = unwritten_categories_ >= kMaxUnwrittenCategories;
+    if (!first && !due_by_time && !due_by_count) return;
 
     write_snapshot(false);
     wrote_snapshot_ = true;
     last_snapshot_ = now;
+    unwritten_categories_ = 0;
 }
 
 void JsonReporter::write_snapshot(bool complete) {

@@ -31,6 +31,13 @@ public:
     //       meaning change this number exists to announce.
     static constexpr int kSchemaVersion = 2;
 
+    // S8: the most categories that can be missing from a report whose process
+    // died without warning is this minus one. Public because it is a promise
+    // about the artifact rather than an implementation detail - the test that
+    // pins it asserts against this constant rather than a literal, so changing
+    // the trade here cannot silently weaken the guarantee.
+    static constexpr size_t kMaxUnwrittenCategories = 4;
+
     explicit JsonReporter(const std::string& output_file = "")
         : output_file_(output_file) {}
     
@@ -67,12 +74,41 @@ private:
     // partial copies would break the single-document contract G1 established.
     void write_snapshot(bool complete);
 
-    // Snapshot after a category, subject to a rate limit. Always writes the
-    // first one, so a report exists from early on; after that at most one per
-    // kSnapshotInterval. Rewriting the whole ~100 KB document after each of 23
-    // categories cost ~150 ms per run and took the e2e suite from 5.6s to 10s,
-    // for no benefit: CI kills crusher at 570 seconds, so a snapshot that is
-    // up to a second stale is exactly as useful as one that is current.
+    // Snapshot after a category. Always writes the first one, so a report
+    // exists from early on; after that when *either* bound below is reached.
+    //
+    // S8: the time bound used to be the only one, and its justification was
+    // "a snapshot up to a second stale is exactly as useful as one that is
+    // current". That is false whenever the run is fast, and it cost a real
+    // report: against Firebird on localhost the whole suite is **0.7 seconds
+    // of probe time**, so on the U2 Linux run nine categories completed inside
+    // one window, every one of their writes was skipped, and the process then
+    // aborted (P17). The text report held nineteen categories; the JSON held
+    // ten — and the JSON is the half every triage and every report diff reads.
+    //
+    // The risk is measured in categories lost, so the bound is too. At most
+    // kMaxUnwrittenCategories - 1 categories can now be missing from a report
+    // whose process died without warning, however fast they ran.
+    //
+    // Both bounds are kept because they cover opposite cases: against a slow
+    // driver each category exceeds the time bound and writes anyway, exactly
+    // as before; against a fast one the count bound is what fires.
+    //
+    // Cost, measured on this build against the mock (24 categories, ~120 KB
+    // document), median of five runs:
+    //
+    //                        Debug     Release (what CI runs)
+    //   time bound only      393 ms    261 ms
+    //   every category       582 ms    306 ms
+    //   both bounds (this)     -       263 ms
+    //
+    // Writing every time costs ~45 ms in Release, which is noise beside the
+    // stress-test job's install steps, and ~190 ms in Debug, which is not: the
+    // e2e suite spawns crusher 55 times. Both bounds together cost **~2 ms** in
+    // Release and about 4.7 s across the Debug e2e suite, for a worst case of
+    // three categories lost instead of all of them. The earlier "~150 ms" in
+    // this comment was a Debug figure presented as though it were the cost in
+    // CI.
     void maybe_write_snapshot();
 
     static constexpr std::chrono::seconds kSnapshotInterval{1};
@@ -83,6 +119,7 @@ private:
     bool write_failed_ = false;   // Report a bad output path once, not 23 times
     bool wrote_snapshot_ = false;
     std::chrono::steady_clock::time_point last_snapshot_{};
+    size_t unwritten_categories_ = 0;   // S8
 };
 
 // D82: replace any element of `array_of_categories` that will not survive a

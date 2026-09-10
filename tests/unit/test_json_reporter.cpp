@@ -571,3 +571,55 @@ TEST_F(JsonReporterFixture, ACrashedCategoryIsSnapshottedEvenInsideTheRateLimit)
     EXPECT_EQ(j["categories"][2].value("name", std::string{}), "Third");
     EXPECT_FALSE(j.value("complete", true));
 }
+
+// ── S8: a fast run cannot lose more than a bounded number of categories ───
+//
+// The rate limiter's justification was "a snapshot up to a second stale is
+// exactly as useful as one that is current". That is false whenever the run is
+// fast, and it cost a real report: against Firebird on localhost the entire
+// suite is 0.7 seconds of *probe time*, so on the U2 Linux run nine categories
+// completed inside one window, every write was skipped, and the process then
+// aborted. The text report held nineteen categories; the JSON held ten.
+//
+// The risk is measured in categories lost, so the bound is too. Nothing here
+// sleeps: the point is precisely that no time passes.
+TEST_F(JsonReporterFixture, AFastRunStillReachesDiskEveryFewCategories) {
+    reporting::JsonReporter rep(path_.string());
+    rep.report_start("Driver={X}");
+
+    // Ten categories back to back, far inside the one-second window. Under the
+    // time bound alone exactly one of these reaches disk.
+    for (int i = 0; i < 10; ++i) {
+        rep.report_category("Cat " + std::to_string(i),
+                            {make("t" + std::to_string(i), tests::TestStatus::PASS)});
+    }
+
+    // No report_end() — this is the state an abort leaves.
+    const auto j = read_back();
+    ASSERT_TRUE(j.contains("categories")) << j.dump(1);
+    const size_t on_disk = j["categories"].size();
+
+    // The guarantee: at most kMaxUnwrittenCategories - 1 may be missing.
+    constexpr size_t kBound = reporting::JsonReporter::kMaxUnwrittenCategories;
+    EXPECT_GE(on_disk, 10u - (kBound - 1))
+        << "a fast run lost more than the bound allows: " << on_disk
+        << " of 10 categories reached disk";
+    // And it is still a bound, not "write everything" — the cost the limiter
+    // exists to control has to stay controlled.
+    EXPECT_LE(on_disk, 10u);
+    EXPECT_FALSE(j.value("complete", true));
+}
+
+// The time bound still governs a slow run, unchanged. A category that takes
+// longer than the interval writes on its own, without waiting for three more.
+TEST_F(JsonReporterFixture, ASlowRunStillWritesEveryCategory) {
+    reporting::JsonReporter rep(path_.string());
+    rep.report_start("Driver={X}");
+    rep.report_category("First", {make("t1", tests::TestStatus::PASS)});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    rep.report_category("Second", {make("t2", tests::TestStatus::PASS)});
+
+    const auto j = read_back();
+    ASSERT_EQ(j["categories"].size(), 2u)
+        << "the time bound no longer writes a slow category: " << j.dump(1);
+}
