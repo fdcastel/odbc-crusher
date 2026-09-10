@@ -2530,3 +2530,55 @@ TEST_F(CrusherE2EFixture, CrashGuardRunContinuesOnAFreshConnectionAfterACrash) {
     EXPECT_GT(summary.value("passed", 0), 150)
         << "the run limped rather than recovered: " << report_outline(run);
 }
+
+// ── P12: the handle after an error inside a parameter array ──────────────
+//
+// #309: the driver restored the descriptor's bind-offset pointer on the
+// success path only, so after a mid-array server error it pointed into a dead
+// stack frame and the next execute read a garbage offset — an access
+// violation, or a row written from whatever was at that address.
+//
+// The Firebird pair cannot show this. `P11` crashes 3.0.1.21 earlier in the
+// same category, so this probe is absent from the baseline report entirely and
+// its assertion had no configuration anywhere that could falsify it — the
+// shape AGENTS.md step 8 forbids, and the last one left in this plan.
+// `ArrayErrorBreaksHandle=true` is that configuration.
+TEST_F(CrusherE2EFixture, HandleReuseAfterArrayErrorCatchesABrokenHandle) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;ArrayErrorBreaksHandle=true;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Array Parameter Tests",
+                       "test_handle_reuse_after_array_error");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+
+    const auto actual = t->value("actual", std::string{});
+    EXPECT_EQ(t->value("status", std::string{}), "FAIL") << actual;
+    // The array execute itself must still have been graded correctly — the
+    // failed set marked, the others not. A probe that reported the reuse
+    // failure while getting the status array wrong would be right by accident.
+    EXPECT_NE(actual.find("status=[SUCCESS, SUCCESS, ERROR, SUCCESS, SUCCESS]"),
+              std::string::npos)
+        << "the per-set status array was not reported correctly; actual was: "
+        << actual;
+    EXPECT_NE(actual.find("the handle was left unusable"), std::string::npos)
+        << actual;
+}
+
+// The control. Without it, the case above proves only that *something* makes
+// the probe fail — and the same mock has to be able to pass it, or the probe
+// is simply broken.
+TEST_F(CrusherE2EFixture, HandleReuseAfterArrayErrorPassesOnAUsableHandle) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Array Parameter Tests",
+                       "test_handle_reuse_after_array_error");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+    const auto actual = t->value("actual", std::string{});
+    EXPECT_EQ(t->value("status", std::string{}), "PASS") << actual;
+    // And it verified the reused handle actually wrote its row, not merely
+    // that the execute returned success.
+    EXPECT_NE(actual.find("reads back as"), std::string::npos) << actual;
+}

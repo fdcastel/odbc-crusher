@@ -504,6 +504,10 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     config.fetch_returns_warning =
         (fetch_warn_str == "true" || fetch_warn_str == "yes");
 
+    // P12: does a failed parameter set leave the handle unusable?
+    config.array_error_breaks_handle =
+        (to_lower(get_string_value(pairs, "arrayerrorbreakshandle", "false")) == "true");
+
     config.array_bind_row_fails_at =
         clamp_int(get_int_value(pairs, "arraybindrowfailsat", 0), 0, 1000000);
     std::string supports_str =

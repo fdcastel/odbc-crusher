@@ -487,6 +487,21 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
                             "Statement not prepared");
         return SQL_ERROR;
     }
+
+    // P12 / #309: this handle was left unusable by an error inside a previous
+    // parameter array. The real driver did not refuse - it executed with a
+    // bind-offset pointing into a dead stack frame, which is an access
+    // violation or a row written from whatever was at that address. Returning
+    // an error is the readable stand-in; a mock that corrupted its own memory
+    // would be a worse test, for the same reason CrashOn returns rather than
+    // hangs.
+    if (stmt->broken_by_array_error_) {
+        stmt->add_diagnostic(sqlstate::GENERAL_ERROR, 0,
+                             "The statement handle was left unusable by an "
+                             "error inside a previous parameter array "
+                             "(the bind-offset pointer was not restored)");
+        return SQL_ERROR;
+    }
     
     auto* conn = stmt->connection();
     if (!conn || !conn->is_connected()) {
@@ -611,6 +626,16 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) MOCK_ENTRY_TRY {
         stmt->result_data_ = std::move(all_result_data);
         stmt->reset_getdata_continuation();      // D85
         
+        // P12 / #309: a failed set leaves the handle unusable, if configured.
+        // The real driver restored the descriptor's bind-offset pointer on the
+        // success path only, so after a mid-array error it pointed into a dead
+        // stack frame. Set here rather than at the failure site because what
+        // matters is "the array execute finished with an error in it", which
+        // is exactly the condition the driver got wrong.
+        if (error_count > 0 && config.array_error_breaks_handle) {
+            stmt->broken_by_array_error_ = true;
+        }
+
         // Determine return code based on success/error counts
         if (error_count == 0) {
             return SQL_SUCCESS;

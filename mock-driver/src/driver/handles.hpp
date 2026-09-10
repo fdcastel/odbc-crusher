@@ -165,7 +165,13 @@ public:
     ~StatementHandle() override;
     
     ConnectionHandle* connection() const { return conn_; }
-    
+
+    // P12: this handle was left unusable by an error inside a parameter array.
+    // Set only when `ArrayErrorBreaksHandle=true`; read by SQLExecute, which
+    // refuses from then on. Models Firebird ODBC #309, where the descriptor's
+    // bind-offset pointer was restored on the success path only.
+    bool broken_by_array_error_ = false;
+
     // Statement state
     bool prepared_ = false;
     bool executed_ = false;

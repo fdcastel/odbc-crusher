@@ -216,6 +216,25 @@ struct DriverConfig {
     // the surrounding rows succeed. Drives the per-row status probe.
     int array_bind_row_fails_at = 0;
 
+    // P12 / #309, fixed by Firebird ODBC PR #313. When true, an array execute
+    // in which any parameter set failed leaves the **statement handle
+    // unusable**: the next SQLExecute on it returns HY000 instead of running.
+    //
+    // That is the defect's shape. The driver restored the descriptor's
+    // bind-offset pointer on the success path only, so after a mid-array
+    // server error it pointed into a dead stack frame and the next execute
+    // read a garbage offset - an access violation, or a row written from
+    // whatever was at that address. The mock returns an error rather than
+    // reproducing either, for the same reason CrashOn returns one rather than
+    // hanging: a test that corrupted its own memory would be a worse test.
+    //
+    // This exists because the Firebird pair cannot demonstrate the fix. P11
+    // crashes 3.0.1.21 earlier in the same category, so P12 is absent from the
+    // baseline report entirely, and its assertion had no configuration
+    // anywhere that could falsify it - the shape AGENTS.md step 6 forbids and
+    // the last one left in this plan.
+    bool array_error_breaks_handle = false;
+
     // D35 — when true, every SQLFetch that returns a row also posts SQLSTATE
     // 01004 and returns SQL_SUCCESS_WITH_INFO instead of SQL_SUCCESS. Real
     // drivers do warn per-row (truncation, 01S07 fractional truncation, or a
