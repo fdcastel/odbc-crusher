@@ -194,7 +194,36 @@ first report, carried into `U2`'s row and corrected there.
 The arm also found what only a second platform could: `test_copy_desc` SIGSEGVs
 on Linux as well as access-violating on Windows, **and the connection does not
 survive it there** — which is `S7`, and which the entire Windows pair had no way
-to expose.
+to expose. One crashed category was costing the other thirteen, as a 570-second
+wedge rather than an error, and the first two diagnoses of that were wrong:
+`test_cancel_idle`, then `test_execute_without_prepare`. Both were bystanders —
+whichever probe made the first ODBC call on the dead connection. With `S7` in
+place both categories run clean.
+
+### The Linux pair today
+
+[Run 34433498947](https://github.com/fdcastel/odbc-crusher/actions/runs/34433498947),
+crusher `45a3f6d`, `PAIR_COMPARABLE=true`:
+
+| | official 3.0.1.21 | patched 3.5.1-rc2 |
+|---|---|---|
+| Categories run | 19 of 24, then aborted | **24 of 24**, `FILTERED_RUN=false` |
+| Passed | — (partial) | 184 |
+| Failed | — | 12 |
+| **Pass rate** | — | **88.0 %** |
+| Provenance | built from `dee624f` in the same run | `install.sha256` on the published tarball |
+
+The official half no longer needs an exclusion to get past its own crash: it
+faults in Descriptor Tests, reconnects, and runs nine more categories including
+Unicode Tests. It stops at `P17` — `corrupted double-linked list`, then
+`Aborted`. That is **glibc's malloc consistency check**, i.e. SIGABRT from the
+allocator rather than the SIGSEGV the crash guard catches, and it is the correct
+place to stop: by the time glibc raises it the heap is already inconsistent, and
+recovering would leave every later allocation in a process that has been told so.
+
+This half is therefore still a partial report, and its pass rate is deliberately
+left blank above rather than quoted against the patched half's. Two builds are
+only comparable when both ran the same probes, and these did not.
 
 ---
 
