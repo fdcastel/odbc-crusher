@@ -48,7 +48,7 @@ condition.
 |---|---|---|
 | Probes moved | 20 | **33** |
 | Pass-rate delta | 75.6 % → 86.8 % | **75.0 % → 91.9 %** |
-| Distinct fixes detected | **3 of 17** | **12 of 17** |
+| Distinct fixes detected | **3 of 17** | **13 of 17** |
 | Crashed categories on the baseline | 1 | **2** |
 
 The baseline's pass rate is still *optimistic*, and by more than before: two
@@ -59,7 +59,7 @@ the driver, but a probe that did not exist when the first measurement was taken.
 
 ## Part 1 — What crusher catches now
 
-Thirty-three probes moved, but they are **twelve driver bugs**, not thirty-three.
+Thirty-three probes moved, but they are **thirteen driver bugs**, not thirty-three.
 Counting findings instead of causes is the single easiest way to overstate a
 tool like this, and the sixteen numeric-conversion probes below are one bug.
 
@@ -68,7 +68,8 @@ tool like this, and the sixteen numeric-conversion probes below are one bug.
 | **#292** numeric → text parameter | ✅ 14 probes | ✅ **16** | `R4` gave the two `wvarchar` cells a dialect fallback; they had been skipping on Firebird because they hardcode `NVARCHAR(20)`, which Firebird spells `NCHAR VARYING` |
 | **#308** executor chosen at prepare time | ✅ 6 probes | ✅ 6 | unchanged |
 | **#297** `SQLCopyDesc` access violation | ✅ category crash | ✅ + survivors | `S3`: the crash entry now names `test_copy_desc` and keeps the six probes that finished before it. Previously all of them vanished |
-| **#311** cumulative `SQLRowCount` after an array execute | ❌ | ✅ **and it crashes** | `P11`. Predicted to fail; it *segfaults* 3.0.1.21 — a second crasher nobody had seen. `S3`'s entry names it with nine probes preserved |
+| **#311** cumulative `SQLRowCount` after an array execute | ❌ | ✅ **and it crashes** | `P11`. Predicted to fail; it *segfaults* 3.0.1.21 — a second crasher nobody had seen. `S3`'s entry names it with nine probes preserved. The crash itself turned out to be **#279**, one row below |
+| **#279** null-indicator offset in array binding | ❌ *(believed unreachable)* | ✅ | The same `P11` crash. Reported upstream as a new defect and corrected there: with the pre-#279 `sizeof(SQLINTEGER)` stride, the indicator of every parameter set after the first is read misaligned, `SQL_NTS` is not recognised, the 32-bit length becomes `-1`, and `Sqlda::checkAndRebuild()` then copies with that length — Valgrind's *read of size 1* at `0x1FFF001000` is a 4294967295-byte `memmove`. Fixed 2026-03-13; 3.5.0-rc1 and master carry it. **This report previously listed #279 as one the pair could not isolate** |
 | **#303 / #301** `SQLPrepare` discards `ROWS_FETCHED_PTR` / `ROW_STATUS_PTR` | ❌ | ✅ | `P2`. `after rowset 1: rows_fetched=999, status=[?, ?, ?, ?] — the counter was never written` |
 | **#315 / #306** column-wise rowsets ignore `ROW_BIND_OFFSET_PTR` | ❌ | ✅ | `P3`. `offset 16 bytes; slots [-111, -111, -111, -111, 4, -111, -111, -111]` |
 | **#314 / #307** `SQL_ATTR_KEYSET_SIZE` overwrites the rowset size | ❌ | ✅ | `P4`. `keyset size set to 7; rowset was 1, now 7` |
@@ -78,7 +79,7 @@ tool like this, and the sixteen numeric-conversion probes below are one bug.
 | **#296 / #295** `SQL_C_GUID` parameter binding | ❌ | ✅ | `P9`. Round-tripped `A0EEBC99-9C0B-4EF8-…` as `41304545-4243-3939-…`, which is the ASCII of `A0EEBC99-9C0B-4E`: the driver stored the *text* and read the bytes back as binary |
 | **#294** `SQL_DBMS_VER` is the engine version, not the product | ❌ | ✅ | `P13`. `06.03.1683 WI-V Firebird 5.0` against `05.00.1683 WI-V Firebird 5.0` — `atoi` on the prefix returns **6** for a Firebird **5** server |
 
-**Three became twelve.** Nine of the nine new detections came from probes
+**Three became thirteen.** Ten of the ten new detections came from probes
 written against a described symptom and then *checked against the pair*, which
 is the discipline (`T1`) that made the difference rather than the probes
 themselves.
@@ -87,7 +88,7 @@ themselves.
 
 ## Part 2 — What crusher still cannot catch
 
-Five of the seventeen. None of them is now a coverage gap in the sense the first
+Four of the seventeen. None of them is now a coverage gap in the sense the first
 report meant — every one has a probe. What is left is harder and more
 interesting.
 
@@ -97,7 +98,6 @@ interesting.
 | **#299** element-0 stride | ⚠️ **demonstrable, but not by this pair** | `Q1` gave `verify_rows_persisted` the key column and `test_column_wise_array_binding` an assertion on it. 3.0.1.21 masks the stride behind #308's executor defect — only one set runs at all, so there is no stride to get wrong. The mock's `ColumnWiseStride=BufferLength` reproduces it: `expected IDs 100, 200, 300 but read back 100, 100, 100`, with `SQL_SUCCESS` and a correct processed count |
 | **#313 / #309** dangling bind-offset after a mid-array throw | ⚠️ **written, unreachable on the baseline** | `P12` runs last in its category and `P11` crashes the driver before it, so it is absent from the baseline report. Registering it last was right and is not enough |
 | **#310** `SQL_ATTR_PARAM_OPERATION_PTR` | ⚠️ **capable, not independently shown** | unchanged from the first measurement: the probe asserts `SQL_PARAM_UNUSED` correctly, but on 3.0.1.21 it fails for #308's reason |
-| **#279** null-indicator offset | — | sits inside the same masked region as #299 |
 
 Three of the five are the same phenomenon: **one defect hiding another.** The
 baseline is a build with many bugs, and the earlier one in a code path decides
@@ -240,7 +240,7 @@ today, four have probes that are correct and blocked by something else — a
 defect masking a defect, or a fix that was never made — and one (`#298`) has a
 probe that reaches a neighbouring code path.
 
-Three things are worth stating plainly against any temptation to read 12/17 as a
+Three things are worth stating plainly against any temptation to read 13/17 as a
 grade:
 
 **The seventeen are a known seventeen.** Every probe in Part 1 was written from
