@@ -87,6 +87,17 @@ SQLRETURN SQL_API SQLAllocHandle(
                 return SQL_INVALID_HANDLE;
             }
 
+            // S7: the driver crashed on this connection and it did not
+            // survive. 08S01 "communication link failure" is what a dead
+            // connection looks like from the application's side, and refusing
+            // here is a single choke point - every probe needs a statement.
+            if (conn->poisoned_) {
+                conn->add_diagnostic("08S01", 0,
+                                     "The connection did not survive the "
+                                     "driver fault; allocate a new one");
+                return SQL_ERROR;
+            }
+
             // Per the ODBC state table, the connection need only be in state
             // C2 (Allocated) for SQLAllocHandle(SQL_HANDLE_STMT) — the
             // connection does not have to be open yet. Previously we

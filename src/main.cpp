@@ -170,7 +170,10 @@ void tally_results(const std::vector<tests::TestResult>& results,
     }
 }
 
-void run_test_category(tests::TestBase& test_suite, reporting::Reporter& reporter,
+// Returns true when the driver faulted inside this category. S7: the caller
+// needs to know, because the connection does not necessarily survive it and
+// every later category would otherwise run against a dead handle.
+bool run_test_category(tests::TestBase& test_suite, reporting::Reporter& reporter,
                        size_t& total_tests, size_t& total_passed,
                        size_t& total_failed, size_t& total_skipped,
                        size_t& total_errors, size_t& total_informational) {
@@ -227,6 +230,7 @@ void run_test_category(tests::TestBase& test_suite, reporting::Reporter& reporte
     tally_results(results, total_tests, total_passed, total_failed,
                   total_skipped, total_errors, total_informational);
     std::cout << std::flush;
+    return guard.crashed;
 }
 
 } // anonymous namespace
@@ -363,17 +367,21 @@ int main(int argc, char** argv) {
         
         // Initialize ODBC
         core::OdbcEnvironment env;
-        core::OdbcConnection conn(env);
+        // S7: held by pointer, because a category that crashes the driver
+        // makes this connection unusable and the next one has to replace it.
+        // See the run loop below for why the old one is abandoned rather than
+        // closed.
+        auto conn = std::make_unique<core::OdbcConnection>(env);
         
         // Connect to database
-        conn.connect(connection_string);
+        conn->connect(connection_string);
         
         // Phase 1: Collect driver information (for all output formats)
         // Wrapped in crash guard because some drivers (e.g. DuckDB on Linux)
         // can SIGSEGV during SQLGetTypeInfo or SQLGetInfo.
-        discovery::DriverInfo driver_info(conn);
-        discovery::TypeInfo type_info(conn);
-        discovery::FunctionInfo func_info(conn);
+        discovery::DriverInfo driver_info(*conn);
+        discovery::TypeInfo type_info(*conn);
+        discovery::FunctionInfo func_info(*conn);
         
         bool discovery_ok = true;
         auto discovery_guard = core::execute_with_crash_guard([&]() {
@@ -417,11 +425,18 @@ int main(int argc, char** argv) {
         
         // G2: the registry above is the one list; --list-categories and
         // --category read the same names the run uses.
-        std::vector<std::unique_ptr<tests::TestBase>> categories;
-        for (const auto& factory : category_registry()) {
-            auto category = factory(conn, connection_string);
+        //
+        // S7: selected by *index* rather than by constructing every category
+        // up front. A category holds `OdbcConnection&`, and the run loop below
+        // may replace that connection when a driver faults — so nothing that
+        // holds a reference to it may outlive it. Constructing one at a time
+        // is what makes replacing the connection safe, and it costs nothing:
+        // every category's constructor only stores the reference.
+        const std::vector<std::string> all_names = category_names(*conn);
+        std::vector<size_t> selected;
+        for (size_t i = 0; i < category_registry().size(); ++i) {
+            const std::string lowered = to_lower_copy(all_names[i]);
             if (!only_categories.empty()) {
-                const std::string lowered = to_lower_copy(category->category_name());
                 bool wanted = false;
                 for (const auto& want : only_categories) {
                     if (lowered == to_lower_copy(want)) { wanted = true; break; }
@@ -429,15 +444,12 @@ int main(int argc, char** argv) {
                 if (!wanted) continue;
             }
             // P16: applied after --category, so the two compose predictably.
-            if (!skip_categories.empty()) {
-                const std::string lowered = to_lower_copy(category->category_name());
-                bool skipped = false;
-                for (const auto& skip : skip_categories) {
-                    if (lowered == to_lower_copy(skip)) { skipped = true; break; }
-                }
-                if (skipped) continue;
+            bool skipped = false;
+            for (const auto& skip : skip_categories) {
+                if (lowered == to_lower_copy(skip)) { skipped = true; break; }
             }
-            categories.emplace_back(std::move(category));
+            if (skipped) continue;
+            selected.push_back(i);
         }
 
         // P16: an --exclude-category that matches nothing is the silent-no-op
@@ -447,13 +459,13 @@ int main(int argc, char** argv) {
         for (const auto& skip : skip_categories) {
             const std::string wanted = to_lower_copy(skip);
             bool known = false;
-            for (const auto& name : category_names(conn)) {
+            for (const auto& name : all_names) {
                 if (to_lower_copy(name) == wanted) { known = true; break; }
             }
             if (!known) {
                 std::cerr << "Error: --exclude-category '" << skip
                           << "' names no category. Known categories:\n";
-                for (const auto& name : category_names(conn)) {
+                for (const auto& name : all_names) {
                     std::cerr << "  " << name << "\n";
                 }
                 return 3;
@@ -462,9 +474,9 @@ int main(int argc, char** argv) {
 
         // A --category that matches nothing is a mistake worth failing on: it
         // otherwise produces a clean, empty, entirely meaningless report.
-        if (categories.empty()) {
+        if (selected.empty()) {
             std::cerr << "Error: no test category matched. Known categories:\n";
-            for (const auto& name : category_names(conn)) {
+            for (const auto& name : all_names) {
                 std::cerr << "  " << name << "\n";
             }
             return 3;
@@ -473,29 +485,115 @@ int main(int argc, char** argv) {
         // The report has to say what was asked for, or a consumer comparing
         // pass rates will compare two different subsets and see a regression
         // that is really a filter.
-        reporter->report_selected_categories(category_names(conn), [&] {
-            std::vector<std::string> selected;
-            for (const auto& c : categories) selected.push_back(c->category_name());
-            return selected;
+        reporter->report_selected_categories(all_names, [&] {
+            std::vector<std::string> names;
+            names.reserve(selected.size());
+            for (size_t i : selected) names.push_back(all_names[i]);
+            return names;
         }());
 
-        for (auto& category : categories) {
-            run_test_category(*category, *reporter, total_tests, total_passed,
+        // D76: teardown runs inside the crash guard. Three categories hold a
+        // RoundTripTableGuard past run(), and ~RoundTripTableGuard issues
+        // SQLSetConnectAttr and a DROP TABLE; at end of scope that ran
+        // unguarded *and* after report_end(), so a driver that faults while
+        // dropping a table killed the process with nothing in the report to
+        // say why.
+        //
+        // S7 moved it into the loop, one category at a time, because a
+        // category may not outlive the connection it holds. The results are
+        // accumulated and reported once at the end, so the report keeps the
+        // single "Teardown" entry it had before.
+        std::vector<tests::TestResult> teardown_crashes;
+
+        for (size_t i : selected) {
+            auto category = category_registry()[i](*conn, connection_string);
+            const bool crashed =
+                run_test_category(*category, *reporter, total_tests, total_passed,
+                                  total_failed, total_skipped, total_errors,
+                                  total_informational);
+
+            if (!crashed) {
+                std::vector<std::unique_ptr<tests::TestBase>> one;
+                one.push_back(std::move(category));
+                auto crashes = tests::teardown_categories(one);
+                teardown_crashes.insert(teardown_crashes.end(),
+                                        crashes.begin(), crashes.end());
+                continue;
+            }
+
+            // ── S7: the driver faulted. Everything below is about not
+            // touching it again. ──────────────────────────────────────────
+            //
+            // Before this, the run carried on with the same handle. On Windows
+            // that worked — an access violation leaves a connection the next
+            // category can still use, which is why the whole Firebird Windows
+            // pair never noticed. On Linux it does not: after `test_copy_desc`
+            // SIGSEGVs 3.0.1.21, the *next* ODBC call on that handle never
+            // returns, whichever probe makes it. One crashed category cost the
+            // other thirteen, and cost them as a 570 s wedge rather than an
+            // error.
+            //
+            // The category object is abandoned, not destroyed. Its destructor
+            // is the teardown above — SQLSetConnectAttr and DROP TABLE — and
+            // running that through a driver that has just faulted is the most
+            // likely thing to hang of anything here. A leaked object in a
+            // short-lived process is much cheaper than a wedged run, and the
+            // tables it would have dropped are handled the next time round:
+            // RoundTripTableGuard reuses and empties an existing table (A15).
+            (void)category.release();
+
+            // Same reasoning for the connection, one level up. ~OdbcConnection
+            // calls SQLDisconnect and SQLFreeHandle, both of which are calls
+            // into the faulted driver. Let it leak deliberately.
+            (void)conn.release();
+
+            std::cerr << "  !! the driver faulted in " << all_names[i]
+                      << "; opening a fresh connection for the categories after it\n"
+                      << std::flush;
+
+            bool reconnected = false;
+            try {
+                conn = std::make_unique<core::OdbcConnection>(env);
+                conn->connect(connection_string);
+                reconnected = true;
+            } catch (const core::OdbcError& e) {
+                std::cerr << "  !! could not reconnect: " << e.what() << "\n"
+                          << std::flush;
+            }
+
+            if (!reconnected) {
+                // Nothing after this point can run. Say so in the report
+                // rather than letting the remaining categories vanish into a
+                // total that looks like a smaller suite.
+                tests::TestResult lost;
+                lost.test_name = "Categories after " + all_names[i] + " (NOT RUN)";
+                lost.function = "N/A";
+                lost.status = tests::TestStatus::ERR;
+                lost.severity = tests::Severity::CRITICAL;
+                lost.conformance = tests::ConformanceLevel::CORE;
+                lost.expected = "A fresh connection after a driver crash";
+                lost.actual =
+                    "The driver crashed in " + all_names[i] +
+                    " and a new connection could not be opened afterwards";
+                lost.diagnostic =
+                    "The remaining categories did not run. A driver that cannot "
+                    "be reconnected to after a crash leaves the rest of the "
+                    "suite unmeasurable, so this run's pass rate covers only "
+                    "the categories above.";
+                lost.suggestion =
+                    "Investigate the crash in " + all_names[i] +
+                    " first: everything after it is unmeasured, not passing.";
+                lost.duration = std::chrono::microseconds(0);
+                std::vector<tests::TestResult> lost_results{lost};
+                reporter->report_category("Run Aborted", lost_results);
+                tally_results(lost_results, total_tests, total_passed,
                               total_failed, total_skipped, total_errors,
                               total_informational);
+                break;
+            }
         }
 
-        // D76: destroy the categories here, under the crash guard, rather than
-        // letting the vector go out of scope at the end of this block.
-        //
-        // Three of them hold a RoundTripTableGuard past run(), and
-        // ~RoundTripTableGuard issues SQLSetConnectAttr and a DROP TABLE. At
-        // end of scope that ran unguarded *and* after report_end(), so a
-        // driver that faults while dropping a table killed the process with
-        // nothing in the report to say why - and no report left to write it
-        // into even if it had been caught.
-        if (auto teardown_crashes = tests::teardown_categories(categories);
-            !teardown_crashes.empty()) {
+        if (!teardown_crashes.empty()) {
             reporter->report_category("Teardown", teardown_crashes);
             tally_results(teardown_crashes, total_tests, total_passed,
                           total_failed, total_skipped, total_errors,

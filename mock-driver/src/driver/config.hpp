@@ -76,6 +76,28 @@ struct DriverConfig {
     // a misspelt name used to open a normal connection and inject no faults,
     // and the caller's only clue was a run where nothing went wrong.
     std::vector<std::string> unknown_fail_on;
+
+    // S7: functions that *crash* rather than fail. `FailOn` returns an error;
+    // this faults the process the way a real driver does, so the crash guard
+    // has something to catch and the code after a caught crash has something
+    // to run against.
+    //
+    // The crash path had no end-to-end coverage at all before this: the guard
+    // is unit-tested against a lambda that faults, but nothing exercised the
+    // whole chain - guard catches, S3 keeps the completed probes, D76 skips
+    // the teardown, S7 replaces the connection, and the run carries on. That
+    // chain is what the Firebird pair exercised by accident, and it took two
+    // wedged CI runs to read.
+    //
+    // The connection is also *poisoned*: after a crash, every later
+    // SQLAllocHandle(SQL_HANDLE_STMT) on that connection returns 08S01. Real
+    // drivers differ here - the Windows Firebird build leaves a usable
+    // connection after an access violation and the Linux one does not - and
+    // the unusable case is the one worth modelling, because it is the one that
+    // costs the rest of the run. An error rather than a hang on purpose: the
+    // hang is what the real driver does, and a test that reproduced it would
+    // hang CI.
+    std::vector<std::string> crash_on;
     
     // SQLSTATE to return on failure
     std::string error_code = "42000";
@@ -210,6 +232,11 @@ struct DriverConfig {
 
     // Check if a function should fail
     bool should_fail(const std::string& function_name) const;
+
+    // S7: does this call site crash? Exact name match only - no mode
+    // interaction and no W-entry-point subtlety, because a crash is not a
+    // graded outcome and nothing should reach one by accident.
+    bool should_crash(const std::string& function_name) const;
 
     // Apply latency if configured
     void apply_latency() const;

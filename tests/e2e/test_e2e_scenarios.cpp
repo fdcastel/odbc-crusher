@@ -2465,3 +2465,68 @@ TEST_F(CrusherE2EFixture, ExcludeCategoryAppliesAfterCategory) {
     EXPECT_TRUE(find_category(run.report, "Connection Tests").has_value());
     EXPECT_FALSE(find_category(run.report, "Unicode Tests").has_value());
 }
+
+// ── S7: the run survives a category that crashes the driver ──────────────
+//
+// Named CrashGuard* on purpose. The sanitizer job excludes that pattern
+// because the guard's siglongjmp leaves the faulting frame's memory
+// unreleased by construction, and LeakSanitizer is right to say so.
+//
+// Before S7 the run carried on with the same connection handle. On Windows
+// that worked — an access violation leaves a connection the next category can
+// still use, which is why the entire Firebird Windows pair never noticed. On
+// Linux it does not: after test_copy_desc SIGSEGVs 3.0.1.21 the *next* ODBC
+// call on that handle never returns, whichever probe makes it, so one crashed
+// category cost the other thirteen and cost them as a 570-second wedge.
+//
+// `CrashOn=SQLCopyDesc` reproduces the fault and poisons the connection the
+// way the Linux driver does, except returning 08S01 instead of hanging — the
+// hang is what the real driver does and a test that reproduced it would hang
+// CI. Measured against this build: with S7, 204 passed / 1 error / 99.5%;
+// with the reconnect removed, 90 passed / 63 errors / 43.1%.
+TEST_F(CrusherE2EFixture, CrashGuardRunContinuesOnAFreshConnectionAfterACrash) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;CrashOn=SQLCopyDesc;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+
+    // The crash is reported, and S3's survivors are kept with it.
+    auto desc = find_category(run.report, "Descriptor Tests");
+    ASSERT_TRUE(desc.has_value()) << report_outline(run);
+    bool saw_crash = false;
+    size_t completed = 0;
+    for (const auto& t : (*desc)["tests"]) {
+        const auto name = t.value("test_name", std::string{});
+        if (name.find("(DRIVER CRASH)") != std::string::npos) {
+            saw_crash = true;
+            EXPECT_EQ(t.value("severity", std::string{}), "CRITICAL");
+        } else {
+            ++completed;
+        }
+    }
+    EXPECT_TRUE(saw_crash) << "the crash was not reported at all";
+    EXPECT_GT(completed, 0u)
+        << "S3: the probes that finished before the crash were discarded";
+
+    // And this is S7: the categories after it ran, and ran *well*. Against a
+    // poisoned connection they would be a wall of 08S01 errors — that is the
+    // whole difference, and it is what the numbers above measure.
+    auto unicode = find_category(run.report, "Unicode Tests");
+    ASSERT_TRUE(unicode.has_value())
+        << "no category after the crash ran at all: " << report_outline(run);
+    size_t unicode_errors = 0;
+    for (const auto& t : (*unicode)["tests"]) {
+        if (t.value("status", std::string{}) == "ERROR") ++unicode_errors;
+    }
+    EXPECT_EQ(unicode_errors, 0u)
+        << "a category after the crash errored, so it is still running "
+           "against the dead connection";
+
+    // One crashed category should cost exactly one category.
+    const auto& summary = run.report["summary"];
+    EXPECT_EQ(summary.value("errors", -1), 1)
+        << "expected exactly the one crash entry; more means later categories "
+           "are failing too. Report: " << report_outline(run);
+    EXPECT_GT(summary.value("passed", 0), 150)
+        << "the run limped rather than recovered: " << report_outline(run);
+}

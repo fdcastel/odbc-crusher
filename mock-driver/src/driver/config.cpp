@@ -83,6 +83,17 @@ bool is_failable_entry_point(const std::string& lower_name) {
     return false;
 }
 
+bool DriverConfig::should_crash(const std::string& function_name) const {
+    // S7. Deliberately simpler than should_fail: exact, case-insensitive name
+    // match, no mode interaction, no W-entry-point widening. Crashing is not a
+    // graded outcome and nothing should arrive at one indirectly.
+    const std::string lower_name = to_lower(function_name);
+    for (const auto& c : crash_on) {
+        if (to_lower(c) == lower_name) return true;
+    }
+    return false;
+}
+
 bool DriverConfig::should_fail(const std::string& function_name) const {
     // D26: `FailOn` names specific functions, so it is a per-function
     // override rather than a property of a mode - and it used to be read only
@@ -311,6 +322,17 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     if (to_lower(get_string_value(pairs, "connectdiagnostics", "wellformed")) ==
         "garbled") {
         config.connect_diagnostics = DriverConfig::ConnectDiagnostics::Garbled;
+    }
+
+    // S7: functions that crash rather than fail.
+    std::string crash_on_str = get_string_value(pairs, "crashon", "");
+    if (!crash_on_str.empty()) {
+        std::istringstream iss(crash_on_str);
+        std::string func;
+        while (std::getline(iss, func, ',')) {
+            const std::string name = trim(func);
+            if (!name.empty()) config.crash_on.push_back(name);
+        }
     }
 
     // U1(a): how a column-wise parameter array is stepped.

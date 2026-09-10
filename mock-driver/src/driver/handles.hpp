@@ -104,6 +104,13 @@ public:
     EnvironmentHandle* environment() const { return env_; }
     bool is_connected() const { return connected_; }
 
+    // S7: this connection died with the driver. Set at a `CrashOn` site, read
+    // by SQLAllocHandle(SQL_HANDLE_STMT), which refuses with 08S01 from then
+    // on. Models the Linux Firebird behaviour where the connection does not
+    // survive a fault - the Windows build's does, and that difference is
+    // exactly what hid the defect S7 fixes for the whole Windows pair.
+    bool poisoned_ = false;
+
     // I6: this connection's identity and its uncommitted writes.
     //
     // The buffer is created at connect and released at disconnect, so a

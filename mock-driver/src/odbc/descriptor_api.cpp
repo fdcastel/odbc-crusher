@@ -2,6 +2,7 @@
 
 #include "mock/behaviors.hpp"
 #include "driver/handles.hpp"
+#include <csignal>
 #include "utils/buffer_copy.hpp"
 #include "driver/diagnostics.hpp"
 
@@ -369,6 +370,34 @@ SQLRETURN SQL_API SQLCopyDesc(
     if (!src || !tgt) return SQL_INVALID_HANDLE;
     HandleLock lock(tgt);
     tgt->clear_diagnostics();
+
+    // S7: `CrashOn=SQLCopyDesc` faults here, deliberately.
+    //
+    // This is the mock's stand-in for what Firebird ODBC 3.0.1.21 does to
+    // test_copy_desc - an access violation on Windows, a SIGSEGV on Linux -
+    // and it is the only way to exercise the chain that follows a caught
+    // crash end to end: S3 keeps the probes that completed, D76 skips the
+    // teardown, S7 replaces the connection, and the run carries on.
+    //
+    // The connection is poisoned first, while there is still a stack to do it
+    // on. After the fault every SQLAllocHandle(SQL_HANDLE_STMT) on it returns
+    // 08S01, so a caller that keeps using the same connection gets a run of
+    // dead categories - which is what happened on Linux, and what S7 exists
+    // to prevent.
+    if (BehaviorController::instance().config().should_crash("SQLCopyDesc")) {
+        if (auto* conn = tgt->connection()) conn->poisoned_ = true;
+#ifdef _WIN32
+        // Windows uses SEH, where a raised signal is not a structured
+        // exception and would sail past the guard. Same fault
+        // CrashGuardTest.CatchesAccessViolation uses.
+        volatile int* boom = nullptr;
+        *boom = 42;
+#else
+        // POSIX installs signal handlers; a raised SIGTRAP is exact and
+        // deterministic, and is the signal D73 had to add.
+        std::raise(SIGTRAP);
+#endif
+    }
 
     tgt->count_ = src->count_;
     tgt->records_ = src->records_;
