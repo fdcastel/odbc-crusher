@@ -1,0 +1,149 @@
+# Prove, or refute, two claims about Firebird ODBC 3.0.1.21 on Linux.
+#
+# IMPROVEMENT_PLAN_V2 **P16** and **P17**. Both were recorded from odbc-crusher
+# runs, and neither was proven by them:
+#
+#   P17  `test_array_row_count_matches_its_claim` kills the process — once as
+#        SIGSEGV, once as SIGABRT with glibc's `corrupted double-linked list`.
+#        glibc detects a clobbered heap at a *later* malloc, not at the bad
+#        write, so the probe that happened to be running is a correlation and
+#        not a culprit. Nothing had ever established whether the offending
+#        write is in the driver or in crusher.
+#
+#   P16  After the driver faults inside SQLCopyDesc, the connection it faulted
+#        on is unusable and the next ODBC call on it never returns.
+#
+# Two things make this workflow evidence rather than more of the same:
+#
+#   1. **The reproducers contain no odbc-crusher code.** Plain C against the
+#      driver manager, so a maintainer can build and run them without this
+#      repository — and so a crash cannot be blamed on the tool.
+#
+#   2. **Valgrind, not ASan.** The driver is a binary we compile but do not
+#      instrument, and AddressSanitizer only catches a bad write at the moment
+#      it happens in *instrumented* code. Valgrind instruments at run time, so
+#      it sees writes from inside `libOdbcFb.so` and names the instruction and
+#      the library that performed them. That distinction is the whole reason
+#      this had not been settled: crusher's sanitizer job only ever meets the
+#      mock driver.
+#
+# Manual dispatch only. Nothing here gates anything — a crash is a possible
+# result and the log is the deliverable.
+name: Repro — Firebird ODBC memory claims (P16, P17)
+
+on:
+  workflow_dispatch:
+    inputs:
+      driver_ref:
+        description: 'Commit or tag of firebird-odbc-driver to build (blank = the manifest pin for firebird-official-linux)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    name: Firebird ODBC 3.0.1.21 under Valgrind (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Load driver metadata from .github/drivers.json
+      run: |
+        K='firebird-official-linux'
+        REF='${{ inputs.driver_ref }}'
+        if [ -z "$REF" ]; then
+          REF=$(jq -er --arg k "$K" '.drivers[$k].source.tag' .github/drivers.json)
+        fi
+        {
+          echo "SRC_REPO=$(jq -er --arg k "$K" '.drivers[$k].source.repo' .github/drivers.json | sed 's|https://github.com/||')"
+          echo "SRC_REF=$REF"
+          echo "DRIVER_SECTION=$(jq -er --arg k "$K" '.drivers[$k].install.driver_section' .github/drivers.json)"
+          echo "CONN_STRING=$(jq -er --arg k "$K" '.drivers[$k].conn_string' .github/drivers.json)"
+        } >> "$GITHUB_ENV"
+
+    - uses: ./.github/actions/firebird-linux
+
+    - name: Build the driver from the pinned commit
+      id: build
+      uses: ./.github/actions/build-firebird-odbc
+      with:
+        repo: ${{ env.SRC_REPO }}
+        ref: ${{ env.SRC_REF }}
+
+    - name: Register the driver with unixODBC
+      run: |
+        {
+          echo "[${DRIVER_SECTION}]"
+          echo "Description = Firebird ODBC Driver"
+          echo "Driver = ${{ steps.build.outputs.library-path }}"
+          echo "Setup = ${{ steps.build.outputs.library-path }}"
+          echo "FileUsage = 1"
+        } | sudo tee -a /etc/odbcinst.ini
+        cat /etc/odbcinst.ini
+
+    - name: Install valgrind and the ODBC headers
+      run: |
+        sudo apt-get update -y -q
+        sudo apt-get install -y -q valgrind unixodbc-dev
+
+    - name: Build both reproducers
+      run: |
+        set -euo pipefail
+        cc -Wall -Wextra -O0 -g repro/firebird-array-rowcount/repro.c \
+           -lodbc -o repro-array
+        cc -Wall -Wextra -O0 -g repro/firebird-copydesc-connection/repro.c \
+           -lodbc -o repro-copydesc
+        echo "built both"
+
+    # ── P17 ───────────────────────────────────────────────────────────────
+    # Plainly first, to see whether the crash reproduces without crusher at
+    # all. `|| true` because a crash is the expected outcome and its signal is
+    # the finding, not a job failure.
+    - name: 'P17: the array/SQLRowCount sequence, on its own'
+      env:
+        LD_LIBRARY_PATH: ${{ env.FIREBIRD_LIB_DIR }}
+      run: |
+        set +e
+        ./repro-array "$CONN_STRING"
+        echo "::notice::repro-array exit status $?  (137/139 = killed by a signal)"
+        exit 0
+
+    # Then under Valgrind, which is what actually answers the question: an
+    # "Invalid write" whose stack names libOdbcFb.so settles P17 in favour of
+    # the driver; one that names repro.c settles it against, and is a bug here.
+    - name: 'P17: the same sequence under Valgrind'
+      env:
+        LD_LIBRARY_PATH: ${{ env.FIREBIRD_LIB_DIR }}
+      run: |
+        set +e
+        valgrind --num-callers=40 --track-origins=yes \
+                 --error-exitcode=0 --log-file=valgrind-array.txt \
+                 ./repro-array "$CONN_STRING"
+        echo "--- valgrind summary ---"
+        grep -E "Invalid (write|read|free)|ERROR SUMMARY|corrupt" -A 12 \
+             valgrind-array.txt | head -80
+        exit 0
+
+    # ── P16 ───────────────────────────────────────────────────────────────
+    # Exit 5 is the finding: SQLCopyDesc faulted, the same connection then hung,
+    # and a fresh one did not. Exit 0 refutes the claim on this build.
+    - name: 'P16: is the connection usable after the fault?'
+      env:
+        LD_LIBRARY_PATH: ${{ env.FIREBIRD_LIB_DIR }}
+      run: |
+        set +e
+        ./repro-copydesc "$CONN_STRING"
+        rc=$?
+        echo "::notice::repro-copydesc exit status $rc  (5 = the claim holds, 0 = refuted)"
+        exit 0
+
+    - name: Upload the evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: firebird-memory-repro
+        path: |
+          valgrind-array.txt
+        if-no-files-found: warn
