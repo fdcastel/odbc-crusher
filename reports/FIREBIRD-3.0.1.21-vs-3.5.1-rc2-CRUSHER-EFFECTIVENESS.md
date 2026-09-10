@@ -1,20 +1,32 @@
 # Is odbc-crusher finding the bugs we fix?
 
-**A controlled before/after against one driver, two builds.**
+**A controlled before/after against one driver, two builds — measured twice.**
+
+This report was first written on 2026-09-09 against crusher `68630c6`, and
+concluded that of seventeen behavioural fixes separating the two builds, crusher
+detected **three**. [`docs/IMPROVEMENT_PLAN_V2.md`](../docs/IMPROVEMENT_PLAN_V2.md)
+is the work that followed. This is the re-measurement.
+
+The first version's numbers are kept alongside the new ones throughout rather
+than overwritten. A tool's effectiveness claim is only worth as much as the
+measurement behind it, and a measurement you cannot see move is not one.
 
 | | |
 |---|---|
 | Baseline | Firebird ODBC Driver **3.0.1.21** (official release) — source `FirebirdSQL/firebird-odbc-driver` @ [`dee624f`](https://github.com/FirebirdSQL/firebird-odbc-driver/commit/dee624fac13182f569532a5785e32eb5d27bed98) |
 | Candidate | Firebird ODBC Driver **3.5.1-rc2** — upstream `master` @ `35fae3e` plus thirteen open pull requests |
-| Crusher | `68630c6`, same binary for both |
+| Crusher | `18ccae7`, resolved **once** for both halves (`T3`) and recorded in each report (`S4`) |
 | Server | Firebird 5.0.3 via PSFirebird, `windows-2022`, `CHARSET=UTF8` |
-| Runs | [official](https://github.com/fdcastel/odbc-crusher/actions/runs/34367166127) · [patched](https://github.com/fdcastel/odbc-crusher/actions/runs/34367182766) |
+| Run | [firebird-pair 34409542504](https://github.com/fdcastel/odbc-crusher/actions/runs/34409542504) — both halves, one dispatch |
 | Provenance | `OK` on both, from the installed DLL's VERSIONINFO — `3.0.1.21` and `3.5.1.0` |
+| Comparability | `PAIR_CONN_STRING_MATCH=true`, `PAIR_COMPARABLE=true` — the two `environment` blocks are identical |
 
-The two runs are identical in every respect except the driver: same server, same
-database path, same connection string character for character, same crusher
-build from the same CI run. That is what makes the difference between the two
-reports attributable to the driver and nothing else.
+The two runs differ in the driver and nothing else, and since **T3**/**T4** that
+is now *checked* rather than merely intended: the manifest declares the pair,
+`triage.ps1` refuses to proceed if the two connection strings differ by one
+character, and both halves take their crusher binary from a single resolution.
+The first measurement was two separate dispatches and nothing verified either
+condition.
 
 ---
 
@@ -22,288 +34,226 @@ reports attributable to the driver and nothing else.
 
 | | official 3.0.1.21 | patched 3.5.1-rc2 |
 |---|---|---|
-| Probes scored | 193 | 197 |
-| Passed | 146 | 171 |
-| Failed | 33 | 13 |
-| Errors | 1 | 0 |
-| **Pass rate** | **75.6 %** | **86.8 %** |
-| Crashed categories | **1 — Descriptor Tests** | 0 |
-| Findings | 44 | 23 |
+| Probes scored | 208 | 210 |
+| Passed | 156 | 193 |
+| Failed | 45 | 12 |
+| Errors | 2 | 0 |
+| **Pass rate** | **75.0 %** | **91.9 %** |
+| Crashed categories | **2 — Descriptor Tests, Array Parameter Tests** | 0 |
+| Findings | 47 | 12 |
 
-**20 probes moved FAIL → PASS. None regressed.**
+**33 probes moved FAIL → PASS. None regressed.**
 
-The four-probe difference in the totals is the crash: on 3.0.1.21 the Descriptor
-Tests category died and took its five probes with it, so the baseline's pass
-rate is *optimistic* — it is computed over the probes that survived.
-
----
-
-## Part 1 — What crusher caught
-
-Twenty probes moved, but they are **three driver bugs**, not twenty. Counting
-findings instead of causes is the single easiest way to overstate a tool like
-this.
-
-### 1. Numeric → text parameter truncation (PR #292) — 14 probes
-
-Every `test_bindparam_<numeric>_to_varchar/char_roundtrip` probe failed on
-3.0.1.21 and passes on rc2, all with one signature:
-
-```
-test_bindparam_int_to_varchar_roundtrip
-  actual: Round-trip value mismatch: row 10: expected '10' got '1'
-
-test_bindparam_double_to_varchar_fractional_roundtrip
-  actual: row 1: got '1', expected ~1.500000  …  row 10: got '1', expected ~10.500000
-```
-
-That is exactly the defect PR #292 describes: `setSqlLen(actual_length)` shrinks
-the sqlvar after the first execute, a rebind re-describes the parameter from the
-shrunken sqlvar, and `record->length` collapses to the length of the *first*
-value. Rows 1–9 are single-digit and survive untouched; row 10 loses a digit and
-`1.5` loses its fraction — with `SQL_SUCCESS` at every step and a correct row
-count.
-
-This is the strongest possible result for the tool. Silent data loss with a
-success return is the class of bug that has no other detector, and crusher
-found it fourteen times over, with the exact truncation signature and the exact
-row at which it starts.
-
-### 2. The parameter-array executor is chosen at prepare time (PR #308) — 6 probes
-
-The entire Array Parameter category failed on 3.0.1.21 and passes on rc2:
-
-```
-test_column_wise_array_binding    Array execution with PARAMSET_SIZE=3 succeeded (ret=0),
-                                  but the rows are not there: COUNT(*) = 1 but expected 3
-test_row_wise_array_binding       got {9991} instead of {9991, 9992}
-test_param_status_array           status array: [0xffff, 0xffff, 0xffff]      (untouched)
-test_params_processed_count       params_processed=0 (expected 4)
-test_param_operation_array        params_processed=0; status: [0xffff × 4]
-test_param_status_per_row_partial_failure   succ=0 err=0 other=5
-```
-
-One root cause: crusher sets `SQL_ATTR_PARAMSET_SIZE` *after* `SQLPrepare`,
-which the specification allows and which pyodbc's `fast_executemany` does, and
-3.0.1.21 had already bound itself to the single-row executor. One row is
-inserted, `SQL_SUCCESS` is returned, and the status array and processed count
-are never written. `0xffff` in the output above is crusher's own sentinel — the
-probes are correctly reading their own initialisation back, which is why they
-can tell "the driver wrote nothing" from "the driver wrote the wrong thing".
-
-### 3. `SQLCopyDesc` access violation (PR #297) — a whole category
-
-```
-Descriptor Tests (DRIVER CRASH)   ERROR / CRITICAL
-  actual: Access violation (0xC0000005) - likely a bug in the ODBC driver
-```
-
-3.0.1.21 crashes; rc2 runs all five descriptor probes clean. This one is already
-settled history: the fix commit's own message reads *"Reported by odbc-crusher
-v3.5.0-rc1 stress test"*, and the driver repository carries
-`tests/test_phase7_crusher_fixes.cpp`, a file whose entire purpose is
-crusher-identified bugs. It lists five (OC-1 … OC-5); OC-1 is this one, and it
-is the only one of the five fixed in rc2.
-
----
-
-## Part 2 — What crusher could not have caught
-
-Seventeen behavioural fixes separate the two builds. Crusher detected **three**.
-The remaining fourteen are not near-misses — for most of them there is no probe
-that touches the API at all. Each row below was verified against the probe
-source, not inferred from the reports.
-
-| Fix | Detected? | Why |
+| | first measurement | this one |
 |---|---|---|
-| **#292** numeric → text parameter | ✅ | 14 probes, exact signature |
-| **#308** executor chosen at prepare time | ✅ | 6 probes |
-| **#297** `SQLCopyDesc` SIGSEGV | ✅ | category crash |
-| **#310** `SQL_ATTR_PARAM_OPERATION_PTR` | ⚠️ capable | `test_param_operation_array` asserts `SQL_PARAM_UNUSED` correctly — but on 3.0.1.21 it failed for #308's reason, so this pair cannot show it detecting #310 *independently* |
-| **#308** element-0 stride (the *first* defect) | ❌ | `test_column_wise_array_binding` binds the exact triggering shape — `SQL_C_SLONG` with `BufferLength = 0` — then verifies only the `NAME` column. `verify_rows_persisted` runs `SELECT <val> … ORDER BY <pk>` and never reads the PK. Under the bug the IDs collapse to one value and the strings step correctly, so the probe passes over a corrupted column — and the `ORDER BY` over equal keys is the same trap PR #308 documents in the original report |
-| **#313 / #309** dangling bind-offset after a mid-array throw | ❌ | `test_param_status_per_row_partial_failure` executes once and reads the status array. It never reuses the handle afterwards, which is where the damage is (access violation, or a garbage row) |
-| **#311** cumulative `SQLRowCount` after an array execute | ❌ | `SQLRowCount` is never called in `array_param_tests.cpp` (0 occurrences), and `SQL_PARAM_ARRAY_ROW_COUNTS` / `SQL_PARAM_ARRAY_SELECTS` appear nowhere in `src/` — so neither the behaviour nor the driver's own claim about it is read |
-| **#303 / #301** `SQLPrepare` discards `ROWS_FETCHED_PTR` / `ROW_STATUS_PTR` | ❌ | Both tokens are absent from `src/` entirely |
-| **#304** eight settable attributes unreadable via `SQLGetStmtAttr` | ❌ | `test_statement_attributes` reads five attributes, none of them these. `SQL_ATTR_CURSOR_SCROLLABLE` is *set* by `test_cursor_scrollable_attr` and never read back — which is the whole bug |
-| **#315 / #306** column-wise rowsets ignore `SQL_ATTR_ROW_BIND_OFFSET_PTR` | ❌ | `ROW_BIND_OFFSET` and `PARAM_BIND_OFFSET` appear nowhere in `src/` |
-| **#314 / #307** `SQL_ATTR_KEYSET_SIZE` overwrites the rowset size | ❌ | `KEYSET_SIZE` appears nowhere in `src/` |
-| **#317 / #316** implementation descriptors and `SQLColAttribute` (7 sub-defects) | ❌ | `SQL_DESC_CONCISE_TYPE`, `SQL_DESC_NAME`, `SQL_DESC_NULLABLE`, `SQL_DESC_DATETIME_INTERVAL_CODE` are never read anywhere. `SQLColAttribute` is called only for `SQL_DESC_UNSIGNED`. `test_ird_after_prepare` reads `SQL_DESC_COUNT` and passes on any success — it does not even check the count is right, let alone that the records describe anything |
-| **#302 / #300** numeric parameter sent as NULL after a character-typed bind | ❌ | There is no "NULL then value on the same parameter" probe. `test_bindparam_null_indicator` binds one NULL, executes, and checks the return code — it does not even read the value back |
-| **#296 / #295** `SQL_C_GUID` parameter binding corrupts the wire | ❌ | `SQL_C_GUID` appears once, in `test_guid_type`, on the **output** path (`SQLGetData`). The bug is on the input path |
-| **#294** `SQL_DBMS_VER` returned the engine version, not the product version | ❌ | The value is printed in the report header and never asserted. `SQL_DBMS_VER` is used only as a subject for buffer-length and Unicode probes |
-| **#298** garbled diagnostic record on a failed `SQLDriverConnect` | ❌ | Crusher never attempts a connect that fails. Its only `SQLDriverConnect` probe reconnects an already-connected handle |
-| **#279** null-indicator offset in array binding | — | Predates the pair's baseline in effect; the array category was failing wholesale on 3.0.1.21 for #308's reason |
+| Probes moved | 20 | **33** |
+| Pass-rate delta | 75.6 % → 86.8 % | **75.0 % → 91.9 %** |
+| Distinct fixes detected | **3 of 17** | **12 of 17** |
+| Crashed categories on the baseline | 1 | **2** |
 
-### The shape of the gap
-
-Ten of the fourteen misses fall into two holes:
-
-**There is no block-cursor data path.** `test_rowset_size` sets
-`SQL_ATTR_ROW_ARRAY_SIZE = 100`, reads it back, and passes. It never fetches a
-rowset. Nothing in the suite binds an array of columns, fetches more than one
-row at a time, reads a rows-fetched counter, inspects a row-status array, or
-applies a bind offset. That is four of the thirteen PRs (#301, #306, #307, and
-half of #316) with no reachable probe — and block cursors are how every ODBC
-reporting tool reads bulk data.
-
-**The descriptor API is touched but never interrogated.** Five probes obtain
-descriptor handles and read `SQL_DESC_COUNT`. The seven defects in #316 are all
-about what the *records* say — type codes, names, nullability, length fields at
-full width — and crusher never asks. It found the crash in that area precisely
-because a crash needs no assertion.
+The baseline's pass rate is still *optimistic*, and by more than before: two
+categories now crash it rather than one. The second is new — not a regression in
+the driver, but a probe that did not exist when the first measurement was taken.
 
 ---
 
-## Part 3 — What crusher found that the thirteen PRs do not fix
+## Part 1 — What crusher catches now
 
-Thirteen probes fail on **both** builds. Twelve are live bugs in rc2 and are
-the return on the exercise that has nothing to do with the fixes under test. The
-thirteenth turned out to be a defect in the probe, and is struck through below —
-left in place rather than deleted, because it was published as a driver finding
-and a correction is worth more than a quiet edit.
+Thirty-three probes moved, but they are **twelve driver bugs**, not thirty-three.
+Counting findings instead of causes is the single easiest way to overstate a
+tool like this, and the sixteen numeric-conversion probes below are one bug.
+
+| Fix | Then | Now | Evidence |
+|---|---|---|---|
+| **#292** numeric → text parameter | ✅ 14 probes | ✅ **16** | `R4` gave the two `wvarchar` cells a dialect fallback; they had been skipping on Firebird because they hardcode `NVARCHAR(20)`, which Firebird spells `NCHAR VARYING` |
+| **#308** executor chosen at prepare time | ✅ 6 probes | ✅ 6 | unchanged |
+| **#297** `SQLCopyDesc` access violation | ✅ category crash | ✅ + survivors | `S3`: the crash entry now names `test_copy_desc` and keeps the six probes that finished before it. Previously all of them vanished |
+| **#311** cumulative `SQLRowCount` after an array execute | ❌ | ✅ **and it crashes** | `P11`. Predicted to fail; it *segfaults* 3.0.1.21 — a second crasher nobody had seen. `S3`'s entry names it with nine probes preserved |
+| **#303 / #301** `SQLPrepare` discards `ROWS_FETCHED_PTR` / `ROW_STATUS_PTR` | ❌ | ✅ | `P2`. `after rowset 1: rows_fetched=999, status=[?, ?, ?, ?] — the counter was never written` |
+| **#315 / #306** column-wise rowsets ignore `ROW_BIND_OFFSET_PTR` | ❌ | ✅ | `P3`. `offset 16 bytes; slots [-111, -111, -111, -111, 4, -111, -111, -111]` |
+| **#314 / #307** `SQL_ATTR_KEYSET_SIZE` overwrites the rowset size | ❌ | ✅ | `P4`. `keyset size set to 7; rowset was 1, now 7` |
+| **#304** settable attributes unreadable via `SQLGetStmtAttr` | ❌ | ✅ ×2 | `P5`: `8 of 8 pointer attributes accepted … unreadable: ROWS_FETCHED_PTR (HYC00), ROW_BIND_OFFSET_PTR (HYC00), …`. `Q2` covers `SQL_ATTR_CURSOR_SCROLLABLE`, which was being set and never read back — the bug itself |
+| **#317 / #316** implementation descriptors and `SQLColAttribute` | ❌ | ✅ ×3 | `P6`/`P7`. `IRD concise=SQL_C_DEFAULT(99) - an unfilled record, name=''` while `SQLDescribeCol` on the same statement answers `SQL_INTEGER`/`ID`; and `SQL_DESC_LENGTH=9187201948296675328` — `0x7F7F7F7F00000000`, the guard pattern left in the upper half of a `SQLLEN` the driver wrote 32 bits of |
+| **#302 / #300** value after a NULL on the same parameter | ❌ | ✅ | `P8`, and more precisely than predicted: `the value bound after a NULL came back as NULL for: NUMERIC(9,3), DECIMAL(18,2), BIGINT` — exactly the three whose `SQL_C_DEFAULT` resolves to `SQL_C_CHAR`, and not the three that resolve to a fixed-width C type |
+| **#296 / #295** `SQL_C_GUID` parameter binding | ❌ | ✅ | `P9`. Round-tripped `A0EEBC99-9C0B-4EF8-…` as `41304545-4243-3939-…`, which is the ASCII of `A0EEBC99-9C0B-4E`: the driver stored the *text* and read the bytes back as binary |
+| **#294** `SQL_DBMS_VER` is the engine version, not the product | ❌ | ✅ | `P13`. `06.03.1683 WI-V Firebird 5.0` against `05.00.1683 WI-V Firebird 5.0` — `atoi` on the prefix returns **6** for a Firebird **5** server |
+
+**Three became twelve.** Nine of the nine new detections came from probes
+written against a described symptom and then *checked against the pair*, which
+is the discipline (`T1`) that made the difference rather than the probes
+themselves.
+
+---
+
+## Part 2 — What crusher still cannot catch
+
+Five of the seventeen. None of them is now a coverage gap in the sense the first
+report meant — every one has a probe. What is left is harder and more
+interesting.
+
+| Fix | Status | Why |
+|---|---|---|
+| **#298** garbled diagnostic on a failed connect | ❌ **probe reaches the wrong path** | `P10` exists and asserts the right contract. All four runs — both platforms, both builds — return a textbook record: `08004`, native `-902`, 48 reported and 48 written, stable across attempts. #298 is `SQLException &e = (SQLException&)ex` inside `catch (std::exception&)`, a `reinterpret_cast` that is a **no-op when the caught object really is an `SQLException`** — and a database that does not exist makes the driver raise exactly that. Reaching the defect needs a throw of some *other* `std::exception` on a diagnostic-producing path. The probe is kept: it has a mock configuration that fails it, and it asserts a contract drivers do violate |
+| **#299** element-0 stride | ⚠️ **demonstrable, but not by this pair** | `Q1` gave `verify_rows_persisted` the key column and `test_column_wise_array_binding` an assertion on it. 3.0.1.21 masks the stride behind #308's executor defect — only one set runs at all, so there is no stride to get wrong. The mock's `ColumnWiseStride=BufferLength` reproduces it: `expected IDs 100, 200, 300 but read back 100, 100, 100`, with `SQL_SUCCESS` and a correct processed count |
+| **#313 / #309** dangling bind-offset after a mid-array throw | ⚠️ **written, unreachable on the baseline** | `P12` runs last in its category and `P11` crashes the driver before it, so it is absent from the baseline report. Registering it last was right and is not enough |
+| **#310** `SQL_ATTR_PARAM_OPERATION_PTR` | ⚠️ **capable, not independently shown** | unchanged from the first measurement: the probe asserts `SQL_PARAM_UNUSED` correctly, but on 3.0.1.21 it fails for #308's reason |
+| **#279** null-indicator offset | — | sits inside the same masked region as #299 |
+
+Three of the five are the same phenomenon: **one defect hiding another.** The
+baseline is a build with many bugs, and the earlier one in a code path decides
+what the later one gets to demonstrate. No amount of probe-writing fixes that;
+it needs a build with one fixed and the other not, or a mock lever — which is
+what `Q1` now has and `P12` does not.
+
+---
+
+## Part 3 — What crusher found that the PRs do not fix
+
+Twelve probes fail on **both** builds. These are live bugs in rc2 and are the
+return on the exercise that has nothing to do with the fixes under test. The
+list is unchanged from the first measurement except where noted.
 
 | Cluster | Evidence |
 |---|---|
-| **`{fn …}` translation is incomplete** | `{fn LENGTH}`, `{fn YEAR}`, `{fn MONTH}`, `{fn DAYOFWEEK}`, `{fn DATABASE}` are advertised in `SQLGetInfo(SQL_STRING_FUNCTIONS / SQL_TIMEDATE_FUNCTIONS / SQL_SYSTEM_FUNCTIONS)` and fail with `-104 Token unknown` when executed. `test_scalar_function_claim_vs_execute` is the probe that matters here: it cross-checks the driver's own claim against execution, and reports `STRING:6/7 NUMERIC:4/4 TIMEDATE:3/5 SYSTEM:1/2` |
-| ~~**`{CALL …}` is not translated at all**~~ — **withdrawn, this was a crusher bug** | The probe hard-coded the identifiers `proc` and `func`, which exist in no database, and counted an error return as "not translated". Firebird resolves the procedure while translating — it must choose between `execute procedure p` and `select * from p` — so it answered `Unknown procedure 'PROC'` seven times. Both triage reports classified this correctly as `BUG_IN_CRUSHER`; this summary did not, and stated it as a driver defect. With a procedure the catalog actually contains, the driver translates **7/7** (`IMPROVEMENT_PLAN_V2` **R3**). The count of live bugs in this section is **12**, not 13. |
-| **`SQL_DIAG_ROW_COUNT` is a 32-bit write into a 64-bit slot** | `SQL_DIAG_ROW_COUNT = -4294967296` — that is `0xFFFFFFFF00000000`: the low half written, the high half left as the caller's `-1`. Sharper than the driver's own note, which records only that the field "stays 0". This is OC-2 from the driver's own crusher-fixes file, still open, and the triage report's first punch-list item |
+| **`{fn …}` translation is incomplete** | `{fn LENGTH}`, `{fn YEAR}`, `{fn MONTH}`, `{fn DAYOFWEEK}`, `{fn DATABASE}` are advertised in `SQLGetInfo` and fail with `-104 Token unknown` when executed. `test_scalar_function_claim_vs_execute` cross-checks the driver's own claim against execution: `STRING:6/7 NUMERIC:4/4 TIMEDATE:3/5 SYSTEM:1/2` |
+| **`SQL_DIAG_ROW_COUNT` is a 32-bit write into a 64-bit slot** | `-4294967296` = `0xFFFFFFFF00000000`: low half written, high half left as the caller's `-1`. OC-2, still open |
 | **`SQL_ATTR_ASYNC_ENABLE` accepted then ignored** | set returns success, get reports OFF. OC-4, still open |
-| **Missing spec-mandated error checks** | `SQLCloseCursor` succeeds with no cursor open (should be `24000`); `SQLSetConnectAttr` accepts attribute `99999` (should be `HY092`) |
+| **Missing spec-mandated error checks** | `SQLCloseCursor` succeeds with no cursor open (`24000`); `SQLSetConnectAttr` accepts attribute `99999` (`HY092`) |
 | **Every engine exception is `HY000`** | a syntax error should be `42000` |
-| **`PARAMSET_SIZE = 1` writes neither output** | `processed=0; status=65535`. The array executor runs only for paramset > 1, so the single-set case still writes nothing — a gap none of the thirteen PRs mentions |
+| **`PARAMSET_SIZE = 1` writes neither output** | `processed=0; status=65535`. The array executor runs only for paramset > 1 |
 | **Truncated `SQLGetInfo` reports the written length, not the length available** | OC-5, still open |
+| **Widechar round-trips collapse at the first non-ASCII codepoint** *(Linux only, new)* | `expected [U+0063 U+0061 U+0066 U+00e9 U+0020 U+20ac U+0020 U+6f22 U+5b57] got [U+0063]`. Present on **both** builds — see Part 5 |
 
-Four of the five bugs in the driver's own `test_phase7_crusher_fixes.cpp` are
-still skipped. Crusher is still reporting them, run after run.
+> The `{CALL …}` row from the first version of this report is gone rather than
+> struck through, because it was corrected there and the correction has been
+> published for a full measurement cycle. For the record: it was a **crusher**
+> bug, not a driver one — the probe hardcoded identifiers that exist in no
+> database and counted an error return as "not translated". Given a real
+> procedure the driver translates 7/7 (`R3`).
 
 ---
 
 ## Part 4 — What this exercise found in crusher itself
 
-Four defects, all found by pointing the tool at a real driver pair on a platform
-it had not been run against.
+The first measurement found four defects in the tool. The re-measurement found
+eight more, and they are of a different kind: the first four were probes that
+were wrong, these are things the tool could not *survive* or could not *report*.
 
-1. **Four probes inserted the wrong number of columns, and the cleanup then hung
-   the entire run** (`H18`, [`1df48e1`](https://github.com/fdcastel/odbc-crusher/commit/1df48e1)).
-   `RoundTripTableGuard` creates `(ID, VAL)`; four sites inserted one value.
-   Firebird answers `-804`, the throw skips each probe's rollback, and the
-   guard's `DROP TABLE` — destroyed *before* the sibling connection, because it
-   is declared after it — then waits on that sibling's open transaction with
-   Firebird's default infinite lock wait. Both of the first two stress-test runs
-   died at the 570 s cap having produced nothing. `test_reconnected_handle_is_usable`,
-   `test_uncommitted_row_isolation` and `test_disconnect_with_open_transaction`
-   had therefore never tested what they claim, against any driver.
+| | Finding |
+|---|---|
+| `S1` | **A wedged probe cost two entire CI runs and needed a driver-manager trace to locate.** A watchdog now names the stuck probe on stderr every 60 s. It reports and deliberately does **not** recover: abandoning a thread inside a driver call leaks the handle it holds and corrupts every result after it. First real use was the Linux arm, where it named `test_cancel_idle` within a minute |
+| `S3` | **A crashed category discarded every probe that had already passed.** The report now keeps them and names the probe that did not return |
+| `S4` | **The published reports carried `PWD=masterkey` in clear.** The row that asked for this said the connection string was "deliberately excluded"; it was not. Secrets are masked, the rest stays legible, and the schema number moved because that is a meaning change |
+| `S5` | **The JSON report of a wedged run was far less complete than the text one** — ten categories against one, on the same driver. `run-crusher` invoked crusher twice and the second run met a server the first had wedged. One run now writes both, which also halves the stress-test wall clock for every driver |
+| `S6` | **The snapshot rate limiter discarded exactly the runs worth keeping.** Nine categories completing inside a second were all skipped, then the driver wedged for 570 s with no `report_end()` to flush them. A category carrying an `ERROR` now bypasses the limiter |
+| `S7` | **One crashed category cost the other thirteen.** The run carried on with the same connection handle. On Windows that works; on Linux the next ODBC call on that handle never returns. Measured against a mock that reproduces it: **204 passed / 1 error** with the fix, **90 passed / 63 errors** without |
+| `P15` | **A garbled diagnostic makes unixODBC read out of bounds** — `__sprintf_chk` → `SQLDriverConnect` in `libodbc.so.2`, caught by ASan. Not our bug, and the sharpest available answer to "why does an unreadable SQLSTATE matter": it corrupts the driver manager's memory before the application is handed anything |
+| `P17` | **A SIGSEGV the crash guard does not catch**, in `test_array_row_count_matches_its_claim` on Linux — though it catches the same probe's fault on Windows and `test_copy_desc`'s SIGSEGV on Linux. Open |
 
-2. **The mock was more permissive than every real database**
-   ([`a31ad4c`](https://github.com/fdcastel/odbc-crusher/commit/a31ad4c)), which
-   is why (1) survived. `mock_data.cpp` validated an INSERT's value count only
-   when the statement named a column list; the column-less form padded the row
-   with NULL and returned success. The e2e suite runs against the mock, so a
-   probe carrying a malformed statement passed CI and failed only against a
-   server. **A mock that is kinder than reality hides probe bugs rather than
-   driver bugs, which is the opposite of its job.**
+And one rule, which is the part most likely to outlast the probes:
 
-3. **A verdict that moved between two identical runs** (`H19`,
-   [`68630c6`](https://github.com/fdcastel/odbc-crusher/commit/68630c6)).
-   `test_rapid_cursor_lifecycle` graded a leak on `last_10 > first_10 * 10` with
-   no absolute floor; on a macOS runner the baseline was 25 µs *for ten cycles*,
-   so a scheduling hiccup produced a `WARNING` where the previous run produced
-   `INFO`. The project's own `TwoRunsDifferOnlyInTimings` caught it and turned
-   master red. Not a flaky test — a non-deterministic verdict.
+> **A probe that passes against both builds has not been shown to detect
+> anything.** (`Q4`, now step 8 of `AGENTS.md`.)
 
-4. **Two `CRITICAL` conversion cells never run on Firebird** (from the rc2
-   triage, `RC10`). `test_bindparam_int_to_wvarchar_roundtrip` and its `bigint`
-   twin hardcode `NVARCHAR(20)`, which Firebird does not have — it spells it
-   `NCHAR VARYING`. Both skip. `src/tests/unicode_tests.cpp:601` tests the same
-   engine over the same connection and gets its table, because it uses
-   `RoundTripTableGuard::create_first_working` with a fallback list. **Not
-   fixed here** — one-line change, see the recommendations.
+A sweep for the shape it describes found six probes that reported a pass over
+the very bug they were named for — including `test_cursor_scrollable_attr`,
+which set an attribute and never read it back, which *is* #304.
 
-There is also a diagnosability problem behind all of this: crusher writes no
-per-probe progress and block-buffers stdout, so a run killed at a wall-clock cap
-discards everything unflushed. Finding (1) required enabling the Windows
-driver-manager trace and reading the last ODBC call with no matching EXIT. A
-wedged run and a run that produced nothing are indistinguishable from the
-artifact.
+---
+
+## Part 5 — The Linux arm
+
+The first measurement ran on Windows only, because the official 3.0.x line
+publishes Inno Setup installers and no Linux `.so` for 3.0.1.21 was ever
+released. Two of the seventeen fixes are Linux-only and were therefore
+structurally invisible. `U2` built the arm: CI compiles 3.0.1.21 from its pinned
+commit and pairs it against the published 3.5.1-rc2 Linux tarball.
+
+**#316 item 6 is confirmed outright, and not by a probe.**
+
+| symbol | 3.0.1.21 | 3.5.1-rc2 |
+|---|---|---|
+| `SQLColAttribute` | **MANGLED** (C++ name) | exported |
+| `SQLColAttributeW` | **MANGLED** | exported |
+| `SQLColAttributes` (ODBC **2**) | exported | exported |
+
+unixODBC cannot resolve the ODBC 3 symbol, silently falls back to the ODBC 2
+one, and answers every call with the wrong function with no error anywhere. **No
+probe can see that** — the fallback is silent by design and the results are only
+subtly wrong. The export table is the only place the truth is written, so both
+Linux jobs now log `nm -D`.
+
+**#288 is not fixed in 3.5.1-rc2, so the pair cannot bracket it.** Crusher
+*does* catch its symptom — three Unicode probes fail with precise evidence — but
+they fail identically on both halves. The patched tree's own CI says why: *"ASAN
+is temporarily disabled — re-enable once the Linux widechar conversion paths in
+MainUnicode.cpp are rewritten (#287 Tier 1b, draft PR #291)."* A draft PR,
+unmerged at that tag. Listing #288 among the seventeen was an error in the
+first report, carried into `U2`'s row and corrected there.
+
+The arm also found what only a second platform could: `test_copy_desc` SIGSEGVs
+on Linux as well as access-violating on Windows, **and the connection does not
+survive it there** — which is `S7`, and which the entire Windows pair had no way
+to expose.
 
 ---
 
 ## Verdict
 
-**Crusher is effective at what it is shaped to find, and its shape is narrower
-than the bug population it is aimed at.**
+**Crusher is now effective across most of the bug population it is aimed at, and
+the remaining gap has changed character.**
 
-What it is genuinely good at, on this evidence:
+The first measurement's gap was coverage: fourteen of seventeen fixes had *no
+probe that touched the API at all*. That is closed. Of the five not detected
+today, four have probes that are correct and blocked by something else — a
+defect masking a defect, or a fix that was never made — and one (`#298`) has a
+probe that reaches a neighbouring code path.
 
-- **Silent data corruption with a success return.** The #292 detection is
-  exemplary — fourteen probes, the exact row, the exact truncation. This is the
-  hardest class of bug to find by any other means, and crusher's round-trip
-  probes are built for precisely it.
-- **Crashes.** A category-level crash guard turns an access violation into a
-  finding with a category name, and #297 was fixed on its report.
-- **Regression measurement.** 75.6 % → 86.8 %, 20 probes moved, **zero
-  regressions**, on runs that differ only in the driver. That number is worth
-  having and no unit test produces it.
+Three things are worth stating plainly against any temptation to read 12/17 as a
+grade:
 
-Where it is weak:
+**The seventeen are a known seventeen.** Every probe in Part 1 was written from
+a described symptom in a merged pull request. Passing them means crusher would
+have caught *these*; it says nothing about the next seventeen. The durable
+output of this work is `Q4`'s rule and `T1`'s discipline — the probes are the
+evidence those were applied once.
 
-- **Coverage is the binding constraint, not analysis quality.** Fourteen of
-  seventeen fixes were missed, and eleven of those were missed because no probe
-  touches the API at all. Nothing about the reporting, classification or
-  diagnostics would have helped.
-- **Several probes assert less than their name promises.** The column-wise array
-  probe binds the exact shape that triggers #299 and then checks the one column
-  the bug spares. `test_ird_after_prepare` reads a count and stops.
-  `test_cursor_scrollable_attr` sets an attribute and never reads it back. A
-  probe that cannot fail on the bug it is named for is worse than no probe,
-  because it reports a pass.
-- **Its own suite had four defects, one of which cost two full CI runs**, and
-  the mock could not have caught the worst of them.
+**Two of the twelve were made sharper by the pair than by the prediction.**
+`P11` was predicted to fail and instead crashes the driver. `P8` was predicted
+to fail and instead split its six types cleanly along `SQL_C_DEFAULT`
+resolution. Neither would have been written from the prediction alone, which is
+the argument for observing before claiming.
 
-The honest one-line answer to "is it finding the problems we fixed": it found
-**three of seventeen** — but the three include the one that had already prompted
-a fix by name, and the fourteen misses are a coverage map, which is actionable.
+**The tool's own survivability was the larger finding.** Eight of the entries in
+Part 4 are about crusher, not Firebird, and they were found by pointing it at a
+real driver on a platform it had not been run against. A conformance prober that
+loses its report when the driver misbehaves is least useful exactly when it
+matters most — and before this exercise, a wedged run and a run that produced
+nothing were indistinguishable from the artifact.
 
 ---
 
 ## Recommendations, in value order
 
-1. **Build a block-cursor category.** Bind an array of columns, set
-   `SQL_ATTR_ROW_ARRAY_SIZE`, fetch, and check the rows-fetched counter, the
-   row-status array and a bind offset on both binding orientations, before and
-   after `SQLPrepare`. That single category covers #301, #306, #307 and #304,
-   and it is where BI tools live. Today `test_rowset_size` sets the attribute
-   and never fetches.
-2. **Make the array probes read back the key column.** `verify_rows_persisted`
-   selects the value column ordered by the PK and never returns the PK. Adding
-   it turns `test_column_wise_array_binding` into a detector for #299 rather
-   than a probe that passes over corrupted data — and removes the
-   `ORDER BY`-over-equal-keys trap the original bug report tripped on.
-3. **Add a "NULL then value on the same parameter" probe.** One probe, covering
-   #300 outright and the third defect of #292.
-4. **Interrogate descriptor records, not just their count.** `SQL_DESC_TYPE`,
-   `SQL_DESC_CONCISE_TYPE`, `SQL_DESC_NAME`, `SQL_DESC_NULLABLE` after
-   `SQLPrepare`, cross-checked against `SQLDescribeCol` — which is exactly how
-   #316 was found by hand.
-5. **Bind `SQL_C_GUID` as a parameter,** not only as a fetch target.
-6. **Attempt one deliberately failing connect** (bad password, missing database)
-   and assert the diagnostic record is well-formed — SQLSTATE present, message
-   length agreeing with `strlen`. That is #298, and it costs one probe.
-7. **Cross-check `SQLGetInfo` claims against behaviour** wherever the pairing
-   exists. `test_scalar_function_claim_vs_execute` already does this and is one
-   of the most productive probes in the suite; `SQL_PARAM_ARRAY_ROW_COUNTS`
-   versus what `SQLRowCount` actually returns is the same trick, and it is #311.
-8. **Give crusher a per-probe watchdog and unbuffered progress.** One wedged
-   call currently costs the whole run *and* the report.
-9. **Route `run_int_to_string_roundtrip` through `create_first_working`** with
-   `{"NVARCHAR(20)", "NCHAR VARYING(20)", "VARCHAR(20)"}` — two `CRITICAL` cells
-   are unmeasured on Firebird today.
+1. **Report `P15` upstream to unixODBC.** It affects every application using
+   unixODBC with any driver that mis-describes a diagnostic record, not just
+   this one. Outward-facing, so it needs a decision rather than a commit.
+2. **Report `P16` / `P17` to the Firebird ODBC project.** A connection that does
+   not survive a fault, and an array-execute segfault that defeats a crash
+   guard. Both are Linux-only and both are reproducible from the pinned commit.
+3. **Close `S8`.** A run killed without reporting still loses everything the
+   snapshot limiter skipped. Measure the limiter's real cost first — its stated
+   justification predates `S5` halving CI's crusher invocations.
+4. **Give `P12` a mock lever**, the way `Q1` got one. It is the last probe in
+   this plan asserting something no configuration anywhere can falsify.
+5. **Re-measure when #291 lands.** #288 will then be bracketed by the Linux
+   pair, and the three Unicode probes that currently fail on both halves become
+   a thirteenth detection.
 
 ---
 
 ## Per-driver triage reports
 
-The two full triages, produced by `/triage-driver` and classifying every
-FAIL/ERROR as `BUG_IN_DRIVER` / `BUG_IN_CRUSHER` / `DRIVER_LIMITATION` /
-`INCONCLUSIVE`, are in `tmp/triage/firebird-official/` and
-`tmp/triage/firebird-patched/`.
+- [`FIREBIRD-OFFICIAL-v3.0.1.21-ODBC-CRUSHER-REPORT.md`](./FIREBIRD-OFFICIAL-v3.0.1.21-ODBC-CRUSHER-REPORT.md)
+- [`FIREBIRD-PATCHED-v3.5.1-rc2-ODBC-CRUSHER-REPORT.md`](./FIREBIRD-PATCHED-v3.5.1-rc2-ODBC-CRUSHER-REPORT.md)
+- [`docs/IMPROVEMENT_PLAN_V2.md`](../docs/IMPROVEMENT_PLAN_V2.md) — every row carries its observed verdict pair, or a stated reason it cannot have one
