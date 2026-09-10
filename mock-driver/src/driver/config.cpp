@@ -504,6 +504,17 @@ DriverConfig parse_connection_string(const std::string& conn_str) {
     config.fetch_returns_warning =
         (fetch_warn_str == "true" || fetch_warn_str == "yes");
 
+    // P18: `DbmsVersion=` and `DbmsName=`. Both fields existed with a
+    // default and **nothing ever parsed a key for them** - the silent-no-op
+    // shape D26 fixed for FailOn and I6 for IsolationLevel, found again by the
+    // fleet run: P13 grades SQL_DBMS_VER and had no configuration anywhere
+    // that could change what this driver reports, so it had no failing case
+    // either. The real strings the fleet observed are the interesting ones -
+    // `16.0.15`, `8.0.46-0ubuntu0.24.04.4`, `26.8.2.7`, and Firebird's
+    // `06.03.1683 WI-V Firebird 5.0`, whose two halves contradict each other.
+    config.dbms_version = get_string_value(pairs, "dbmsversion", config.dbms_version);
+    config.dbms_name = get_string_value(pairs, "dbmsname", config.dbms_name);
+
     // P12: does a failed parameter set leave the handle unusable?
     config.array_error_breaks_handle =
         (to_lower(get_string_value(pairs, "arrayerrorbreakshandle", "false")) == "true");

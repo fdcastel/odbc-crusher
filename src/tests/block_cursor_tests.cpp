@@ -31,12 +31,22 @@ bool set_attr_or_skip(core::OdbcStatement& stmt, TestResult& r,
     if (SQL_SUCCEEDED(rc)) return true;
     const std::string state =
         TestBase::first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "");
-    if (state == "HYC00" || state == "01S02" || state == "HY092" || state == "IM001") {
+    // P18: HY024 joined this list after the fleet run. MariaDB refuses
+    // SQL_ATTR_KEYSET_SIZE with "invalid attribute value", which is what a
+    // driver that has no keyset-driven cursor says when asked to size one -
+    // the value is meaningless without the cursor type to go with it. HYC00
+    // would be the more precise refusal, but the distinction between "I do not
+    // implement this" and "that value means nothing here" is not one this
+    // probe is entitled to grade: either way the attribute is not set, and
+    // there is nothing left to measure. Reporting a refusal as a defect is how
+    // a conformance tool loses its reader.
+    if (state == "HYC00" || state == "01S02" || state == "HY092" ||
+        state == "HY024" || state == "IM001") {
         r.status = TestStatus::SKIP_UNSUPPORTED;
         r.actual = std::string("Driver declined SQLSetStmtAttr(") + attr_name +
                    ") with SQLSTATE=" + state;
         r.suggestion = "Block cursors are a Level 2 feature; declining one with "
-                       "HYC00 or 01S02 is conformant.";
+                       "HYC00, 01S02 or HY024 is a refusal, not a defect.";
     } else {
         r.status = TestStatus::FAIL;
         r.severity = Severity::ERR;

@@ -74,32 +74,81 @@ TestResult MetadataTests::test_dbms_version_agrees_with_itself() {
                 bounded_string(buf.data(), buf.declared_elements(), len).value;
             r.actual = "SQL_DBMS_VER = '" + value + "'";
 
-            // The specification's own shape: two digits, a dot, two digits.
-            if (value.size() < 5 || !std::isdigit(static_cast<unsigned char>(value[0])) ||
-                !std::isdigit(static_cast<unsigned char>(value[1])) || value[2] != '.' ||
-                !std::isdigit(static_cast<unsigned char>(value[3])) ||
-                !std::isdigit(static_cast<unsigned char>(value[4]))) {
+            // P18: the specification's shape is ##.##.#### and this used to
+            // **return** when a value did not match it — which meant the check
+            // this probe exists for never ran against any driver that formats
+            // its version differently. The fleet run found three: PostgreSQL
+            // `16.0.15`, MySQL `8.0.46-0ubuntu0.24.04.4`, ClickHouse
+            // `26.8.2.7`. Had Firebird written `6.3.1683` rather than
+            // `06.03.1683`, this probe would have reported the padding and
+            // never noticed the engine-versus-product contradiction that is
+            // the actual bug.
+            //
+            // The deviation is still worth saying — applications do slice the
+            // fixed positions — but it is reported alongside the cross-check
+            // rather than instead of it, and it is INFORMATIONAL: three of the
+            // five drivers in this manifest deviate, so scoring it as a defect
+            // buries the finding that matters under one that does not.
+            std::string format_note;
+            const bool canonical_shape =
+                value.size() >= 5 && std::isdigit(static_cast<unsigned char>(value[0])) &&
+                std::isdigit(static_cast<unsigned char>(value[1])) && value[2] == '.' &&
+                std::isdigit(static_cast<unsigned char>(value[3])) &&
+                std::isdigit(static_cast<unsigned char>(value[4]));
+            if (!canonical_shape) {
+                format_note =
+                    " — the specification's format is ##.##.####, optionally "
+                    "followed by vendor text, and this is not zero-padded to it";
+            }
+
+            // The leading numeric version, however many digits it has. Anything
+            // before the first character that is not a digit or a dot.
+            size_t prefix_end = 0;
+            while (prefix_end < value.size() &&
+                   (std::isdigit(static_cast<unsigned char>(value[prefix_end])) ||
+                    value[prefix_end] == '.')) {
+                ++prefix_end;
+            }
+            int prefix_major = -1;
+            {
+                int major = 0;
+                size_t d = 0;
+                while (d < value.size() &&
+                       std::isdigit(static_cast<unsigned char>(value[d]))) {
+                    major = major * 10 + (value[d] - '0');
+                    ++d;
+                }
+                if (d > 0) prefix_major = major;
+            }
+            if (prefix_major < 0) {
                 r.status = TestStatus::FAIL;
                 r.severity = Severity::WARNING;
-                r.actual += " — the specification's format is ##.##.####, "
-                            "optionally followed by vendor text";
+                r.actual += " — it does not begin with a number at all, so "
+                            "there is no version for an application to parse";
                 r.suggestion =
-                    "Applications parse the fixed prefix. A value that does not "
-                    "start with it is read as a major version of whatever "
-                    "happens to be at the front.";
+                    "Applications read the leading digits of SQL_DBMS_VER. A "
+                    "value that does not start with any is read as version 0.";
                 return;
             }
-            const int prefix_major = (value[0] - '0') * 10 + (value[1] - '0');
 
-            // The first version-shaped token in the tail: digits, a dot, digits.
-            // Only the first is considered - a tail may carry a build number
-            // too, and the product version is what leads.
-            const std::string tail = value.substr(5);
+            // The first version-shaped token in the tail: digits, a dot,
+            // digits. Only the first is considered — a tail may carry a build
+            // number too, and the product version is what leads.
+            //
+            // P18: the token must be preceded by whitespace. Without that,
+            // MySQL's `8.0.46-0ubuntu0.24.04.4` yields `0.24` out of the middle
+            // of `ubuntu0.24` and the probe reports a contradiction between
+            // major 8 and major 0 that exists only in its own parsing. What the
+            // check is looking for is a version the vendor text states as its
+            // own word — `WI-V Firebird 5.0` — not every digit pair in a build
+            // suffix.
+            const std::string tail = value.substr(prefix_end);
             int tail_major = -1;
             for (size_t i = 0; i + 2 < tail.size(); ++i) {
                 if (!std::isdigit(static_cast<unsigned char>(tail[i]))) continue;
-                if (i > 0 && (std::isdigit(static_cast<unsigned char>(tail[i - 1])) ||
-                              tail[i - 1] == '.')) continue;
+                if (i == 0 || !std::isspace(static_cast<unsigned char>(tail[i - 1]))) {
+                    continue;
+                }
                 size_t j = i;
                 int major = 0;
                 while (j < tail.size() && std::isdigit(static_cast<unsigned char>(tail[j]))) {
@@ -115,13 +164,18 @@ TestResult MetadataTests::test_dbms_version_agrees_with_itself() {
 
             if (tail_major < 0) {
                 r.status = TestStatus::INFORMATIONAL;
-                r.actual += " — the vendor text carries no version to "
-                            "cross-check the numeric prefix against";
+                r.actual += format_note.empty()
+                                ? " — the vendor text carries no version to "
+                                  "cross-check the numeric prefix against"
+                                : format_note +
+                                      "; and its vendor text carries no version "
+                                      "to cross-check the prefix against";
                 return;
             }
 
-            r.actual += "; numeric prefix major " + std::to_string(prefix_major) +
-                        ", vendor text major " + std::to_string(tail_major);
+            r.actual += format_note + "; numeric prefix major " +
+                        std::to_string(prefix_major) + ", vendor text major " +
+                        std::to_string(tail_major);
             if (prefix_major != tail_major) {
                 r.status = TestStatus::FAIL;
                 r.severity = Severity::WARNING;
@@ -133,6 +187,10 @@ TestResult MetadataTests::test_dbms_version_agrees_with_itself() {
                     "the prefix, they get the wrong major version with nothing "
                     "to warn them. Report the product version the vendor text "
                     "names.";
+            } else if (!canonical_shape) {
+                // The two halves agree, so the thing this probe grades is
+                // fine; the padding is a separate, smaller observation.
+                r.status = TestStatus::INFORMATIONAL;
             }
         });
 }

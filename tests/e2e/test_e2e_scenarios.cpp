@@ -2582,3 +2582,61 @@ TEST_F(CrusherE2EFixture, HandleReuseAfterArrayErrorPassesOnAUsableHandle) {
     // that the execute returned success.
     EXPECT_NE(actual.find("reads back as"), std::string::npos) << actual;
 }
+
+// ── P18: SQL_DBMS_VER, checked against the version strings that exist ─────
+//
+// P13 used to *return* when a value did not match the specification's
+// `##.##.####`, so the cross-check it exists for never ran against a driver
+// that formats its version any other way. The fleet run found three in one
+// dispatch — PostgreSQL `16.0.15`, MySQL `8.0.46-0ubuntu0.24.04.4`,
+// ClickHouse `26.8.2.7` — all reported as defects for their padding, none of
+// them examined for the thing that matters.
+//
+// The parametrised cases below are the real strings, plus the two that make
+// the point: Firebird's contradiction with canonical padding, and the same
+// contradiction *without* it. The second is what the old code could not see.
+struct DbmsVersionCase {
+    const char* version;
+    const char* expected_status;
+    const char* why;
+};
+
+class DbmsVersionScenario
+    : public CrusherE2EFixture,
+      public ::testing::WithParamInterface<DbmsVersionCase> {};
+
+TEST_P(DbmsVersionScenario, IsGradedOnItsContradictionNotItsPadding) {
+    const auto& c = GetParam();
+    auto run = run_crusher(std::string("Driver={Mock ODBC Driver};Mode=Success;"
+                                       "Database=Default;ResultSetSize=10;"
+                                       "DbmsVersion=") + c.version + ";");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Metadata/Catalog Tests",
+                       "test_dbms_version_agrees_with_itself");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+    EXPECT_EQ(t->value("status", std::string{}), c.expected_status)
+        << c.why << "\n  version: " << c.version
+        << "\n  actual:  " << t->value("actual", std::string{});
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    RealVersionStrings, DbmsVersionScenario,
+    ::testing::Values(
+        DbmsVersionCase{"06.03.1683 WI-V Firebird 5.0", "FAIL",
+                        "the engine number is in the product's place — this is "
+                        "the defect the probe exists for"},
+        DbmsVersionCase{"05.00.1683 WI-V Firebird 5.0", "PASS",
+                        "the same driver with the fix: both halves say 5"},
+        // The one the old code could not reach. A driver whose format also
+        // deviates gets its contradiction examined now instead of being
+        // dismissed for its padding.
+        DbmsVersionCase{"6.3.1683 WI-V Firebird 5.0", "FAIL",
+                        "a contradiction that the format check used to hide"},
+        DbmsVersionCase{"16.0.15", "INFORMATIONAL",
+                        "PostgreSQL: not zero-padded, and no vendor text to "
+                        "cross-check — reportable, not a defect"},
+        DbmsVersionCase{"8.0.46-0ubuntu0.24.04.4", "INFORMATIONAL",
+                        "MySQL: the `0.24` inside `ubuntu0.24` must not be read "
+                        "as a vendor version contradicting major 8"},
+        DbmsVersionCase{"26.8.2.7", "INFORMATIONAL",
+                        "ClickHouse: four numeric components, no vendor text"}));
