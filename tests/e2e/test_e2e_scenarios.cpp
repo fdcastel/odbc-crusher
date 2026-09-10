@@ -2640,3 +2640,70 @@ INSTANTIATE_TEST_SUITE_P(
                         "as a vendor version contradicting major 8"},
         DbmsVersionCase{"26.8.2.7", "INFORMATIONAL",
                         "ClickHouse: four numeric components, no vendor text"}));
+
+// ── P19: two descriptor probes that graded the undefined ─────────────────
+//
+// Both used a fixture that can be `SELECT 1, 'x'`, and graded things a literal
+// SELECT does not define:
+//
+//   * `SQL_DESC_NAME` is documented empty for an unnamed column, and an
+//     expression column is unnamed. MariaDB returned empty (correct) while its
+//     own `SQLDescribeCol` invented `1` and `x`, and the probe called the
+//     driver defective for the half it got right.
+//   * `SQL_DESC_DATETIME_INTERVAL_CODE` is undefined for any type that is not
+//     `SQL_DATETIME` or `SQL_INTERVAL`. The probe read it on an INTEGER column
+//     and graded rejection as a defect — all four non-Firebird drivers in the
+//     manifest failed on that alone.
+//
+// Both now use a table with a real datetime column, and grade those two things
+// only where the specification defines them.
+TEST_F(CrusherE2EFixture, DescriptorProbesUseATableWithADatetimeColumn) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+
+    auto ird = find_test(run.report, "Descriptor Tests",
+                         "test_ird_records_describe_the_columns");
+    ASSERT_TRUE(ird.has_value()) << report_outline(run);
+    const auto ird_actual = ird->value("actual", std::string{});
+    EXPECT_EQ(ird->value("status", std::string{}), "PASS") << ird_actual;
+    // Real column names on both sides, which is what makes the comparison
+    // meaningful at all — and proves the fixture is the table, not a literal.
+    EXPECT_NE(ird_actual.find("name='ID'"), std::string::npos) << ird_actual;
+    EXPECT_NE(ird_actual.find("name='VAL'"), std::string::npos) << ird_actual;
+    EXPECT_EQ(ird_actual.find("names not graded"), std::string::npos)
+        << "the table fixture was not used, so the name check was skipped: "
+        << ird_actual;
+
+    auto colattr = find_test(run.report, "Descriptor Tests",
+                             "test_colattribute_type_fields_follow_odbc");
+    ASSERT_TRUE(colattr.has_value()) << report_outline(run);
+    const auto ca_actual = colattr->value("actual", std::string{});
+    EXPECT_EQ(colattr->value("status", std::string{}), "PASS") << ca_actual;
+    // The interval code is read on the datetime column and carries a real
+    // subcode — SQL_CODE_TIMESTAMP is 3.
+    EXPECT_NE(ca_actual.find("SQL_DESC_DATETIME_INTERVAL_CODE=3"),
+              std::string::npos)
+        << "the interval code was not read on a datetime column: " << ca_actual;
+}
+
+// The W wrapper this uncovered. SQLGetDescFieldW passed character fields
+// straight through to the ANSI entry point, so `ID` reached a UTF-16 caller as
+// `?` and `VAL` as `?L` — and the probe could not tell, because it only
+// checked the name for emptiness and garbage is not empty.
+TEST_F(CrusherE2EFixture, DescriptorNamesSurviveTheUnicodeEntryPoint) {
+    auto run = run_crusher(
+        "Driver={Mock ODBC Driver};Mode=Success;Database=Default;"
+        "ResultSetSize=10;");
+    ASSERT_TRUE(run.report.contains("summary")) << report_outline(run);
+    auto t = find_test(run.report, "Descriptor Tests",
+                       "test_ird_records_describe_the_columns");
+    ASSERT_TRUE(t.has_value()) << report_outline(run);
+    const auto actual = t->value("actual", std::string{});
+    // The exact corruption, named so a regression is recognisable rather than
+    // merely "the assertion failed".
+    EXPECT_EQ(actual.find("name='?'"), std::string::npos)
+        << "a descriptor name came back as ANSI bytes read as UTF-16: " << actual;
+    EXPECT_EQ(actual.find("name='?L'"), std::string::npos) << actual;
+}

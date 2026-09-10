@@ -910,9 +910,50 @@ SQLRETURN SQL_API SQLGetDescFieldW(
     SQLINTEGER* pcbValue)
 MOCK_ENTRY_TRY {
     const WEntryScope w_entry(__func__);   // D78
-    // The mock driver descriptor fields are all numeric — pass through
-    return SQLGetDescField(hdesc, iRecord, iField, rgbValue,
-                           cbValueMax, pcbValue);
+    // P19: this used to pass straight through, on the grounds that "the mock
+    // driver descriptor fields are all numeric". That was true when it was
+    // written and stopped being true when P6 added SQL_DESC_NAME and
+    // SQL_DESC_LABEL - after which the ANSI bytes went back to a caller
+    // expecting UTF-16 and `ID` arrived as `?`, `VAL` as `?L`. The probe
+    // reading those names could not grade them, and did not notice it could
+    // not: it only checked for emptiness, and garbage is not empty.
+    //
+    // Same field list and the same conversion as SQLColAttributeW above.
+    const bool is_string_field = (iField == SQL_DESC_NAME ||
+                                  iField == SQL_DESC_LABEL ||
+                                  iField == SQL_DESC_BASE_COLUMN_NAME ||
+                                  iField == SQL_DESC_BASE_TABLE_NAME ||
+                                  iField == SQL_DESC_CATALOG_NAME ||
+                                  iField == SQL_DESC_LITERAL_PREFIX ||
+                                  iField == SQL_DESC_LITERAL_SUFFIX ||
+                                  iField == SQL_DESC_LOCAL_TYPE_NAME ||
+                                  iField == SQL_DESC_SCHEMA_NAME ||
+                                  iField == SQL_DESC_TABLE_NAME ||
+                                  iField == SQL_DESC_TYPE_NAME);
+    if (!is_string_field) {
+        return SQLGetDescField(hdesc, iRecord, iField, rgbValue,
+                               cbValueMax, pcbValue);
+    }
+
+    SQLCHAR ansi_buf[512] = {0};
+    SQLINTEGER ansi_len = 0;
+    SQLRETURN ret = SQLGetDescField(hdesc, iRecord, iField, ansi_buf,
+                                    sizeof(ansi_buf), &ansi_len);
+    if (ret == SQL_ERROR || ret == SQL_NO_DATA) return ret;
+    if (ansi_len < 0) ansi_len = 0;
+    if (static_cast<size_t>(ansi_len) > sizeof(ansi_buf) - 1) {
+        ansi_len = static_cast<SQLINTEGER>(sizeof(ansi_buf) - 1);
+    }
+
+    const std::string val(reinterpret_cast<char*>(ansi_buf),
+                          static_cast<size_t>(ansi_len));
+    SQLSMALLINT wbytes = 0;
+    const SQLRETURN r2 = copy_string_to_wbuffer(
+        val, static_cast<SQLWCHAR*>(rgbValue),
+        static_cast<SQLSMALLINT>(cbValueMax > 32767 ? 32767 : cbValueMax),
+        &wbytes);
+    if (pcbValue) *pcbValue = wbytes;
+    return (r2 == SQL_SUCCESS_WITH_INFO) ? SQL_SUCCESS_WITH_INFO : ret;
 }
 MOCK_ENTRY_CATCH(hdesc)
 

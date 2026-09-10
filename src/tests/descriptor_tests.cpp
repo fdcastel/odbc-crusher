@@ -3,6 +3,7 @@
 #include <string>
 #include "core/odbc_statement.hpp"
 #include "core/odbc_error.hpp"
+#include <optional>
 #include <sstream>
 
 namespace odbc_crusher::tests {
@@ -49,6 +50,66 @@ namespace {
 // something to say. Built from the fixture table when there is one and from
 // literals otherwise, because a probe that cannot get a result set has nothing
 // to describe.
+// P19 — a result set whose columns the specification actually defines.
+//
+// `describable_select_variants()` below falls back to `SELECT 1, 'x'`, and two
+// probes graded things about that result set which a literal SELECT does not
+// define:
+//
+//   * **Column names.** `SQL_DESC_NAME` is documented to be an empty string for
+//     an unnamed column, and an expression column *is* unnamed. MariaDB
+//     synthesises `1` and `x` in `SQLDescribeCol` while correctly returning
+//     empty in the descriptor, and `test_ird_records_describe_the_columns`
+//     called that a disagreement. The driver was right and the probe was wrong.
+//
+//   * **`SQL_DESC_DATETIME_INTERVAL_CODE`.** The specification says: for
+//     records whose type is `SQL_DATETIME` or `SQL_INTERVAL` this field carries
+//     the subcode, and *"for all other data types, this field is undefined"*.
+//     `test_colattribute_type_fields_follow_odbc` read it on an INTEGER column
+//     and graded a rejection as a defect. All four non-Firebird drivers in the
+//     manifest failed on that alone.
+//
+// So the probes get a real table with a real datetime column, and grade those
+// two things only where the specification defines them. The literal variants
+// stay as the fallback for a database this tool cannot create a table in —
+// there the two checks are skipped rather than guessed at.
+struct DescribableFixture {
+    // Kept alive for as long as the fixture is in use: ~RoundTripTableGuard
+    // drops the table.
+    std::optional<RoundTripTableGuard> table;
+    std::string sql;
+    bool named_columns = false;      // columns have names the spec defines
+    int datetime_column = 0;         // 1-based, or 0 when there is none
+    std::string datetime_ddl;        // which DDL the engine accepted
+};
+
+// TIMESTAMP first because that is what the specification names and what most
+// engines accept; DATETIME for the MySQL family; DateTime for ClickHouse,
+// whose type names are case-sensitive.
+const std::vector<std::string>& datetime_ddl_variants() {
+    static const std::vector<std::string> kVariants = {
+        "TIMESTAMP", "DATETIME", "DateTime", "TIMESTAMP(0)", "DATETIME(0)",
+    };
+    return kVariants;
+}
+
+DescribableFixture make_describable_fixture(core::OdbcConnection& conn) {
+    DescribableFixture f;
+    auto guard = RoundTripTableGuard::create_first_working(
+        conn, "ODBC_CRUSHER_DESC", datetime_ddl_variants());
+    if (guard.ok()) {
+        f.sql = "SELECT ID, " + guard.val_column() + " FROM " + guard.name();
+        f.named_columns = true;
+        f.datetime_column = 2;
+        f.datetime_ddl = guard.val_ddl();
+        f.table.emplace(std::move(guard));
+        return f;
+    }
+    // No table: fall back to whatever describes at all, and grade less.
+    f.sql.clear();
+    return f;
+}
+
 std::vector<std::string> describable_select_variants() {
     return {
         "SELECT ID, NAME FROM CRUSHER_FIXTURE ORDER BY ID",
@@ -95,8 +156,16 @@ std::string describe_type(SQLSMALLINT t) {
 // nothing in it. Same lesson as the block-cursor fixture: verify what you were
 // given before grading it.
 bool prepare_describable(core::OdbcStatement& stmt, TestResult& r,
-                         std::string& out_query) {
-    for (const auto& sql : describable_select_variants()) {
+                         std::string& out_query,
+                         const DescribableFixture* fixture = nullptr) {
+    // P19: the table fixture first when there is one. Its columns have names
+    // the specification defines and one of them is a datetime, which is what
+    // the two graded-too-far checks need.
+    std::vector<std::string> candidates;
+    if (fixture && !fixture->sql.empty()) candidates.push_back(fixture->sql);
+    for (const auto& sql : describable_select_variants()) candidates.push_back(sql);
+
+    for (const auto& sql : candidates) {
         if (!SQL_SUCCEEDED(SQLPrepare(
                 stmt.get_handle(),
                 reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())),
@@ -128,9 +197,14 @@ TestResult DescriptorTests::test_ird_records_describe_the_columns() {
         Severity::ERR, ConformanceLevel::CORE,
         "ODBC 3.8 Descriptors — the IRD is auto-populated by SQLPrepare",
         [&](TestResult& r) {
+            // P19: a table-backed fixture where possible, because the name
+            // check below is only defined for a named column.
+            auto fixture = make_describable_fixture(conn_);
             core::OdbcStatement stmt(conn_);
             std::string query;
-            if (!prepare_describable(stmt, r, query)) return;
+            if (!prepare_describable(stmt, r, query, &fixture)) return;
+            const bool names_are_defined =
+                fixture.named_columns && query == fixture.sql;
 
             SQLHDESC ird = SQL_NULL_HDESC;
             if (!SQL_SUCCEEDED(SQLGetStmtAttr(stmt.get_handle(),
@@ -201,7 +275,13 @@ TestResult DescriptorTests::test_ird_records_describe_the_columns() {
                                      " nullable: " + std::to_string(dc_nullable) +
                                      " vs " + std::to_string(desc_nullable);
                 }
-                if (name_len > 0 && desc_name[0] == '\0') {
+                // P19: graded only for a column the specification gives a
+                // name. `SQL_DESC_NAME` is documented to be empty for an
+                // unnamed column, and an expression column *is* unnamed - so
+                // against `SELECT 1, 'x'` an empty name is correct and this
+                // check called MariaDB defective for getting it right, while
+                // its `SQLDescribeCol` was the one inventing `1` and `x`.
+                if (names_are_defined && name_len > 0 && desc_name[0] == '\0') {
                     if (!disagreements.empty()) disagreements += "; ";
                     disagreements += "col " + std::to_string(col) +
                                      " name: SQLDescribeCol says '" +
@@ -211,6 +291,11 @@ TestResult DescriptorTests::test_ird_records_describe_the_columns() {
             }
 
             r.actual = detail.str();
+            if (!names_are_defined) {
+                r.actual += "(names not graded: this result set's columns are "
+                            "expressions, which the specification leaves "
+                            "unnamed) ";
+            }
             if (!disagreements.empty()) {
                 r.status = TestStatus::FAIL;
                 r.severity = Severity::ERR;
@@ -313,13 +398,25 @@ TestResult DescriptorTests::test_colattribute_type_fields_follow_odbc() {
         Severity::ERR, ConformanceLevel::CORE,
         "ODBC 3.8 SQLColAttribute — type fields",
         [&](TestResult& r) {
+            // P19: a table with a real datetime column, because
+            // SQL_DESC_DATETIME_INTERVAL_CODE is only defined for one.
+            auto fixture = make_describable_fixture(conn_);
+            std::vector<std::string> variants;
+            if (!fixture.sql.empty()) variants.push_back(fixture.sql);
+            for (const auto& v : describable_select_variants()) variants.push_back(v);
+
             core::OdbcStatement stmt(conn_);
-            auto attempt = execute_first_working(stmt, describable_select_variants());
+            auto attempt = execute_first_working(stmt, variants);
             if (!attempt) {
                 r.status = TestStatus::SKIP_INCONCLUSIVE;
                 r.actual = "No dialect variant of a two-column SELECT executed";
                 return;
             }
+            // Which column, if any, the interval code is defined for.
+            const int datetime_col =
+                (!fixture.sql.empty() && attempt.query == fixture.sql)
+                    ? fixture.datetime_column
+                    : 0;
 
             // The poison pattern again: SQLColAttribute's NumericAttributePtr
             // is an SQLLEN*, and the same half-width write happens there.
@@ -367,22 +464,61 @@ TestResult DescriptorTests::test_colattribute_type_fields_follow_odbc() {
                 }
             }
 
-            // The interval code is a required field, and answering "unknown
-            // field" for it is the defect, not answering 0.
-            SQLLEN interval = 0;
-            SQLRETURN irc = SQLColAttribute(stmt.get_handle(), 1,
-                                            SQL_DESC_DATETIME_INTERVAL_CODE,
-                                            nullptr, 0, nullptr, &interval);
-            if (!SQL_SUCCEEDED(irc)) {
-                const std::string state =
-                    first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "no SQLSTATE");
-                oss << "; SQL_DESC_DATETIME_INTERVAL_CODE rejected (" << state << ")";
-                if (!bad.empty()) bad += "; ";
-                bad += "SQL_DESC_DATETIME_INTERVAL_CODE is rejected as an "
-                       "unknown field (" + state + ")";
+            // P19: the interval code, read on a column where the
+            // specification defines it.
+            //
+            // This used to read it on column 1 of whatever result set turned
+            // up - an INTEGER, every time - and grade a rejection as a defect.
+            // The specification is explicit that for records whose type is not
+            // SQL_DATETIME or SQL_INTERVAL the field is **undefined**, so a
+            // driver refusing it there is not wrong, and all four non-Firebird
+            // drivers in the manifest failed this probe on that alone.
+            //
+            // On a datetime column the field *is* defined and must carry the
+            // subcode. On anything else the answer is reported and not graded.
+            if (datetime_col > 0) {
+                SQLLEN interval = 0;
+                SQLRETURN irc = SQLColAttribute(stmt.get_handle(),
+                                                static_cast<SQLUSMALLINT>(datetime_col),
+                                                SQL_DESC_DATETIME_INTERVAL_CODE,
+                                                nullptr, 0, nullptr, &interval);
+                oss << "; col " << datetime_col << " is " << fixture.datetime_ddl;
+                if (!SQL_SUCCEEDED(irc)) {
+                    const std::string state =
+                        first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(), "no SQLSTATE");
+                    oss << ", SQL_DESC_DATETIME_INTERVAL_CODE rejected (" << state << ")";
+                    if (!bad.empty()) bad += "; ";
+                    bad += "SQL_DESC_DATETIME_INTERVAL_CODE was rejected (" +
+                           state + ") for a datetime column, where the "
+                           "specification defines it";
+                } else {
+                    oss << ", SQL_DESC_DATETIME_INTERVAL_CODE="
+                        << static_cast<long long>(interval);
+                    // SQL_CODE_DATE 1, SQL_CODE_TIME 2, SQL_CODE_TIMESTAMP 3.
+                    // Which one depends on the DDL the engine accepted, so the
+                    // assertion is that it is one of them rather than a
+                    // particular one - zero means "not filled in".
+                    if (interval != SQL_CODE_DATE && interval != SQL_CODE_TIME &&
+                        interval != SQL_CODE_TIMESTAMP) {
+                        if (!bad.empty()) bad += "; ";
+                        bad += "SQL_DESC_DATETIME_INTERVAL_CODE for a datetime "
+                               "column is " +
+                               std::to_string(static_cast<long long>(interval)) +
+                               ", which is none of SQL_CODE_DATE (1), "
+                               "SQL_CODE_TIME (2) or SQL_CODE_TIMESTAMP (3)";
+                    }
+                }
             } else {
-                oss << "; SQL_DESC_DATETIME_INTERVAL_CODE="
-                    << static_cast<long long>(interval);
+                SQLLEN interval = 0;
+                SQLRETURN irc = SQLColAttribute(stmt.get_handle(), 1,
+                                                SQL_DESC_DATETIME_INTERVAL_CODE,
+                                                nullptr, 0, nullptr, &interval);
+                oss << "; SQL_DESC_DATETIME_INTERVAL_CODE on a non-datetime "
+                       "column (undefined by the specification, reported only): "
+                    << (SQL_SUCCEEDED(irc)
+                            ? std::to_string(static_cast<long long>(interval))
+                            : first_sqlstate(SQL_HANDLE_STMT, stmt.get_handle(),
+                                             "rejected"));
             }
 
             r.actual = oss.str();
