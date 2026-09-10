@@ -5,7 +5,7 @@
 
 A command-line tool that tests ODBC drivers for correctness and spec compliance.
 
-Point it at any ODBC connection string and it will run **208 checks** covering connections, statements, metadata, data types, transactions, Unicode handling (including non-ASCII round-trip), catalog functions, diagnostics, cursor behavior, parameter binding (including `{?=CALL …}` IN/OUT/INOUT), error handling, buffer validation, NUMERIC byte-equality, escape sequence translation, and state machine compliance — then report what passed, failed, or was skipped.
+Point it at any ODBC connection string and it will run **222 checks** covering connections, statements, metadata, data types, transactions, Unicode handling (including non-ASCII round-trip), catalog functions, diagnostics, cursor behavior, parameter binding (including `{?=CALL …}` IN/OUT/INOUT), error handling, buffer validation, NUMERIC byte-equality, escape sequence translation, and state machine compliance — then report what passed, failed, or was skipped.
 
 ## Quick Start
 
@@ -136,7 +136,7 @@ Statement Tests:                                 2 passed, 2 failed, 11 skipped
   ...
 
 SUMMARY:
-  Total Tests:  208
+  Total Tests:  222
   Passed:       142 (72.8%)
   Failed:       16
   Skipped:      37
@@ -290,15 +290,20 @@ odbc-crusher "Driver={Mock ODBC Driver};Mode=Success;" -o json | jq '.summary'
 - **Scrollable cursors** (static cursors with SQL_FETCH_FIRST/LAST/PRIOR/ABSOLUTE/RELATIVE)
 - **Parameter binding** (SQLBindParameter with value substitution in literal SELECTs)
 
-Against `Mode=Success` the mock driver scores **193/193 scored probes (100%)**, with
-15 further probes reported as `INFORMATIONAL` — 208 results in total. Six of those
-record what the driver answered where the spec leaves no right answer to grade (an
-optional attribute's value, a `SQLGetInfo` bitmask, the type `COUNT(*)` comes back
-as). The other nine are enforced by the **driver manager** rather than the driver:
-both the Windows DM and unixODBC check the ODBC state-transition table before
-dispatching a call, so those results describe the stack you are running on and not
-the driver you are testing. Neither group counts toward the pass rate — a guaranteed
-pass is not evidence about a driver.
+Against `Mode=Success` the mock driver passes **205 of the 206 scored probes**, with
+16 further probes reported as `INFORMATIONAL` — 222 results in total. The one scored
+probe that does not pass does not fail either: `test_failed_connect_diagnostics_are_wellformed`
+spoils a credential in the connection string to provoke a failed connect and read the
+diagnostic back, and the mock's connection string carries none of the keywords it
+knows how to spoil, so it reports itself inconclusive rather than passing over a test
+it never ran. Seven of the informational results record what the driver answered where
+the spec leaves no right answer to grade (an optional attribute's value, a
+`SQLGetInfo` bitmask, the type `COUNT(*)` comes back as, whether the driver's own
+version strings agree with one another). The other nine are enforced by the **driver
+manager** rather than the driver: both the Windows DM and unixODBC check the ODBC
+state-transition table before dispatching a call, so those results describe the
+stack you are running on and not the driver you are testing. Neither group counts
+toward the pass rate — a guaranteed pass is not evidence about a driver.
 
 This number is a property of the reference driver, not a target: the point of the
 mock is that every probe which *can* fail does fail when the driver is misconfigured,

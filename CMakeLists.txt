@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 # commit, so anyone building the published archive got a binary claiming a
 # version two years stale. Keep it equal to the version being released; the
 # release workflow refuses to publish if it drifts.
-project(odbc-crusher VERSION 0.7.0 LANGUAGES CXX)
+project(odbc-crusher VERSION 0.8.0 LANGUAGES CXX)
 
 # Set C++17 standard
 set(CMAKE_CXX_STANDARD 17)
